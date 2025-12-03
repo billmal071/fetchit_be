@@ -1,15 +1,5 @@
-export enum UserRole {
-  ADMIN = 'admin',
-  USER = 'user',
-  MODERATOR = 'moderator',
-}
-
-export enum UserStatus {
-  ACTIVE = 'active',
-  INACTIVE = 'inactive',
-  SUSPENDED = 'suspended',
-  PENDING = 'pending',
-}
+// Re-export Prisma enums for consistency
+export { UserRole, UserStatus } from '@prisma/client';
 
 export enum OrderStatus {
   PENDING = 'pending',
