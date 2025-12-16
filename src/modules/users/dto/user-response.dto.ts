@@ -9,12 +9,8 @@ export class UserResponseDto {
   id: string;
 
   @Expose()
-  @ApiProperty({ example: 'John' })
-  firstName: string;
-
-  @Expose()
-  @ApiProperty({ example: 'Doe' })
-  lastName: string;
+  @ApiProperty({ example: 'johndoe' })
+  username: string;
 
   @Expose()
   @ApiProperty({ example: 'john.doe@example.com' })

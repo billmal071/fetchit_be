@@ -20,22 +20,60 @@ enum UserStatus {
   PENDING
 }
 
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+}
+
 model User {
-  id            String      @id @default(uuid())
-  firstName     String      @map("first_name") @db.VarChar(100)
-  lastName      String      @map("last_name") @db.VarChar(100)
-  email         String      @unique @db.VarChar(255)
-  password      String
-  role          UserRole    @default(USER)
-  status        UserStatus  @default(PENDING)
-  refreshToken  String?     @map("refresh_token")
-  avatar        String?     @db.VarChar(500)
-  phone         String?     @db.VarChar(20)
-  emailVerified Boolean     @default(false) @map("email_verified")
-  lastLoginAt   DateTime?   @map("last_login_at")
-  createdAt     DateTime    @default(now()) @map("created_at")
-  updatedAt     DateTime    @updatedAt @map("updated_at")
-  deletedAt     DateTime?   @map("deleted_at")
+  id            String       @id @default(uuid())
+  username      String       @unique @db.VarChar(100)
+  email         String       @unique @db.VarChar(255)
+  password      String?
+  role          UserRole     @default(USER)
+  status        UserStatus   @default(PENDING)
+  refreshToken  String?      @map("refresh_token")
+  avatar        String?      @db.VarChar(500)
+  phone         String?      @db.VarChar(20)
+  emailVerified Boolean      @default(false) @map("email_verified")
+  lastLoginAt   DateTime?    @map("last_login_at")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+  deletedAt     DateTime?    @map("deleted_at")
+
+  // OAuth fields
+  provider      AuthProvider @default(LOCAL)
+  googleId      String?      @unique @map("google_id")
+
+  // Relations
+  passwordResets     PasswordReset[]
+  emailVerifications EmailVerification[]
 
   @@map("users")
+}
+
+model PasswordReset {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String   @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("password_resets")
+}
+
+model EmailVerification {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String   @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("email_verifications")
 }

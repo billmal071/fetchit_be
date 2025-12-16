@@ -11,17 +11,15 @@ import {
 import { REGEX_PATTERNS } from '@/common/constants';
 
 export class CreateUserDto {
-  @ApiProperty({ example: 'John', description: 'User first name' })
+  @ApiProperty({ example: 'johndoe', description: 'Unique username' })
   @IsString()
   @IsNotEmpty()
+  @MinLength(3)
   @MaxLength(100)
-  firstName: string;
-
-  @ApiProperty({ example: 'Doe', description: 'User last name' })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(100)
-  lastName: string;
+  @Matches(/^[a-zA-Z0-9_]+$/, {
+    message: 'Username can only contain letters, numbers, and underscores',
+  })
+  username: string;
 
   @ApiProperty({ example: 'john.doe@example.com', description: 'User email address' })
   @IsEmail()

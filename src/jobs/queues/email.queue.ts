@@ -29,21 +29,30 @@ export class EmailQueue {
     });
   }
 
-  async addWelcomeEmail(email: string, name: string): Promise<void> {
+  async addWelcomeEmail(email: string, username: string): Promise<void> {
     await this.addEmailJob({
       to: email,
       subject: 'Welcome to FetchIt!',
       template: 'welcome',
-      context: { name },
+      context: { username },
     });
   }
 
-  async addPasswordResetEmail(email: string, resetToken: string): Promise<void> {
+  async addPasswordResetEmail(email: string, resetUrl: string, username: string): Promise<void> {
     await this.addEmailJob({
       to: email,
-      subject: 'Reset Your Password',
+      subject: 'Reset Your Password - FetchIt',
       template: 'password-reset',
-      context: { resetToken },
+      context: { resetUrl, username },
+    });
+  }
+
+  async addEmailVerificationEmail(email: string, verificationUrl: string, username: string): Promise<void> {
+    await this.addEmailJob({
+      to: email,
+      subject: 'Verify Your Email - FetchIt',
+      template: 'email-verification',
+      context: { verificationUrl, username },
     });
   }
 }

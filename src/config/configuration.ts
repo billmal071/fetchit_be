@@ -5,6 +5,7 @@ export interface IAppConfig {
   port: number;
   apiPrefix: string;
   apiVersion: string;
+  frontendUrl: string;
 }
 
 export interface IJwtConfig {
@@ -32,6 +33,21 @@ export interface ISwaggerConfig {
   version: string;
 }
 
+export interface IGoogleConfig {
+  clientId: string;
+  clientSecret: string;
+  callbackUrl: string;
+}
+
+export interface ISmtpConfig {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  password: string;
+  from: string;
+}
+
 export interface IConfiguration {
   app: IAppConfig;
   jwt: IJwtConfig;
@@ -39,6 +55,8 @@ export interface IConfiguration {
   throttle: IThrottleConfig;
   cors: { origins: string[] };
   swagger: ISwaggerConfig;
+  google: IGoogleConfig;
+  smtp: ISmtpConfig;
 }
 
 export default (): IConfiguration => ({
@@ -47,6 +65,7 @@ export default (): IConfiguration => ({
     port: parseInt(process.env.PORT || '3000', 10),
     apiPrefix: process.env.API_PREFIX || 'api',
     apiVersion: process.env.API_VERSION || 'v1',
+    frontendUrl: process.env.FRONTEND_URL || 'http://localhost:4200',
   },
   jwt: {
     secret: process.env.JWT_SECRET || 'default-secret',
@@ -71,5 +90,18 @@ export default (): IConfiguration => ({
     title: process.env.SWAGGER_TITLE || 'FetchIt API',
     description: process.env.SWAGGER_DESCRIPTION || 'FetchIt Backend API Documentation',
     version: process.env.SWAGGER_VERSION || '1.0',
+  },
+  google: {
+    clientId: process.env.GOOGLE_CLIENT_ID || '',
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+    callbackUrl: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3000/api/v1/auth/google/callback',
+  },
+  smtp: {
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: parseInt(process.env.SMTP_PORT || '587', 10),
+    secure: process.env.SMTP_SECURE === 'true',
+    user: process.env.SMTP_USER || '',
+    password: process.env.SMTP_PASSWORD || '',
+    from: process.env.SMTP_FROM || 'noreply@fetchit.com',
   },
 });

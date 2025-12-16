@@ -6,6 +6,8 @@ export type {
   IRedisConfig,
   IThrottleConfig,
   ISwaggerConfig,
+  IGoogleConfig,
+  ISmtpConfig,
 } from './configuration';
 export { envSchema, validateEnv } from './env.validation';
 export type { EnvConfig } from './env.validation';

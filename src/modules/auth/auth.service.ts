@@ -6,6 +6,7 @@ import { plainToInstance } from 'class-transformer';
 import { UsersService } from '@/modules/users/users.service';
 import { UserResponseDto, CreateUserDto } from '@/modules/users/dto';
 import { LoginDto, AuthResponseDto } from './dto';
+import { EmailVerificationService } from './services';
 import { UnauthorizedException } from '@/common/exceptions';
 import { comparePassword } from '@/common/utils';
 import { IJwtPayload, ITokens } from '@/common/interfaces';
@@ -21,6 +22,7 @@ export class AuthService {
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly emailVerificationService: EmailVerificationService,
   ) {
     this.jwtConfig = this.configService.get<IJwtConfig>('jwt') as IJwtConfig;
   }
@@ -29,6 +31,13 @@ export class AuthService {
     const user = await this.usersService.create(createUserDto);
     const tokens = await this.generateTokens(user.id, user.email, user.role);
     await this.updateRefreshToken(user.id, tokens.refreshToken);
+
+    // Send verification email (fire and forget - don't block registration)
+    this.emailVerificationService
+      .sendVerificationEmailByUserId(user.id, user.email, user.username)
+      .catch((error) => {
+        this.logger.error(`Failed to send verification email: ${error.message}`);
+      });
 
     this.logger.log(`User registered: ${user.email}`);
 
@@ -42,6 +51,10 @@ export class AuthService {
     const user = await this.usersService.findByEmail(loginDto.email);
 
     if (!user) {
+      throw new UnauthorizedException(ERROR_MESSAGES.INVALID_CREDENTIALS);
+    }
+
+    if (user.password === null) {
       throw new UnauthorizedException(ERROR_MESSAGES.INVALID_CREDENTIALS);
     }
 

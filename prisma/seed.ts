@@ -13,8 +13,7 @@ async function main(): Promise<void> {
     update: {},
     create: {
       email: 'admin@fetchit.com',
-      firstName: 'Admin',
-      lastName: 'User',
+      username: 'admin',
       password: hashedPassword,
       role: UserRole.ADMIN,
       status: UserStatus.ACTIVE,

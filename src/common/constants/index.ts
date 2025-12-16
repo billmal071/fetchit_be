@@ -31,9 +31,15 @@ export const ERROR_MESSAGES = {
   INTERNAL_ERROR: 'An internal server error occurred',
   VALIDATION_ERROR: 'Validation failed',
   USER_EXISTS: 'User with this email already exists',
+  USERNAME_EXISTS: 'User with this username already exists',
   INVALID_CREDENTIALS: 'Invalid email or password',
   TOKEN_EXPIRED: 'Token has expired',
   TOKEN_INVALID: 'Invalid token',
+  TOKEN_ALREADY_USED: 'Token has already been used',
+  PASSWORD_MISMATCH: 'Current password is incorrect',
+  EMAIL_NOT_VERIFIED: 'Please verify your email first',
+  EMAIL_ALREADY_VERIFIED: 'Email is already verified',
+  OAUTH_USER_NO_PASSWORD: 'Cannot change password for OAuth accounts',
 } as const;
 
 export const SUCCESS_MESSAGES = {
@@ -43,6 +49,10 @@ export const SUCCESS_MESSAGES = {
   LOGIN_SUCCESS: 'Login successful',
   LOGOUT_SUCCESS: 'Logout successful',
   PASSWORD_RESET: 'Password reset successfully',
+  PASSWORD_RESET_EMAIL_SENT: 'Password reset email sent. Please check your inbox.',
+  PASSWORD_CHANGED: 'Password changed successfully',
+  EMAIL_VERIFICATION_SENT: 'Verification email sent. Please check your inbox.',
+  EMAIL_VERIFIED: 'Email verified successfully',
 } as const;
 
 export const REGEX_PATTERNS = {
