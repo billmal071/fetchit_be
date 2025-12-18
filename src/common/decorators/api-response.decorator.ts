@@ -1,6 +1,5 @@
 import { applyDecorators, Type } from '@nestjs/common';
 import {
-  ApiResponse,
   ApiOkResponse,
   ApiCreatedResponse,
   ApiBadRequestResponse,

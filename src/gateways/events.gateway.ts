@@ -74,7 +74,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   @SubscribeMessage('ping')
-  handlePing(@ConnectedSocket() client: Socket): { event: string; data: string } {
+  handlePing(@ConnectedSocket() _client: Socket): { event: string; data: string } {
     return { event: 'pong', data: 'pong' };
   }
 

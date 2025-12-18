@@ -58,7 +58,11 @@ export class OAuthService {
         }
 
         // Link the Google account to existing user
-        user = await this.linkGoogleAccount(existingUser.id, googleUser.googleId, googleUser.picture);
+        user = await this.linkGoogleAccount(
+          existingUser.id,
+          googleUser.googleId,
+          googleUser.picture,
+        );
         this.logger.log(`Google account linked to existing user: ${googleUser.email}`);
       } else {
         // Create new OAuth user

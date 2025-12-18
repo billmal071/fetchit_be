@@ -40,7 +40,11 @@ export class EmailVerificationService {
     await this.sendVerificationEmailByUserId(fullUser.id, fullUser.email, fullUser.username);
   }
 
-  async sendVerificationEmailByUserId(userId: string, email: string, username: string): Promise<void> {
+  async sendVerificationEmailByUserId(
+    userId: string,
+    email: string,
+    username: string,
+  ): Promise<void> {
     // Invalidate existing tokens
     await this.prisma.emailVerification.updateMany({
       where: { userId, usedAt: null },

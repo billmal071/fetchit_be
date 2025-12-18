@@ -14,7 +14,9 @@ export const envSchema = z.object({
   // JWT
   JWT_SECRET: z.string().min(32, { message: 'JWT_SECRET must be at least 32 characters' }),
   JWT_EXPIRES_IN: z.string().default('1d'),
-  JWT_REFRESH_SECRET: z.string().min(32, { message: 'JWT_REFRESH_SECRET must be at least 32 characters' }),
+  JWT_REFRESH_SECRET: z
+    .string()
+    .min(32, { message: 'JWT_REFRESH_SECRET must be at least 32 characters' }),
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
 
   // Redis
@@ -41,7 +43,10 @@ export const envSchema = z.object({
   // Google OAuth (optional)
   GOOGLE_CLIENT_ID: z.string().optional().default(''),
   GOOGLE_CLIENT_SECRET: z.string().optional().default(''),
-  GOOGLE_CALLBACK_URL: z.string().optional().default('http://localhost:3000/api/v1/auth/google/callback'),
+  GOOGLE_CALLBACK_URL: z
+    .string()
+    .optional()
+    .default('http://localhost:3000/api/v1/auth/google/callback'),
 
   // SMTP (optional)
   SMTP_HOST: z.string().optional().default('smtp.gmail.com'),
