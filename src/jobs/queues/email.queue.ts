@@ -47,7 +47,11 @@ export class EmailQueue {
     });
   }
 
-  async addEmailVerificationEmail(email: string, verificationUrl: string, username: string): Promise<void> {
+  async addEmailVerificationEmail(
+    email: string,
+    verificationUrl: string,
+    username: string,
+  ): Promise<void> {
     await this.addEmailJob({
       to: email,
       subject: 'Verify Your Email - FetchIt',
