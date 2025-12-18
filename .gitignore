@@ -10,8 +10,8 @@ build/
 .env.local
 .env.*.local
 
-# Logs
-logs/
+# Logs (root level only, not src/logs which is source code)
+/logs/
 *.log
 npm-debug.log*
 yarn-debug.log*

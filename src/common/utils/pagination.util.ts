@@ -1,10 +1,6 @@
 import { IMeta, IPaginatedResult } from '../interfaces';
 
-export function createPaginationMeta(
-  page: number,
-  limit: number,
-  total: number,
-): IMeta {
+export function createPaginationMeta(page: number, limit: number, total: number): IMeta {
   const totalPages = Math.ceil(total / limit);
 
   return {
@@ -17,11 +13,7 @@ export function createPaginationMeta(
   };
 }
 
-export function paginateArray<T>(
-  items: T[],
-  page: number,
-  limit: number,
-): IPaginatedResult<T> {
+export function paginateArray<T>(items: T[], page: number, limit: number): IPaginatedResult<T> {
   const total = items.length;
   const startIndex = (page - 1) * limit;
   const endIndex = startIndex + limit;

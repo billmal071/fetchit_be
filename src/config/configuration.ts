@@ -1,3 +1,4 @@
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { EnvConfig } from './env.validation';
 
 export interface IAppConfig {
@@ -94,7 +95,8 @@ export default (): IConfiguration => ({
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID || '',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-    callbackUrl: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3000/api/v1/auth/google/callback',
+    callbackUrl:
+      process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3000/api/v1/auth/google/callback',
   },
   smtp: {
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
