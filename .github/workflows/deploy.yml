@@ -105,10 +105,11 @@ jobs:
           retention-days: 1
           path: |
             dist/
-            node_modules/
             prisma/
             package.json
+            pnpm-lock.yaml
             ecosystem.config.js
+            scripts/server-setup.sh
 
   deploy:
     name: Deploy
@@ -146,6 +147,12 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           script: |
             cd ${{ secrets.APP_PATH }}
+
+            # Install production dependencies
+            pnpm install --frozen-lockfile --prod
+
+            # Generate Prisma client
+            pnpm prisma:generate
 
             # Run database migrations
             pnpm prisma:migrate:deploy
