@@ -108,6 +108,9 @@ jobs:
             prisma/
             package.json
             pnpm-lock.yaml
+            tsconfig.json
+            tsconfig.build.json
+            nest-cli.json
             ecosystem.config.js
             scripts/server-setup.sh
 
