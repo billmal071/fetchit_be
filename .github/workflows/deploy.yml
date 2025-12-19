@@ -95,7 +95,9 @@ jobs:
         run: pnpm prisma:generate
 
       - name: Build application
-        run: pnpm build
+        run: |
+          rm -f tsconfig.build.tsbuildinfo
+          pnpm build
 
       - name: Upload build artifacts
         if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
@@ -167,8 +169,8 @@ jobs:
           script: |
             cd ${{ secrets.APP_PATH }}
 
-            # Install production dependencies
-            pnpm install --frozen-lockfile --prod
+            # Install dependencies
+            pnpm install --frozen-lockfile
 
             # Generate Prisma client
             pnpm prisma:generate
