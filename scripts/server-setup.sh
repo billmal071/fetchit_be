@@ -34,10 +34,9 @@ pm2 startup systemd -u $USER --hp $HOME
 sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u $USER --hp $HOME
 
 # Create application directory
-APP_DIR="${APP_PATH:-/var/www/fetchit-be}"
+APP_DIR="${APP_PATH:-$HOME/fetchit/be}"
 echo "Creating application directory at $APP_DIR..."
-sudo mkdir -p $APP_DIR
-sudo chown -R $USER:$USER $APP_DIR
+mkdir -p $APP_DIR
 
 # Create logs directory
 echo "Creating logs directory..."
