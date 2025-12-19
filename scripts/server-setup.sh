@@ -13,7 +13,7 @@ sudo apt update && sudo apt upgrade -y
 
 # Install essential packages
 echo "Installing essential packages..."
-sudo apt install -y curl git build-essential
+sudo apt install -y curl git build-essential nginx
 
 # Install Node.js 20.x via NodeSource
 echo "Installing Node.js 20.x..."
