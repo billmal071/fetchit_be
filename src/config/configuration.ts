@@ -40,12 +40,8 @@ export interface IGoogleConfig {
   callbackUrl: string;
 }
 
-export interface ISmtpConfig {
-  host: string;
-  port: number;
-  secure: boolean;
-  user: string;
-  password: string;
+export interface IResendConfig {
+  apiKey: string;
   from: string;
 }
 
@@ -57,7 +53,7 @@ export interface IConfiguration {
   cors: { origins: string[] };
   swagger: ISwaggerConfig;
   google: IGoogleConfig;
-  smtp: ISmtpConfig;
+  resend: IResendConfig;
 }
 
 export default (): IConfiguration => ({
@@ -98,12 +94,8 @@ export default (): IConfiguration => ({
     callbackUrl:
       process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3000/api/v1/auth/google/callback',
   },
-  smtp: {
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.SMTP_PORT || '587', 10),
-    secure: process.env.SMTP_SECURE === 'true',
-    user: process.env.SMTP_USER || '',
-    password: process.env.SMTP_PASSWORD || '',
-    from: process.env.SMTP_FROM || 'noreply@fetchit.com',
+  resend: {
+    apiKey: process.env.RESEND_API_KEY || '',
+    from: process.env.RESEND_FROM || 'noreply@fetchit.com',
   },
 });
