@@ -77,3 +77,80 @@ model EmailVerification {
 
   @@map("email_verifications")
 }
+
+// Waitlist enums
+enum WaitlistRole {
+  USER
+  HANDYMAN
+  SHOPPER
+}
+
+enum HowFindHelp {
+  FRIENDS_FAMILY
+  WHATSAPP
+  SOCIAL_MEDIA
+  STRUGGLE
+}
+
+enum FirstService {
+  HANDYMAN
+  PERSONAL_SHOPPER
+  BOTH
+}
+
+enum WillingToPay {
+  YES
+  MAYBE
+  NO
+}
+
+enum MonthlyBudget {
+  BUDGET_1000_3000
+  BUDGET_3000_5000
+  BUDGET_5000_PLUS
+}
+
+enum UsedOwnMoney {
+  YES
+  NO
+}
+
+enum MaxSpendingAmount {
+  UNDER_10000
+  AMOUNT_10000_30000
+  AMOUNT_30000_PLUS
+}
+
+enum PayoutSpeed {
+  IMMEDIATELY
+  SAME_DAY
+  WITHIN_24_HOURS
+}
+
+model Waitlist {
+  id        String        @id @default(uuid())
+  fullName  String        @map("full_name") @db.VarChar(255)
+  email     String        @unique @db.VarChar(255)
+  city      String        @db.VarChar(100)
+  role      WaitlistRole
+
+  // User-specific fields
+  howFindHelp   HowFindHelp?   @map("how_find_help")
+  firstService  FirstService?  @map("first_service")
+  frustration   String?        @db.Text
+
+  // Handyman-specific fields
+  mainSkill     String?        @map("main_skill") @db.VarChar(100)
+  willingToPay  WillingToPay?  @map("willing_to_pay")
+  monthlyBudget MonthlyBudget? @map("monthly_budget")
+
+  // Shopper-specific fields
+  usedOwnMoney      UsedOwnMoney?      @map("used_own_money")
+  maxSpendingAmount MaxSpendingAmount? @map("max_spending_amount")
+  payoutSpeed       PayoutSpeed?       @map("payout_speed")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("waitlist")
+}
