@@ -11,6 +11,7 @@ import { DatabaseModule } from '@/database/database.module';
 import { AuthModule } from '@/modules/auth/auth.module';
 import { UsersModule } from '@/modules/users/users.module';
 import { HealthModule } from '@/modules/health/health.module';
+import { WaitlistModule } from '@/modules/waitlist/waitlist.module';
 import { JobsModule } from '@/jobs/jobs.module';
 import { GatewaysModule } from '@/gateways/gateways.module';
 
@@ -53,6 +54,7 @@ import { RolesGuard } from '@/common/guards';
     AuthModule,
     UsersModule,
     HealthModule,
+    WaitlistModule,
 
     // Background Jobs
     JobsModule,
