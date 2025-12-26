@@ -2,28 +2,20 @@ import { Process, Processor } from '@nestjs/bull';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Job } from 'bull';
-import * as nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import { QUEUE_NAMES } from '@/common/constants';
-import { ISmtpConfig } from '@/config';
+import { IResendConfig } from '@/config';
 import { IEmailJob } from '../queues';
 
 @Processor(QUEUE_NAMES.EMAIL)
 export class EmailProcessor {
   private readonly logger = new Logger(EmailProcessor.name);
-  private transporter: nodemailer.Transporter;
-  private smtpConfig: ISmtpConfig;
+  private resend: Resend;
+  private resendConfig: IResendConfig;
 
   constructor(private readonly configService: ConfigService) {
-    this.smtpConfig = this.configService.get<ISmtpConfig>('smtp') as ISmtpConfig;
-    this.transporter = nodemailer.createTransport({
-      host: this.smtpConfig.host,
-      port: this.smtpConfig.port,
-      secure: this.smtpConfig.secure,
-      auth: {
-        user: this.smtpConfig.user,
-        pass: this.smtpConfig.password,
-      },
-    });
+    this.resendConfig = this.configService.get<IResendConfig>('resend') as IResendConfig;
+    this.resend = new Resend(this.resendConfig.apiKey);
   }
 
   @Process('send-email')
@@ -35,18 +27,23 @@ export class EmailProcessor {
     try {
       const html = this.getEmailTemplate(template, context);
 
-      // Only send email if SMTP is configured
-      if (this.smtpConfig.user && this.smtpConfig.password) {
-        await this.transporter.sendMail({
-          from: `"FetchIt" <${this.smtpConfig.from}>`,
+      // Only send email if Resend API key is configured
+      if (this.resendConfig.apiKey) {
+        const { error } = await this.resend.emails.send({
+          from: this.resendConfig.from,
           to,
           subject,
           html,
         });
+
+        if (error) {
+          throw new Error(error.message);
+        }
+
         this.logger.log(`Email sent successfully to ${to}`);
       } else {
-        // Log email in development when SMTP is not configured
-        this.logger.warn(`SMTP not configured. Email would be sent to ${to}`);
+        // Log email in development when Resend is not configured
+        this.logger.warn(`Resend not configured. Email would be sent to ${to}`);
         this.logger.debug(`Subject: ${subject}`);
         this.logger.debug(`Template: ${template}`);
         this.logger.debug(`Context: ${JSON.stringify(context)}`);

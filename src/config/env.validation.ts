@@ -48,17 +48,9 @@ export const envSchema = z.object({
     .optional()
     .default('http://localhost:3000/api/v1/auth/google/callback'),
 
-  // SMTP (optional)
-  SMTP_HOST: z.string().optional().default('smtp.gmail.com'),
-  SMTP_PORT: z.coerce.number().optional().default(587),
-  SMTP_SECURE: z
-    .string()
-    .transform((val) => val === 'true')
-    .optional()
-    .default('false'),
-  SMTP_USER: z.string().optional().default(''),
-  SMTP_PASSWORD: z.string().optional().default(''),
-  SMTP_FROM: z.string().optional().default('noreply@fetchit.com'),
+  // Resend (optional)
+  RESEND_API_KEY: z.string().optional().default(''),
+  RESEND_FROM: z.string().optional().default('noreply@fetchit.com'),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

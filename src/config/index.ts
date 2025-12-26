@@ -7,7 +7,7 @@ export type {
   IThrottleConfig,
   ISwaggerConfig,
   IGoogleConfig,
-  ISmtpConfig,
+  IResendConfig,
 } from './configuration';
 export { envSchema, validateEnv } from './env.validation';
 export type { EnvConfig } from './env.validation';
