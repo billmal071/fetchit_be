@@ -85,13 +85,19 @@ export class CreateWaitlistDto {
   role: WaitlistRoleDto;
 
   // User-specific fields
-  @ApiPropertyOptional({ enum: HowFindHelpDto, description: 'How user currently finds help (user role only)' })
+  @ApiPropertyOptional({
+    enum: HowFindHelpDto,
+    description: 'How user currently finds help (user role only)',
+  })
   @ValidateIf((o) => o.role === WaitlistRoleDto.USER)
   @IsEnum(HowFindHelpDto)
   @IsNotEmpty()
   howFindHelp?: HowFindHelpDto;
 
-  @ApiPropertyOptional({ enum: FirstServiceDto, description: 'First service user would try (user role only)' })
+  @ApiPropertyOptional({
+    enum: FirstServiceDto,
+    description: 'First service user would try (user role only)',
+  })
   @ValidateIf((o) => o.role === WaitlistRoleDto.USER)
   @IsEnum(FirstServiceDto)
   @IsNotEmpty()
@@ -110,32 +116,47 @@ export class CreateWaitlistDto {
   @MaxLength(100)
   mainSkill?: string;
 
-  @ApiPropertyOptional({ enum: WillingToPayDto, description: 'Willing to pay for visibility (handyman role only)' })
+  @ApiPropertyOptional({
+    enum: WillingToPayDto,
+    description: 'Willing to pay for visibility (handyman role only)',
+  })
   @ValidateIf((o) => o.role === WaitlistRoleDto.HANDYMAN)
   @IsEnum(WillingToPayDto)
   @IsNotEmpty()
   willingToPay?: WillingToPayDto;
 
-  @ApiPropertyOptional({ enum: MonthlyBudgetDto, description: 'Monthly budget in Naira (handyman role only)' })
+  @ApiPropertyOptional({
+    enum: MonthlyBudgetDto,
+    description: 'Monthly budget in Naira (handyman role only)',
+  })
   @ValidateIf((o) => o.role === WaitlistRoleDto.HANDYMAN)
   @IsEnum(MonthlyBudgetDto)
   @IsNotEmpty()
   monthlyBudget?: MonthlyBudgetDto;
 
   // Shopper-specific fields
-  @ApiPropertyOptional({ enum: UsedOwnMoneyDto, description: 'Has used own money for purchases (shopper role only)' })
+  @ApiPropertyOptional({
+    enum: UsedOwnMoneyDto,
+    description: 'Has used own money for purchases (shopper role only)',
+  })
   @ValidateIf((o) => o.role === WaitlistRoleDto.SHOPPER)
   @IsEnum(UsedOwnMoneyDto)
   @IsNotEmpty()
   usedOwnMoney?: UsedOwnMoneyDto;
 
-  @ApiPropertyOptional({ enum: MaxSpendingAmountDto, description: 'Maximum spending amount in Naira (shopper role only)' })
+  @ApiPropertyOptional({
+    enum: MaxSpendingAmountDto,
+    description: 'Maximum spending amount in Naira (shopper role only)',
+  })
   @ValidateIf((o) => o.role === WaitlistRoleDto.SHOPPER)
   @IsEnum(MaxSpendingAmountDto)
   @IsNotEmpty()
   maxSpendingAmount?: MaxSpendingAmountDto;
 
-  @ApiPropertyOptional({ enum: PayoutSpeedDto, description: 'Preferred payout speed (shopper role only)' })
+  @ApiPropertyOptional({
+    enum: PayoutSpeedDto,
+    description: 'Preferred payout speed (shopper role only)',
+  })
   @ValidateIf((o) => o.role === WaitlistRoleDto.SHOPPER)
   @IsEnum(PayoutSpeedDto)
   @IsNotEmpty()

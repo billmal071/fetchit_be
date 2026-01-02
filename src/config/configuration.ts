@@ -17,9 +17,13 @@ export interface IJwtConfig {
 }
 
 export interface IRedisConfig {
+  /** Connection URL (e.g., rediss://default:password@host:port) - preferred for Upstash */
+  url?: string;
   host: string;
   port: number;
   password: string;
+  /** Enable TLS connection */
+  tls: boolean;
 }
 
 export interface IThrottleConfig {
@@ -45,10 +49,22 @@ export interface IResendConfig {
   from: string;
 }
 
+export interface ICacheConfig {
+  type: 'memory' | 'redis';
+  defaultTtl: number;
+  redis?: {
+    keyPrefix: string;
+  };
+  memory?: {
+    max: number;
+  };
+}
+
 export interface IConfiguration {
   app: IAppConfig;
   jwt: IJwtConfig;
   redis: IRedisConfig;
+  cache: ICacheConfig;
   throttle: IThrottleConfig;
   cors: { origins: string[] };
   swagger: ISwaggerConfig;
@@ -71,9 +87,21 @@ export default (): IConfiguration => ({
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '7d',
   },
   redis: {
+    url: process.env.REDIS_URL || undefined,
     host: process.env.REDIS_HOST || 'localhost',
     port: parseInt(process.env.REDIS_PORT || '6379', 10),
     password: process.env.REDIS_PASSWORD || '',
+    tls: process.env.REDIS_TLS === 'true',
+  },
+  cache: {
+    type: (process.env.CACHE_TYPE as 'memory' | 'redis') || 'memory',
+    defaultTtl: parseInt(process.env.CACHE_DEFAULT_TTL || '300', 10),
+    redis: {
+      keyPrefix: process.env.CACHE_KEY_PREFIX || 'fetchit:cache:',
+    },
+    memory: {
+      max: parseInt(process.env.CACHE_MAX_ITEMS || '1000', 10),
+    },
   },
   throttle: {
     ttl: parseInt(process.env.THROTTLE_TTL || '60', 10),

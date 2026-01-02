@@ -15,6 +15,7 @@ import { ConflictException } from '@/common/exceptions';
 import {
   CreateWaitlistDto,
   WaitlistResponseDto,
+  WaitlistAdminResponseDto,
   WaitlistRoleDto,
   HowFindHelpDto,
   FirstServiceDto,
@@ -24,6 +25,9 @@ import {
   MaxSpendingAmountDto,
   PayoutSpeedDto,
 } from './dto';
+import { PaginationDto } from '@/common/dto/pagination.dto';
+import { IPaginatedResult } from '@/common/interfaces';
+import { createPaginationMeta } from '@/common/utils/pagination.util';
 
 @Injectable()
 export class WaitlistService {
@@ -75,9 +79,31 @@ export class WaitlistService {
       },
     });
 
-    this.logger.log(`Waitlist entry created with id: ${waitlistEntry.id}, role: ${waitlistEntry.role}`);
+    this.logger.log(
+      `Waitlist entry created with id: ${waitlistEntry.id}, role: ${waitlistEntry.role}`,
+    );
 
     return plainToInstance(WaitlistResponseDto, waitlistEntry);
+  }
+
+  async findAll(paginationDto: PaginationDto): Promise<IPaginatedResult<WaitlistAdminResponseDto>> {
+    const { page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'DESC' } = paginationDto;
+
+    const [entries, total] = await Promise.all([
+      this.prisma.waitlist.findMany({
+        skip: paginationDto.skip,
+        take: limit,
+        orderBy: {
+          [sortBy]: sortOrder.toLowerCase(),
+        },
+      }),
+      this.prisma.waitlist.count(),
+    ]);
+
+    return {
+      data: entries.map((entry) => plainToInstance(WaitlistAdminResponseDto, entry)),
+      meta: createPaginationMeta(page, limit, total),
+    };
   }
 
   private mapRole(role: WaitlistRoleDto): WaitlistRole {

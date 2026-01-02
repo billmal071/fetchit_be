@@ -6,6 +6,7 @@ import {
   MemoryHealthIndicator,
   DiskHealthIndicator,
   HealthCheckResult,
+  HealthIndicatorResult,
 } from '@nestjs/terminus';
 import { Public } from '@/common/decorators';
 import { PrismaHealthIndicator } from './prisma.health';
@@ -26,10 +27,10 @@ export class HealthController {
   @ApiOperation({ summary: 'Check application health' })
   check(): Promise<HealthCheckResult> {
     return this.health.check([
-      () => this.prismaHealth.isHealthy('database'),
-      () => this.memory.checkHeap('memory_heap', 300 * 1024 * 1024), // 300MB
-      () => this.memory.checkRSS('memory_rss', 300 * 1024 * 1024), // 300MB
-      () =>
+      (): Promise<HealthIndicatorResult> => this.prismaHealth.isHealthy('database'),
+      (): Promise<HealthIndicatorResult> => this.memory.checkHeap('memory_heap', 300 * 1024 * 1024), // 300MB
+      (): Promise<HealthIndicatorResult> => this.memory.checkRSS('memory_rss', 300 * 1024 * 1024), // 300MB
+      (): Promise<HealthIndicatorResult> =>
         this.disk.checkStorage('storage', {
           path: '/',
           thresholdPercent: 0.9,
@@ -49,6 +50,8 @@ export class HealthController {
   @HealthCheck()
   @ApiOperation({ summary: 'Readiness probe for Kubernetes' })
   readiness(): Promise<HealthCheckResult> {
-    return this.health.check([() => this.prismaHealth.isHealthy('database')]);
+    return this.health.check([
+      (): Promise<HealthIndicatorResult> => this.prismaHealth.isHealthy('database'),
+    ]);
   }
 }
