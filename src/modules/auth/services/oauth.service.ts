@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { AuthProvider } from '@prisma/client';
+import { AuthProvider, User } from '@prisma/client';
 import { UsersService } from '@/modules/users/users.service';
 import { PrismaService } from '@/database/prisma.service';
 import { IAppConfig, IJwtConfig } from '@/config';
@@ -101,7 +101,7 @@ export class OAuthService {
     userId: string,
     googleId: string,
     avatar?: string,
-  ): Promise<unknown> {
+  ): Promise<User> {
     return this.prisma.user.update({
       where: { id: userId },
       data: {
