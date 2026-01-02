@@ -2,7 +2,7 @@ import Redis, { RedisOptions } from 'ioredis';
 import { Logger } from '@nestjs/common';
 import { ICacheProvider } from '../interfaces';
 
-export interface RedisCacheOptions {
+export interface IRedisCacheOptions {
   /** Connection URL (e.g., rediss://default:password@host:port) - takes precedence */
   url?: string;
   host?: string;
@@ -19,7 +19,7 @@ export class RedisCacheProvider implements ICacheProvider {
   private readonly logger = new Logger(RedisCacheProvider.name);
   private readonly keyPrefix: string;
 
-  constructor(options: RedisCacheOptions) {
+  constructor(options: IRedisCacheOptions) {
     this.keyPrefix = options.keyPrefix || 'cache:';
 
     const redisOptions: RedisOptions = {

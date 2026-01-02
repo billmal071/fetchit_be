@@ -79,7 +79,9 @@ export class WaitlistService {
       },
     });
 
-    this.logger.log(`Waitlist entry created with id: ${waitlistEntry.id}, role: ${waitlistEntry.role}`);
+    this.logger.log(
+      `Waitlist entry created with id: ${waitlistEntry.id}, role: ${waitlistEntry.role}`,
+    );
 
     return plainToInstance(WaitlistResponseDto, waitlistEntry);
   }
