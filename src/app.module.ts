@@ -2,12 +2,12 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
-import { CacheModule } from '@nestjs/cache-manager';
 import { WinstonModule } from 'nest-winston';
 
 import { configuration, validateEnv } from '@/config';
 import { winstonConfig } from '@/logs';
 import { DatabaseModule } from '@/database/database.module';
+import { CacheModule } from '@/cache';
 import { AuthModule } from '@/modules/auth/auth.module';
 import { UsersModule } from '@/modules/users/users.module';
 import { HealthModule } from '@/modules/health/health.module';
@@ -40,12 +40,8 @@ import { RolesGuard } from '@/common/guards';
       },
     ]),
 
-    // Caching
-    CacheModule.register({
-      isGlobal: true,
-      ttl: 300000, // 5 minutes
-      max: 100,
-    }),
+    // Caching (pluggable: memory or redis based on CACHE_TYPE env)
+    CacheModule,
 
     // Database
     DatabaseModule,

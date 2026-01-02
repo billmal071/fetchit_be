@@ -19,10 +19,21 @@ export const envSchema = z.object({
     .min(32, { message: 'JWT_REFRESH_SECRET must be at least 32 characters' }),
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
 
-  // Redis
+  // Redis (REDIS_URL takes precedence for Upstash/cloud providers)
+  REDIS_URL: z.string().optional(),
   REDIS_HOST: z.string().default('localhost'),
   REDIS_PORT: z.coerce.number().default(6379),
   REDIS_PASSWORD: z.string().optional().default(''),
+  REDIS_TLS: z
+    .string()
+    .transform((val) => val === 'true')
+    .default('false'),
+
+  // Cache
+  CACHE_TYPE: z.enum(['memory', 'redis']).default('memory'),
+  CACHE_DEFAULT_TTL: z.coerce.number().default(300),
+  CACHE_KEY_PREFIX: z.string().default('fetchit:cache:'),
+  CACHE_MAX_ITEMS: z.coerce.number().default(1000),
 
   // Rate Limiting
   THROTTLE_TTL: z.coerce.number().default(60),
