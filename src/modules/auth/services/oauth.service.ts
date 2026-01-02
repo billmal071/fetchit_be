@@ -97,7 +97,11 @@ export class OAuthService {
     return { tokens, redirectUrl, isNewUser };
   }
 
-  private async linkGoogleAccount(userId: string, googleId: string, avatar?: string): Promise<any> {
+  private async linkGoogleAccount(
+    userId: string,
+    googleId: string,
+    avatar?: string,
+  ): Promise<unknown> {
     return this.prisma.user.update({
       where: { id: userId },
       data: {

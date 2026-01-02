@@ -1,23 +1,23 @@
 import { Logger } from '@nestjs/common';
 import { ICacheProvider } from '../interfaces';
 
-interface CacheEntry<T> {
+interface ICacheEntry<T> {
   value: T;
   expiresAt: number | null; // timestamp or null for no expiry
 }
 
-export interface MemoryCacheOptions {
+export interface IMemoryCacheOptions {
   max?: number; // maximum entries
   defaultTtl?: number; // default TTL in seconds
 }
 
 export class MemoryCacheProvider implements ICacheProvider {
-  private readonly cache = new Map<string, CacheEntry<unknown>>();
+  private readonly cache = new Map<string, ICacheEntry<unknown>>();
   private readonly logger = new Logger(MemoryCacheProvider.name);
   private readonly maxEntries: number;
   private readonly defaultTtl: number;
 
-  constructor(options: MemoryCacheOptions = {}) {
+  constructor(options: IMemoryCacheOptions = {}) {
     this.maxEntries = options.max || 1000;
     this.defaultTtl = options.defaultTtl || 300; // 5 minutes default
     this.logger.log('Memory cache initialized');
@@ -40,7 +40,7 @@ export class MemoryCacheProvider implements ICacheProvider {
     }
   }
 
-  private isExpired(entry: CacheEntry<unknown>): boolean {
+  private isExpired(entry: ICacheEntry<unknown>): boolean {
     if (!entry.expiresAt) return false;
     return Date.now() > entry.expiresAt;
   }
@@ -77,7 +77,7 @@ export class MemoryCacheProvider implements ICacheProvider {
       this.evictIfNeeded();
 
       const effectiveTtl = ttl ?? this.defaultTtl;
-      const entry: CacheEntry<T> = {
+      const entry: ICacheEntry<T> = {
         value,
         expiresAt: effectiveTtl > 0 ? Date.now() + effectiveTtl * 1000 : null,
       };
