@@ -18,6 +18,7 @@ export class RedisCacheProvider implements ICacheProvider {
   private readonly client: Redis;
   private readonly logger = new Logger(RedisCacheProvider.name);
   private readonly keyPrefix: string;
+  private isConnected = false;
 
   constructor(options: IRedisCacheOptions) {
     this.keyPrefix = options.keyPrefix || 'cache:';
@@ -25,13 +26,16 @@ export class RedisCacheProvider implements ICacheProvider {
     const redisOptions: RedisOptions = {
       retryStrategy: (times) => {
         if (times > 3) {
-          this.logger.error('Redis connection failed after 3 retries');
-          return null;
+          this.logger.warn(`Redis connection attempt ${times} failed, will keep trying...`);
         }
-        return Math.min(times * 100, 3000);
+        // Keep retrying with exponential backoff, max 30 seconds
+        return Math.min(times * 1000, 30000);
       },
       maxRetriesPerRequest: null, // Required for Bull queues compatibility
       lazyConnect: true,
+      enableReadyCheck: false, // Don't wait for Redis to be ready
+      enableOfflineQueue: true, // Queue commands when disconnected
+      reconnectOnError: () => true, // Always try to reconnect
     };
 
     // Use connection URL if provided (Upstash, Railway, etc.)
@@ -52,15 +56,33 @@ export class RedisCacheProvider implements ICacheProvider {
     }
 
     this.client.on('connect', () => {
+      this.isConnected = true;
       this.logger.log('Redis cache connected');
     });
 
-    this.client.on('error', (err) => {
-      this.logger.error(`Redis cache error: ${err.message}`);
+    this.client.on('ready', () => {
+      this.isConnected = true;
+      this.logger.log('Redis cache ready');
     });
 
+    this.client.on('error', (err) => {
+      this.logger.warn(`Redis cache error: ${err.message}`);
+    });
+
+    this.client.on('close', () => {
+      this.isConnected = false;
+      this.logger.warn('Redis cache connection closed');
+    });
+
+    this.client.on('reconnecting', () => {
+      this.logger.log('Redis cache reconnecting...');
+    });
+
+    // Try to connect but don't crash if it fails
     this.client.connect().catch((err) => {
-      this.logger.error(`Failed to connect to Redis: ${err.message}`);
+      this.logger.warn(
+        `Initial Redis connection failed: ${err.message}. Will retry in background.`,
+      );
     });
   }
 

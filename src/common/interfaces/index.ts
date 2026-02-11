@@ -61,3 +61,59 @@ export interface IPaginatedResult<T> {
   data: T[];
   meta: IMeta;
 }
+
+// Event Payload Interfaces
+export interface IUserEventPayload {
+  userId: string;
+  email: string;
+  timestamp: Date;
+}
+
+export interface IAuthLoginPayload extends IUserEventPayload {
+  ipAddress?: string;
+  userAgent?: string;
+}
+
+export interface IAuthLogoutPayload {
+  userId: string;
+  timestamp: Date;
+}
+
+export interface IPasswordResetRequestedPayload {
+  userId: string;
+  email: string;
+  token: string;
+  expiresAt: Date;
+  timestamp: Date;
+}
+
+export interface IPasswordResetCompletedPayload {
+  userId: string;
+  email: string;
+  timestamp: Date;
+}
+
+export interface INotificationPayload {
+  userId: string;
+  type: 'email' | 'push' | 'sms';
+  title: string;
+  message: string;
+  data?: Record<string, unknown>;
+  timestamp: Date;
+}
+
+export interface IWaitlistJoinedPayload {
+  email: string;
+  role: string;
+  timestamp: Date;
+}
+
+export interface IEmailPayload {
+  to: string | string[];
+  subject: string;
+  html: string;
+}
+
+export interface IEmailProvider {
+  sendEmail(payload: IEmailPayload): Promise<void>;
+}
