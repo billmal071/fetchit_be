@@ -1,7 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject } from '@nestjs/common';
 import { User, UserStatus, AuthProvider } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
-import { PrismaService } from '@/database/prisma.service';
 import { CreateUserDto, UpdateUserDto, UserResponseDto } from './dto';
 import { ConflictException, NotFoundException } from '@/common/exceptions';
 import { hashPassword } from '@/common/utils';
@@ -9,31 +8,33 @@ import { PaginationDto } from '@/common/dto';
 import { createPaginationMeta } from '@/common/utils';
 import { IPaginatedResult } from '@/common/interfaces';
 import { ERROR_MESSAGES } from '@/common/constants';
+import { IUserRepository, USER_REPOSITORY } from '@/database/repositories';
 
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(USER_REPOSITORY)
+    private readonly userRepository: IUserRepository,
+  ) {}
 
   async create(createUserDto: CreateUserDto): Promise<UserResponseDto> {
-    const existingEmail = await this.findByEmail(createUserDto.email);
+    const existingEmail = await this.userRepository.findByEmail(createUserDto.email);
     if (existingEmail) {
       throw new ConflictException(ERROR_MESSAGES.USER_EXISTS);
     }
 
-    const existingUsername = await this.findByUsername(createUserDto.username);
+    const existingUsername = await this.userRepository.findByUsername(createUserDto.username);
     if (existingUsername) {
       throw new ConflictException('User with this username already exists');
     }
 
     const hashedPassword = await hashPassword(createUserDto.password);
 
-    const user = await this.prisma.user.create({
-      data: {
-        ...createUserDto,
-        password: hashedPassword,
-      },
+    const user = await this.userRepository.create({
+      ...createUserDto,
+      password: hashedPassword,
     });
 
     this.logger.log(`User created with id: ${user.id}`);
@@ -42,15 +43,11 @@ export class UsersService {
   }
 
   async findByUsername(username: string): Promise<User | null> {
-    return this.prisma.user.findFirst({
-      where: { username, deletedAt: null },
-    });
+    return this.userRepository.findByUsername(username);
   }
 
   async findByGoogleId(googleId: string): Promise<User | null> {
-    return this.prisma.user.findFirst({
-      where: { googleId, deletedAt: null },
-    });
+    return this.userRepository.findByGoogleId(googleId);
   }
 
   async createOAuthUser(data: {
@@ -59,16 +56,14 @@ export class UsersService {
     googleId: string;
     avatar?: string;
   }): Promise<UserResponseDto> {
-    const user = await this.prisma.user.create({
-      data: {
-        email: data.email,
-        username: data.username,
-        googleId: data.googleId,
-        avatar: data.avatar,
-        provider: AuthProvider.GOOGLE,
-        emailVerified: true,
-        status: UserStatus.ACTIVE,
-      },
+    const user = await this.userRepository.create({
+      email: data.email,
+      username: data.username,
+      googleId: data.googleId,
+      avatar: data.avatar,
+      provider: AuthProvider.GOOGLE,
+      emailVerified: true,
+      status: UserStatus.ACTIVE,
     });
 
     this.logger.log(`OAuth user created with id: ${user.id}`);
@@ -76,17 +71,11 @@ export class UsersService {
   }
 
   async updateEmailVerified(id: string, verified: boolean): Promise<void> {
-    await this.prisma.user.update({
-      where: { id },
-      data: { emailVerified: verified, status: verified ? UserStatus.ACTIVE : UserStatus.PENDING },
-    });
+    await this.userRepository.updateEmailVerified(id, verified);
   }
 
   async updatePassword(id: string, hashedPassword: string): Promise<void> {
-    await this.prisma.user.update({
-      where: { id },
-      data: { password: hashedPassword },
-    });
+    await this.userRepository.updatePassword(id, hashedPassword);
   }
 
   async findAll(paginationDto: PaginationDto): Promise<IPaginatedResult<UserResponseDto>> {
@@ -94,13 +83,12 @@ export class UsersService {
     const skip = (page - 1) * limit;
 
     const [users, total] = await Promise.all([
-      this.prisma.user.findMany({
-        where: { deletedAt: null },
-        orderBy: { [sortBy]: sortOrder.toLowerCase() },
+      this.userRepository.findAll({
         skip,
         take: limit,
+        orderBy: { [sortBy]: sortOrder.toLowerCase() as 'asc' | 'desc' },
       }),
-      this.prisma.user.count({ where: { deletedAt: null } }),
+      this.userRepository.count(),
     ]);
 
     return {
@@ -110,9 +98,7 @@ export class UsersService {
   }
 
   async findOne(id: string): Promise<UserResponseDto> {
-    const user = await this.prisma.user.findFirst({
-      where: { id, deletedAt: null },
-    });
+    const user = await this.userRepository.findById(id);
 
     if (!user) {
       throw new NotFoundException('User');
@@ -122,27 +108,20 @@ export class UsersService {
   }
 
   async findByEmail(email: string): Promise<User | null> {
-    return this.prisma.user.findFirst({
-      where: { email, deletedAt: null },
-    });
+    return this.userRepository.findByEmail(email);
   }
 
   async findById(id: string): Promise<User | null> {
-    return this.prisma.user.findFirst({
-      where: { id, deletedAt: null },
-    });
+    return this.userRepository.findById(id);
   }
 
   async update(id: string, updateUserDto: UpdateUserDto): Promise<UserResponseDto> {
-    const user = await this.findById(id);
+    const user = await this.userRepository.findById(id);
     if (!user) {
       throw new NotFoundException('User');
     }
 
-    const updatedUser = await this.prisma.user.update({
-      where: { id },
-      data: updateUserDto,
-    });
+    const updatedUser = await this.userRepository.update(id, updateUserDto);
 
     this.logger.log(`User updated with id: ${id}`);
 
@@ -150,30 +129,21 @@ export class UsersService {
   }
 
   async remove(id: string): Promise<void> {
-    const user = await this.findById(id);
+    const user = await this.userRepository.findById(id);
     if (!user) {
       throw new NotFoundException('User');
     }
 
-    await this.prisma.user.update({
-      where: { id },
-      data: { deletedAt: new Date() },
-    });
+    await this.userRepository.softDelete(id);
 
     this.logger.log(`User soft deleted with id: ${id}`);
   }
 
   async updateRefreshToken(id: string, refreshToken: string | null): Promise<void> {
-    await this.prisma.user.update({
-      where: { id },
-      data: { refreshToken },
-    });
+    await this.userRepository.updateRefreshToken(id, refreshToken);
   }
 
   async updateLastLogin(id: string): Promise<void> {
-    await this.prisma.user.update({
-      where: { id },
-      data: { lastLoginAt: new Date() },
-    });
+    await this.userRepository.updateLastLogin(id);
   }
 }

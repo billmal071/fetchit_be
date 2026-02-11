@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { WinstonModule } from 'nest-winston';
 
@@ -29,6 +30,14 @@ import { RolesGuard } from '@/common/guards';
       validate: validateEnv,
     }),
 
+    // Event Emitter for internal pub/sub
+    EventEmitterModule.forRoot({
+      wildcard: true,
+      delimiter: '.',
+      maxListeners: 20,
+      verboseMemoryLeak: true,
+    }),
+
     // Logging
     WinstonModule.forRoot(winstonConfig),
 
@@ -52,7 +61,7 @@ import { RolesGuard } from '@/common/guards';
     HealthModule,
     WaitlistModule,
 
-    // Background Jobs
+    // Background Jobs (resilient to Redis failures)
     JobsModule,
 
     // WebSocket

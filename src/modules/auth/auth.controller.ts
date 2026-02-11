@@ -23,6 +23,7 @@ import {
 } from '@/common/decorators';
 import { SUCCESS_MESSAGES } from '@/common/constants';
 import { IRequestUser } from '@/common/interfaces';
+import { Throttle } from '@nestjs/throttler';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -49,6 +50,7 @@ export class AuthController {
 
   @Post('login')
   @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Login with email and password' })
   @ApiSuccessResponse(AuthResponseDto)
@@ -90,6 +92,7 @@ export class AuthController {
 
   @Post('forgot-password')
   @Public()
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Request password reset email' })
   @ApiErrorResponses()
@@ -100,6 +103,7 @@ export class AuthController {
 
   @Post('reset-password')
   @Public()
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Reset password with token' })
   @ApiErrorResponses()
@@ -122,6 +126,7 @@ export class AuthController {
 
   @Post('verify-email')
   @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify email with token' })
   @ApiErrorResponses()

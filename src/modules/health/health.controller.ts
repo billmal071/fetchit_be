@@ -10,6 +10,8 @@ import {
 } from '@nestjs/terminus';
 import { Public } from '@/common/decorators';
 import { PrismaHealthIndicator } from './prisma.health';
+import { RedisHealthIndicator } from './redis.health';
+import { QueueHealthIndicator } from './queue.health';
 
 @ApiTags('Health')
 @Controller('health')
@@ -19,6 +21,8 @@ export class HealthController {
     private readonly prismaHealth: PrismaHealthIndicator,
     private readonly memory: MemoryHealthIndicator,
     private readonly disk: DiskHealthIndicator,
+    private readonly redisHealth: RedisHealthIndicator,
+    private readonly queueHealth: QueueHealthIndicator,
   ) {}
 
   @Get()
@@ -28,6 +32,8 @@ export class HealthController {
   check(): Promise<HealthCheckResult> {
     return this.health.check([
       (): Promise<HealthIndicatorResult> => this.prismaHealth.isHealthy('database'),
+      (): Promise<HealthIndicatorResult> => this.redisHealth.isHealthy('redis'),
+      (): Promise<HealthIndicatorResult> => this.queueHealth.isHealthy('queue'),
       (): Promise<HealthIndicatorResult> => this.memory.checkHeap('memory_heap', 300 * 1024 * 1024), // 300MB
       (): Promise<HealthIndicatorResult> => this.memory.checkRSS('memory_rss', 300 * 1024 * 1024), // 300MB
       (): Promise<HealthIndicatorResult> =>

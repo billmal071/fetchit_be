@@ -9,8 +9,10 @@ import {
   Query,
   HttpCode,
   HttpStatus,
+  Res,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { Response } from 'express';
 import { UsersService } from './users.service';
 import { CreateUserDto, UpdateUserDto, UserResponseDto } from './dto';
 import { PaginationDto } from '@/common/dto';
@@ -50,7 +52,12 @@ export class UsersController {
   @ApiOperation({ summary: 'Get all users (Admin only)' })
   @ApiPaginatedResponse(UserResponseDto)
   @ApiErrorResponses()
-  async findAll(@Query() paginationDto: PaginationDto): Promise<IPaginatedResult<UserResponseDto>> {
+  async findAll(
+    @Query() paginationDto: PaginationDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<IPaginatedResult<UserResponseDto>> {
+    // Allow clients and proxies to cache this list for 30 seconds
+    res.setHeader('Cache-Control', 'private, max-age=30');
     return this.usersService.findAll(paginationDto);
   }
 
@@ -58,7 +65,11 @@ export class UsersController {
   @ApiOperation({ summary: 'Get current user profile' })
   @ApiSuccessResponse(UserResponseDto)
   @ApiErrorResponses()
-  async getProfile(@CurrentUser() user: IRequestUser): Promise<{ data: UserResponseDto }> {
+  async getProfile(
+    @CurrentUser() user: IRequestUser,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ data: UserResponseDto }> {
+    res.setHeader('Cache-Control', 'private, max-age=15');
     const userData = await this.usersService.findOne(user.id);
     return { data: userData };
   }
@@ -68,7 +79,11 @@ export class UsersController {
   @ApiOperation({ summary: 'Get user by ID (Admin only)' })
   @ApiSuccessResponse(UserResponseDto)
   @ApiErrorResponses()
-  async findOne(@Param('id', ParseUUIDPipe) id: string): Promise<{ data: UserResponseDto }> {
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ data: UserResponseDto }> {
+    res.setHeader('Cache-Control', 'private, max-age=30');
     const user = await this.usersService.findOne(id);
     return { data: user };
   }

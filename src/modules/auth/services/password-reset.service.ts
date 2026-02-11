@@ -1,16 +1,16 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { AuthProvider } from '@prisma/client';
-import { PrismaService } from '@/database/prisma.service';
 import { UsersService } from '@/modules/users/users.service';
-import { EmailQueue } from '@/jobs/queues';
+import { EmailService } from '@/jobs/services';
 import { BadRequestException } from '@/common/exceptions';
 import { hashPassword } from '@/common/utils';
 import { ERROR_MESSAGES } from '@/common/constants';
 import { IAppConfig } from '@/config';
 import { ForgotPasswordDto } from '../dto/forgot-password.dto';
 import { ResetPasswordDto } from '../dto/reset-password.dto';
+import { IPasswordResetRepository, PASSWORD_RESET_REPOSITORY } from '@/database/repositories';
 
 @Injectable()
 export class PasswordResetService {
@@ -18,10 +18,11 @@ export class PasswordResetService {
   private readonly frontendUrl: string;
 
   constructor(
-    private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
-    private readonly emailQueue: EmailQueue,
+    private readonly emailService: EmailService,
     private readonly configService: ConfigService,
+    @Inject(PASSWORD_RESET_REPOSITORY)
+    private readonly passwordResetRepository: IPasswordResetRepository,
   ) {
     const appConfig = this.configService.get<IAppConfig>('app');
     this.frontendUrl = appConfig?.frontendUrl || 'http://localhost:4200';
@@ -42,32 +43,27 @@ export class PasswordResetService {
       return;
     }
 
-    // Invalidate existing tokens for this user
-    await this.prisma.passwordReset.updateMany({
-      where: { userId: user.id, usedAt: null },
-      data: { usedAt: new Date() },
-    });
+    // Invalidate existing tokens for this user using repository
+    await this.passwordResetRepository.invalidateUserTokens(user.id);
 
     // Generate secure token
     const token = randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
-    // Store token
-    await this.prisma.passwordReset.create({
-      data: {
-        token,
-        userId: user.id,
-        expiresAt,
-      },
+    // Store token using repository
+    await this.passwordResetRepository.create({
+      token,
+      expiresAt,
+      user: { connect: { id: user.id } },
     });
 
     // Build reset URL
     const resetUrl = `${this.frontendUrl}/auth/reset-password?token=${token}`;
 
-    // Queue email
-    await this.emailQueue.addPasswordResetEmail(user.email, resetUrl, user.username);
+    // Send email
+    await this.emailService.sendPasswordResetEmail(user.email, resetUrl, user.username);
 
-    this.logger.log(`Password reset email queued for: ${user.email}`);
+    this.logger.log(`Password reset email sent for: ${user.email}`);
   }
 
   async resetPassword(dto: ResetPasswordDto): Promise<void> {
@@ -76,11 +72,8 @@ export class PasswordResetService {
       throw new BadRequestException('Passwords do not match');
     }
 
-    // Find token
-    const passwordReset = await this.prisma.passwordReset.findUnique({
-      where: { token: dto.token },
-      include: { user: true },
-    });
+    // Find token with user relation using repository
+    const passwordReset = await this.passwordResetRepository.findByTokenWithUser(dto.token);
 
     if (!passwordReset) {
       throw new BadRequestException(ERROR_MESSAGES.TOKEN_INVALID);
@@ -96,19 +89,14 @@ export class PasswordResetService {
       throw new BadRequestException(ERROR_MESSAGES.TOKEN_EXPIRED);
     }
 
-    // Hash new password and update user
+    // Hash new password and update user atomically using repository
     const hashedPassword = await hashPassword(dto.password);
 
-    await this.prisma.$transaction([
-      this.prisma.user.update({
-        where: { id: passwordReset.userId },
-        data: { password: hashedPassword },
-      }),
-      this.prisma.passwordReset.update({
-        where: { id: passwordReset.id },
-        data: { usedAt: new Date() },
-      }),
-    ]);
+    await this.passwordResetRepository.resetPasswordWithToken(
+      passwordReset.id,
+      passwordReset.userId,
+      hashedPassword,
+    );
 
     this.logger.log(`Password reset completed for user: ${passwordReset.user.email}`);
   }

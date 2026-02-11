@@ -8,3 +8,4 @@ export {
   ValidationException,
   InternalServerException,
 } from './base.exception';
+export { DomainException } from './domain.exception';
