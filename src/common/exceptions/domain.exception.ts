@@ -16,21 +16,13 @@ export class DomainException extends BaseException {
 
 export class InvalidCredentialsException extends DomainException {
   constructor() {
-    super(
-      'AUTH_INVALID_CREDENTIALS',
-      'Invalid email or password',
-      HttpStatus.UNAUTHORIZED,
-    );
+    super('AUTH_INVALID_CREDENTIALS', 'Invalid email or password', HttpStatus.UNAUTHORIZED);
   }
 }
 
 export class TokenExpiredException extends DomainException {
   constructor() {
-    super(
-      'AUTH_TOKEN_EXPIRED',
-      'Authentication token has expired',
-      HttpStatus.UNAUTHORIZED,
-    );
+    super('AUTH_TOKEN_EXPIRED', 'Authentication token has expired', HttpStatus.UNAUTHORIZED);
   }
 }
 
@@ -46,22 +38,13 @@ export class EmailNotVerifiedException extends DomainException {
 
 export class InvalidTokenException extends DomainException {
   constructor(tokenType: string = 'token') {
-    super(
-      'AUTH_INVALID_TOKEN',
-      `Invalid ${tokenType}`,
-      HttpStatus.UNAUTHORIZED,
-      { tokenType },
-    );
+    super('AUTH_INVALID_TOKEN', `Invalid ${tokenType}`, HttpStatus.UNAUTHORIZED, { tokenType });
   }
 }
 
 export class InvalidAdminSecretException extends DomainException {
   constructor() {
-    super(
-      'AUTH_INVALID_ADMIN_SECRET',
-      'Invalid admin secret',
-      HttpStatus.FORBIDDEN,
-    );
+    super('AUTH_INVALID_ADMIN_SECRET', 'Invalid admin secret', HttpStatus.FORBIDDEN);
   }
 }
 
