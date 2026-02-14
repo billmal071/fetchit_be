@@ -1,12 +1,14 @@
 import { Injectable, Logger, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { randomBytes } from 'crypto';
 import { UsersService } from '@/modules/users/users.service';
 import { EmailService } from '@/jobs/services';
 import { BadRequestException } from '@/common/exceptions';
-import { ERROR_MESSAGES } from '@/common/constants';
+import { ERROR_MESSAGES, EVENTS } from '@/common/constants';
 import { IAppConfig } from '@/config';
 import { IRequestUser } from '@/common/interfaces';
+import { UserVerifiedEvent } from '@/common/events';
 import { VerifyEmailDto } from '../dto/verify-email.dto';
 import {
   IEmailVerificationRepository,
@@ -22,6 +24,7 @@ export class EmailVerificationService {
     private readonly usersService: UsersService,
     private readonly emailService: EmailService,
     private readonly configService: ConfigService,
+    private readonly eventEmitter: EventEmitter2,
     @Inject(EMAIL_VERIFICATION_REPOSITORY)
     private readonly emailVerificationRepository: IEmailVerificationRepository,
   ) {
@@ -94,5 +97,13 @@ export class EmailVerificationService {
     );
 
     this.logger.log(`Email verified for user: ${verification.user.email}`);
+
+    // Emit event for other services to react (e.g., send welcome email)
+    const event = new UserVerifiedEvent(
+      verification.user.id,
+      verification.user.email,
+      verification.user.username,
+    );
+    this.eventEmitter.emit(EVENTS.USER_EMAIL_VERIFIED, event);
   }
 }
