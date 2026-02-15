@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import helmet from 'helmet';
+import compression from 'compression';
 import { AppModule } from './app.module';
 import { IAppConfig, ISwaggerConfig } from '@/config';
 
@@ -23,6 +24,20 @@ async function bootstrap(): Promise<void> {
 
   // Security - Helmet
   app.use(helmet());
+
+  // HTTP response compression (skip already-compressed content types)
+  app.use(
+    compression({
+      threshold: 1024, // only compress responses > 1KB
+      filter: (req, res) => {
+        const type = res.getHeader('Content-Type');
+        if (typeof type === 'string' && /(image|video|audio|zip|pdf)/i.test(type)) {
+          return false;
+        }
+        return compression.filter(req, res);
+      },
+    }),
+  );
 
   // CORS
   app.enableCors({

@@ -38,7 +38,8 @@ Thumbs.db
 .DS_Store
 
 # Claude Code local settings (contains secrets)
-.claude/settings.local.json
+.claude
+CLAUDE.md
 
 # Lock files (optional - uncomment if you want to ignore)
 # package-lock.json

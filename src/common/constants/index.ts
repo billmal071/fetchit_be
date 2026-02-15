@@ -60,3 +60,32 @@ export const REGEX_PATTERNS = {
   PHONE: /^\+?[1-9]\d{1,14}$/,
   UUID: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
 } as const;
+
+/**
+ * Internal application events for pub/sub communication between modules.
+ * Uses dot notation for namespacing (e.g., 'user.created').
+ * Wildcard listeners can subscribe to 'user.*' to receive all user events.
+ */
+export const EVENTS = {
+  // User events
+  USER_CREATED: 'user.created',
+  USER_UPDATED: 'user.updated',
+  USER_DELETED: 'user.deleted',
+  USER_EMAIL_VERIFIED: 'user.email.verified',
+
+  // Auth events
+  AUTH_LOGIN: 'auth.login',
+  AUTH_LOGOUT: 'auth.logout',
+  AUTH_PASSWORD_RESET_REQUESTED: 'auth.password.reset.requested',
+  AUTH_PASSWORD_RESET_COMPLETED: 'auth.password.reset.completed',
+  AUTH_PASSWORD_CHANGED: 'auth.password.changed',
+
+  // Notification events
+  NOTIFICATION_SEND: 'notification.send',
+  NOTIFICATION_EMAIL: 'notification.email',
+  NOTIFICATION_PUSH: 'notification.push',
+  NOTIFICATION_SMS: 'notification.sms',
+
+  // Waitlist events
+  WAITLIST_JOINED: 'waitlist.joined',
+} as const;

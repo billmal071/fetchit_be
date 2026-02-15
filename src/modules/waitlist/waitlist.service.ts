@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import {
   WaitlistRole,
@@ -10,8 +10,8 @@ import {
   MaxSpendingAmount,
   PayoutSpeed,
 } from '@prisma/client';
-import { PrismaService } from '@/database/prisma.service';
 import { ConflictException } from '@/common/exceptions';
+import { IWaitlistRepository, WAITLIST_REPOSITORY } from '@/database/repositories';
 import {
   CreateWaitlistDto,
   WaitlistResponseDto,
@@ -33,50 +33,49 @@ import { createPaginationMeta } from '@/common/utils/pagination.util';
 export class WaitlistService {
   private readonly logger = new Logger(WaitlistService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(WAITLIST_REPOSITORY)
+    private readonly waitlistRepository: IWaitlistRepository,
+  ) {}
 
   async create(createWaitlistDto: CreateWaitlistDto): Promise<WaitlistResponseDto> {
-    const existingEntry = await this.prisma.waitlist.findUnique({
-      where: { email: createWaitlistDto.email },
-    });
+    const existingEntry = await this.waitlistRepository.findByEmail(createWaitlistDto.email);
 
     if (existingEntry) {
       throw new ConflictException('This email is already on the waitlist');
     }
 
-    const waitlistEntry = await this.prisma.waitlist.create({
-      data: {
-        fullName: createWaitlistDto.fullName,
-        email: createWaitlistDto.email,
-        city: createWaitlistDto.city,
-        role: this.mapRole(createWaitlistDto.role),
-        // User fields
-        howFindHelp: createWaitlistDto.howFindHelp
-          ? this.mapHowFindHelp(createWaitlistDto.howFindHelp)
-          : null,
-        firstService: createWaitlistDto.firstService
-          ? this.mapFirstService(createWaitlistDto.firstService)
-          : null,
-        frustration: createWaitlistDto.frustration || null,
-        // Handyman fields
-        mainSkill: createWaitlistDto.mainSkill || null,
-        willingToPay: createWaitlistDto.willingToPay
-          ? this.mapWillingToPay(createWaitlistDto.willingToPay)
-          : null,
-        monthlyBudget: createWaitlistDto.monthlyBudget
-          ? this.mapMonthlyBudget(createWaitlistDto.monthlyBudget)
-          : null,
-        // Shopper fields
-        usedOwnMoney: createWaitlistDto.usedOwnMoney
-          ? this.mapUsedOwnMoney(createWaitlistDto.usedOwnMoney)
-          : null,
-        maxSpendingAmount: createWaitlistDto.maxSpendingAmount
-          ? this.mapMaxSpendingAmount(createWaitlistDto.maxSpendingAmount)
-          : null,
-        payoutSpeed: createWaitlistDto.payoutSpeed
-          ? this.mapPayoutSpeed(createWaitlistDto.payoutSpeed)
-          : null,
-      },
+    const waitlistEntry = await this.waitlistRepository.create({
+      fullName: createWaitlistDto.fullName,
+      email: createWaitlistDto.email,
+      city: createWaitlistDto.city,
+      role: this.mapRole(createWaitlistDto.role),
+      // User fields
+      howFindHelp: createWaitlistDto.howFindHelp
+        ? this.mapHowFindHelp(createWaitlistDto.howFindHelp)
+        : null,
+      firstService: createWaitlistDto.firstService
+        ? this.mapFirstService(createWaitlistDto.firstService)
+        : null,
+      frustration: createWaitlistDto.frustration || null,
+      // Handyman fields
+      mainSkill: createWaitlistDto.mainSkill || null,
+      willingToPay: createWaitlistDto.willingToPay
+        ? this.mapWillingToPay(createWaitlistDto.willingToPay)
+        : null,
+      monthlyBudget: createWaitlistDto.monthlyBudget
+        ? this.mapMonthlyBudget(createWaitlistDto.monthlyBudget)
+        : null,
+      // Shopper fields
+      usedOwnMoney: createWaitlistDto.usedOwnMoney
+        ? this.mapUsedOwnMoney(createWaitlistDto.usedOwnMoney)
+        : null,
+      maxSpendingAmount: createWaitlistDto.maxSpendingAmount
+        ? this.mapMaxSpendingAmount(createWaitlistDto.maxSpendingAmount)
+        : null,
+      payoutSpeed: createWaitlistDto.payoutSpeed
+        ? this.mapPayoutSpeed(createWaitlistDto.payoutSpeed)
+        : null,
     });
 
     this.logger.log(
@@ -90,14 +89,14 @@ export class WaitlistService {
     const { page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'DESC' } = paginationDto;
 
     const [entries, total] = await Promise.all([
-      this.prisma.waitlist.findMany({
+      this.waitlistRepository.findAll({
         skip: paginationDto.skip,
         take: limit,
         orderBy: {
-          [sortBy]: sortOrder.toLowerCase(),
+          [sortBy]: sortOrder.toLowerCase() as 'asc' | 'desc',
         },
       }),
-      this.prisma.waitlist.count(),
+      this.waitlistRepository.count(),
     ]);
 
     return {
