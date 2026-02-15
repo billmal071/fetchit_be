@@ -90,13 +90,13 @@ REDIS_PORT=6379
 
 ```bash
 # Generate Prisma client
-pnpm prisma:generate
+pnpm db:generate
 
 # Run migrations
-pnpm prisma:migrate:dev
+pnpm db:migrate:dev
 
 # Seed database (creates admin user)
-pnpm prisma:seed
+pnpm db:seed
 ```
 
 ### 4. Start Development Server
@@ -122,11 +122,11 @@ pnpm build              # Build for production
 pnpm start:prod         # Run production build
 
 # Database
-pnpm prisma:generate    # Generate Prisma client
-pnpm prisma:migrate:dev # Create and run migrations
-pnpm prisma:migrate:deploy # Deploy migrations (production)
-pnpm prisma:studio      # Open Prisma Studio GUI
-pnpm prisma:seed        # Seed database
+pnpm db:generate    # Generate Prisma client
+pnpm db:migrate:dev # Create and run migrations
+pnpm db:migrate:deploy # Deploy migrations (production)
+pnpm db:studio      # Open Prisma Studio GUI
+pnpm db:seed        # Seed database
 
 # Code Quality
 pnpm lint               # Run ESLint
