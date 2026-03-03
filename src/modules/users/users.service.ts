@@ -1,8 +1,9 @@
 import { Injectable, Logger, Inject } from '@nestjs/common';
-import { User, UserStatus, AuthProvider } from '@prisma/client';
+import { User, UserStatus, AuthProvider, UserRole } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { CreateUserDto, UpdateUserDto, UserResponseDto } from './dto';
-import { ConflictException, NotFoundException } from '@/common/exceptions';
+import { OnboardableRole } from './dto';
+import { ConflictException, NotFoundException, ForbiddenException } from '@/common/exceptions';
 import { hashPassword } from '@/common/utils';
 import { PaginationDto } from '@/common/dto';
 import { createPaginationMeta } from '@/common/utils';
@@ -108,7 +109,7 @@ export class UsersService {
   }
 
   async findByEmail(email: string): Promise<User | null> {
-    return this.userRepository.findByEmail(email);
+    return await this.userRepository.findByEmail(email);
   }
 
   async findById(id: string): Promise<User | null> {
@@ -128,15 +129,34 @@ export class UsersService {
     return plainToInstance(UserResponseDto, updatedUser);
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string, hard: boolean = false): Promise<void> {
     const user = await this.userRepository.findById(id);
     if (!user) {
       throw new NotFoundException('User');
     }
 
+    if (hard) {
+      return this.userRepository.delete(id);
+    }
     await this.userRepository.softDelete(id);
 
-    this.logger.log(`User soft deleted with id: ${id}`);
+    this.logger.log(`User ${hard ? 'hard' : 'soft'} deleted with id: ${id}`);
+  }
+
+  async onboard(userId: string, role: OnboardableRole): Promise<UserResponseDto> {
+    const user = await this.userRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User');
+    }
+
+    if (user.role === UserRole.ADMIN) {
+      throw new ForbiddenException('Admin users cannot change their role');
+    }
+
+    const updatedUser = await this.userRepository.updateRole(userId, role);
+    this.logger.log(`User ${userId} onboarded as ${role}`);
+
+    return plainToInstance(UserResponseDto, updatedUser);
   }
 
   async updateRefreshToken(id: string, refreshToken: string | null): Promise<void> {

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { HealthIndicator, HealthIndicatorResult, HealthCheckError } from '@nestjs/terminus';
-import { InjectQueue } from '@nestjs/bull';
-import { Queue } from 'bull';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { QUEUE_NAMES } from '@/common/constants';
 
 @Injectable()
@@ -16,7 +16,8 @@ export class QueueHealthIndicator extends HealthIndicator {
   async isHealthy(key: string): Promise<HealthIndicatorResult> {
     try {
       // Check that we can talk to the queue backend
-      await this.emailQueue.client.ping();
+      const client = await this.emailQueue.client;
+      await client.ping();
       return this.getStatus(key, true);
     } catch (error) {
       throw new HealthCheckError(

@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, VersioningType } from '@nestjs/common';
+import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
@@ -7,6 +7,34 @@ import helmet from 'helmet';
 import compression from 'compression';
 import { AppModule } from './app.module';
 import { IAppConfig, ISwaggerConfig } from '@/config';
+
+const bootstrapLogger = new Logger('Bootstrap');
+const isProduction = process.env.NODE_ENV === 'production';
+
+process.on('uncaughtException', (error: Error) => {
+  bootstrapLogger.error(`Uncaught Exception: ${error.message}`, error.stack);
+  setTimeout(() => process.exit(1), 1000);
+});
+
+process.on('unhandledRejection', (reason: unknown) => {
+  bootstrapLogger.error(
+    `Unhandled Rejection at: Promise, reason: ${reason instanceof Error ? reason.message : String(reason)}`,
+    reason instanceof Error ? reason.stack : undefined,
+  );
+  if (isProduction) {
+    setTimeout(() => process.exit(1), 1000);
+  }
+});
+
+process.on('SIGTERM', () => {
+  bootstrapLogger.log('SIGTERM received. Graceful shutdown initiated...');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  bootstrapLogger.log('SIGINT received. Graceful shutdown initiated...');
+  process.exit(0);
+});
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, {
@@ -72,17 +100,14 @@ async function bootstrap(): Promise<void> {
       .setTitle(swaggerConfig.title || 'FetchIt API')
       .setDescription(swaggerConfig.description || 'FetchIt Backend API Documentation')
       .setVersion(swaggerConfig.version || '1.0')
-      .addBearerAuth(
-        {
-          type: 'http',
-          scheme: 'bearer',
-          bearerFormat: 'JWT',
-          name: 'JWT',
-          description: 'Enter JWT token',
-          in: 'header',
-        },
-        'JWT-auth',
-      )
+      .addBearerAuth({
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        name: 'JWT',
+        description: 'Enter JWT token',
+        in: 'header',
+      })
       .addTag('Authentication', 'User authentication endpoints')
       .addTag('Users', 'User management endpoints')
       .addTag('Health', 'Health check endpoints')

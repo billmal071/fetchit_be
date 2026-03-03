@@ -7,7 +7,6 @@ import { EmailService } from '@/jobs/services';
 import { BadRequestException } from '@/common/exceptions';
 import { ERROR_MESSAGES, EVENTS } from '@/common/constants';
 import { IAppConfig } from '@/config';
-import { IRequestUser } from '@/common/interfaces';
 import { UserVerifiedEvent } from '@/common/events';
 import { VerifyEmailDto } from '../dto/verify-email.dto';
 import {
@@ -32,18 +31,15 @@ export class EmailVerificationService {
     this.frontendUrl = appConfig?.frontendUrl || 'http://localhost:4200';
   }
 
-  async sendVerificationEmail(user: IRequestUser): Promise<void> {
-    const fullUser = await this.usersService.findById(user.id);
+  async sendVerificationEmail(email: string): Promise<void> {
+    const user = await this.usersService.findByEmail(email);
 
-    if (!fullUser) {
-      throw new BadRequestException('User not found');
+    // Always return success to avoid leaking whether an email is registered
+    if (!user || user.emailVerified) {
+      return;
     }
 
-    if (fullUser.emailVerified) {
-      throw new BadRequestException(ERROR_MESSAGES.EMAIL_ALREADY_VERIFIED);
-    }
-
-    await this.sendVerificationEmailByUserId(fullUser.id, fullUser.email, fullUser.username);
+    await this.sendVerificationEmailByUserId(user.id, user.email, user.username);
   }
 
   async sendVerificationEmailByUserId(

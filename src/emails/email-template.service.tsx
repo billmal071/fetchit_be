@@ -3,7 +3,6 @@ import { render } from '@react-email/render';
 import { WelcomeEmail } from './templates/WelcomeEmail';
 import { PasswordResetEmail } from './templates/PasswordResetEmail';
 import { EmailVerificationEmail } from './templates/EmailVerificationEmail';
-import { emailTailwindConfig } from './tailwind.email.config';
 
 type TemplateName = 'welcome' | 'password-reset' | 'email-verification';
 

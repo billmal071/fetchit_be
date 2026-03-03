@@ -6,12 +6,8 @@ import { EmailQueue, IEmailJob } from '../queues';
 /**
  * Email Service
  *
- * Provides email sending functionality that is resilient to Redis failures.
- * - When Redis is available: Uses Bull queues for async processing
- * - When Redis is unavailable: Falls back to sending emails synchronously via Resend
- *
- * The service automatically detects queue failures and falls back to direct sending,
- * ensuring emails are always delivered even if Redis goes down.
+ * Sends emails directly via the provider (primary path), then enqueues for
+ * async retry handling. This ensures reliable delivery regardless of queue health.
  */
 @Injectable()
 export class EmailService {
@@ -23,28 +19,17 @@ export class EmailService {
     private readonly emailQueue: EmailQueue,
   ) {}
 
-  private async sendEmailDirectly(data: IEmailJob): Promise<void> {
+  async sendEmail(data: IEmailJob): Promise<void> {
     const { to, subject, template, context } = data;
 
-    try {
-      const html = await this.getEmailTemplate(template, context);
+    const html = await this.getEmailTemplate(template, context);
+    await this.emailProvider.sendEmail({ to, subject, html });
+    this.logger.log(`Email sent to ${to}`);
 
-      await this.emailProvider.sendEmail({ to, subject, html });
-      this.logger.log(`Email sent directly to ${to}`);
-    } catch (error) {
-      this.logger.error(`Failed to send email to ${to}`, error);
-      throw error;
-    }
-  }
-
-  async sendEmail(data: IEmailJob): Promise<void> {
-    try {
-      await this.emailQueue.addEmailJob(data);
-      this.logger.debug(`Email queued for ${data.to}`);
-    } catch (error) {
-      this.logger.warn(`Queue unavailable, sending directly: ${(error as Error).message}`);
-      await this.sendEmailDirectly(data);
-    }
+    // Enqueue for retry tracking — non-critical, failure is silent
+    this.emailQueue.addEmailJob(data).catch((err: Error) => {
+      this.logger.debug(`Could not enqueue email for ${to}: ${err.message}`);
+    });
   }
 
   async sendWelcomeEmail(email: string, username: string): Promise<void> {

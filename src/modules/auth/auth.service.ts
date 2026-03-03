@@ -7,11 +7,14 @@ import { UsersService } from '@/modules/users/users.service';
 import { UserResponseDto, CreateUserDto } from '@/modules/users/dto';
 import { LoginDto, AuthResponseDto } from './dto';
 import { EmailVerificationService } from './services';
-import { UnauthorizedException } from '@/common/exceptions';
 import { comparePassword } from '@/common/utils';
 import { IJwtPayload, ITokens } from '@/common/interfaces';
-import { IJwtConfig } from '@/config';
-import { ERROR_MESSAGES } from '@/common/constants';
+import { EnvConfig, IJwtConfig } from '@/config';
+import {
+  EmailNotVerifiedException,
+  InvalidCredentialsException,
+  InvalidTokenException,
+} from '@/common/exceptions/domain.exception';
 
 @Injectable()
 export class AuthService {
@@ -21,16 +24,34 @@ export class AuthService {
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
-    private readonly configService: ConfigService,
+    private readonly configService: ConfigService<EnvConfig, true>,
     private readonly emailVerificationService: EmailVerificationService,
   ) {
-    this.jwtConfig = this.configService.get<IJwtConfig>('jwt') as IJwtConfig;
+    const config: IJwtConfig = {
+      secret: this.configService.get('JWT_SECRET'),
+      expiresIn: this.configService.get<'JWT_EXPIRES_IN'>('JWT_EXPIRES_IN'),
+      refreshSecret: this.configService.get('JWT_REFRESH_SECRET'),
+      refreshExpiresIn: this.configService.get('JWT_REFRESH_EXPIRES_IN'),
+    };
+    this.jwtConfig = config;
   }
 
   async register(createUserDto: CreateUserDto): Promise<AuthResponseDto> {
     const user = await this.usersService.create(createUserDto);
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.updateRefreshToken(user.id, tokens.refreshToken);
+
+    let tokens: ITokens;
+    try {
+      tokens = await this.generateTokens(user.id, user.email, user.role);
+      await this.updateRefreshToken(user.id, tokens.refreshToken);
+    } catch (error) {
+      // Roll back user creation so they can retry registration
+      await this.usersService.remove(user.id, true).catch((removeError) => {
+        this.logger.error(
+          `Failed to clean up user after registration failure: ${removeError.message}`,
+        );
+      });
+      throw error;
+    }
 
     // Send verification email (fire and forget - don't block registration)
     this.emailVerificationService
@@ -51,20 +72,20 @@ export class AuthService {
     const user = await this.usersService.findByEmail(loginDto.email);
 
     if (!user) {
-      throw new UnauthorizedException(ERROR_MESSAGES.INVALID_CREDENTIALS);
+      throw new InvalidCredentialsException();
     }
 
     if (user.password === null) {
-      throw new UnauthorizedException(ERROR_MESSAGES.INVALID_CREDENTIALS);
+      throw new InvalidCredentialsException();
     }
 
     const isPasswordValid = await comparePassword(loginDto.password, user.password);
     if (!isPasswordValid) {
-      throw new UnauthorizedException(ERROR_MESSAGES.INVALID_CREDENTIALS);
+      throw new InvalidCredentialsException();
     }
 
-    if (user.status !== UserStatus.ACTIVE && user.status !== UserStatus.PENDING) {
-      throw new UnauthorizedException('Your account is not active. Please contact support.');
+    if (!user.emailVerified) {
+      throw new EmailNotVerifiedException();
     }
 
     const tokens = await this.generateTokens(user.id, user.email, user.role);
@@ -88,11 +109,11 @@ export class AuthService {
     const user = await this.usersService.findById(userId);
 
     if (!user || !user.refreshToken) {
-      throw new UnauthorizedException(ERROR_MESSAGES.TOKEN_INVALID);
+      throw new InvalidTokenException(user?.refreshToken || '');
     }
 
     if (user.refreshToken !== refreshToken) {
-      throw new UnauthorizedException(ERROR_MESSAGES.TOKEN_INVALID);
+      throw new InvalidTokenException(user.refreshToken);
     }
 
     const tokens = await this.generateTokens(user.id, user.email, user.role);

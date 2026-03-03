@@ -4,7 +4,7 @@ import { HealthController } from './health.controller';
 import { PrismaHealthIndicator } from './prisma.health';
 import { RedisHealthIndicator } from './redis.health';
 import { QueueHealthIndicator } from './queue.health';
-import { BullModule } from '@nestjs/bull';
+import { BullModule } from '@nestjs/bullmq';
 import { QUEUE_NAMES } from '@/common/constants';
 
 @Module({

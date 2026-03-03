@@ -16,7 +16,7 @@ import { WaitlistModule } from '@/modules/waitlist/waitlist.module';
 import { JobsModule } from '@/jobs/jobs.module';
 import { GatewaysModule } from '@/gateways/gateways.module';
 
-import { GlobalExceptionFilter } from '@/common/filters';
+import { GlobalExceptionFilter, PrismaExceptionFilter } from '@/common/filters';
 import { ResponseInterceptor, LoggingInterceptor } from '@/common/interceptors';
 import { JwtAuthGuard } from '@/modules/auth/guards';
 import { RolesGuard } from '@/common/guards';
@@ -68,10 +68,16 @@ import { RolesGuard } from '@/common/guards';
     GatewaysModule,
   ],
   providers: [
-    // Global Exception Filter
+    // Global Exception Filter (catches all unhandled exceptions)
     {
       provide: APP_FILTER,
       useClass: GlobalExceptionFilter,
+    },
+
+    // Prisma Exception Filter (catches Prisma-specific errors before GlobalExceptionFilter)
+    {
+      provide: APP_FILTER,
+      useClass: PrismaExceptionFilter,
     },
 
     // Global Response Interceptor

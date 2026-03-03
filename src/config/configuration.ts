@@ -1,6 +1,4 @@
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { EnvConfig } from './env.validation';
-
 export interface IAppConfig {
   nodeEnv: string;
   port: number;
