@@ -20,12 +20,10 @@ export class ResendEmailProvider implements IEmailProvider {
 
     if (!this.resendConfig.apiKey) {
       this.logger.warn(`Resend not configured. Email would be sent to ${to}`);
-      this.logger.debug(`Subject: ${subject}`);
-      this.logger.debug(`HTML: ${html}`);
       return;
     }
 
-    const { error } = await this.resend.emails.send({
+    const { data, error } = await this.resend.emails.send({
       from: this.resendConfig.from,
       to,
       subject,
@@ -36,6 +34,6 @@ export class ResendEmailProvider implements IEmailProvider {
       throw new Error(error.message);
     }
 
-    this.logger.log(`Email sent via Resend to ${to}`);
+    this.logger.log(`Email sent via Resend to ${to} (id: ${data?.id})`);
   }
 }

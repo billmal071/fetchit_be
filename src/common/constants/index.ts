@@ -53,6 +53,7 @@ export const SUCCESS_MESSAGES = {
   PASSWORD_CHANGED: 'Password changed successfully',
   EMAIL_VERIFICATION_SENT: 'Verification email sent. Please check your inbox.',
   EMAIL_VERIFIED: 'Email verified successfully',
+  USER_ONBOARDED: 'User onboarded successfully',
 } as const;
 
 export const REGEX_PATTERNS = {
@@ -85,6 +86,9 @@ export const EVENTS = {
   NOTIFICATION_EMAIL: 'notification.email',
   NOTIFICATION_PUSH: 'notification.push',
   NOTIFICATION_SMS: 'notification.sms',
+
+  // Onboarding events
+  USER_ONBOARDED: 'user.onboarded',
 
   // Waitlist events
   WAITLIST_JOINED: 'waitlist.joined',
