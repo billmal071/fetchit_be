@@ -2,19 +2,22 @@ name: CI/CD Pipeline
 
 on:
   pull_request:
-    branches:
-      - dev
+    branches: [dev, staging, main]
   push:
-    branches:
-      - dev
+    branches: [dev, staging, main]
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   NODE_VERSION: '20'
 
 jobs:
-  lint:
-    name: Lint
+  # ─── Install & cache (shared across quality jobs) ──────────────────────────
+  setup:
+    name: Setup
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -29,21 +32,91 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
 
-      - name: Create .env file
-        run: echo "${{ secrets.ENV_FILE }}" > .env
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Generate Prisma client
         run: pnpm db:generate
+
+      - name: Cache node_modules
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            node_modules
+            ~/.pnpm-store
+          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+  # ─── Lint (parallel with test) ─────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Restore node_modules
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            ~/.pnpm-store
+          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Run linter
         run: pnpm lint
 
+  # ─── Test (parallel with lint) ─────────────────────────────────────────────
   test:
     name: Test
     runs-on: ubuntu-latest
+    needs: setup
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fetchit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/fetchit_test
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      JWT_SECRET: test-jwt-secret-minimum-32-characters-long
+      JWT_REFRESH_SECRET: test-jwt-refresh-secret-32-characters!
+      JWT_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 7d
+      FRONTEND_URL: http://localhost:4200
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -57,17 +130,21 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
 
-      - name: Create .env file
-        run: echo "${{ secrets.ENV_FILE }}" > .env
+      - name: Restore node_modules
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            ~/.pnpm-store
+          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Run database migrations
+        run: pnpm db:migrate:deploy
 
-      - name: Generate Prisma client
-        run: pnpm db:generate
       - name: Run tests
         run: pnpm test
 
+  # ─── Build ─────────────────────────────────────────────────────────────────
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -85,11 +162,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
 
-      - name: Create .env file
-        run: echo "${{ secrets.ENV_FILE }}" > .env
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Restore node_modules
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            ~/.pnpm-store
+          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Generate Prisma client
         run: pnpm db:generate
@@ -100,7 +179,7 @@ jobs:
           pnpm build
 
       - name: Upload build artifacts
-        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
@@ -116,13 +195,33 @@ jobs:
             ecosystem.config.js
             scripts/server-setup.sh
 
+  # ─── Deploy ────────────────────────────────────────────────────────────────
+  # Branch → GitHub Environment → secrets:
+  #   dev     → development → APP_PATH, ENV_FILE, SERVER_HOST, SERVER_USER, SSH_PRIVATE_KEY, SERVER_PORT
+  #   staging → staging     → APP_PATH, ENV_FILE, SERVER_HOST, SERVER_USER, SSH_PRIVATE_KEY, SERVER_PORT
+  #   main    → production  → APP_PATH, ENV_FILE, SERVER_HOST, SERVER_USER, SSH_PRIVATE_KEY, SERVER_PORT
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-    environment: development
+    if: github.event_name == 'push'
+    environment:
+      name: >-
+        ${{
+          github.ref_name == 'main'    && 'production'  ||
+          github.ref_name == 'staging' && 'staging'     ||
+          'development'
+        }}
     steps:
+      - name: Resolve deploy environment name
+        id: ctx
+        run: |
+          case "$GITHUB_REF_NAME" in
+            main)    echo "env=production"  >> "$GITHUB_OUTPUT" ;;
+            staging) echo "env=staging"     >> "$GITHUB_OUTPUT" ;;
+            *)       echo "env=development" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -130,21 +229,30 @@ jobs:
           path: ./artifacts
 
       - name: Setup SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p ${{ secrets.SERVER_PORT }} -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -p "$SERVER_PORT" -H "$SERVER_HOST" >> ~/.ssh/known_hosts
 
       - name: Rsync to server
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          APP_PATH: ${{ secrets.APP_PATH }}
         run: |
           rsync -avz --delete \
             --exclude='.env' \
             --exclude='node_modules' \
             --exclude='logs/*.log' \
-            -e "ssh -i ~/.ssh/deploy_key -p ${{ secrets.SERVER_PORT }}" \
+            -e "ssh -i ~/.ssh/deploy_key -p $SERVER_PORT" \
             ./artifacts/ \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.APP_PATH }}/
+            "$SERVER_USER@$SERVER_HOST:$APP_PATH/"
 
       - name: Write .env file to server
         uses: appleboy/ssh-action@v1.0.3
@@ -153,11 +261,12 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: ENV_FILE
+          envs: ENV_FILE,APP_PATH
           script: |
-            echo "$ENV_FILE" > ${{ secrets.APP_PATH }}/.env
+            printf '%s' "$ENV_FILE" > "$APP_PATH/.env"
         env:
           ENV_FILE: ${{ secrets.ENV_FILE }}
+          APP_PATH: ${{ secrets.APP_PATH }}
 
       - name: Run post-deploy commands
         uses: appleboy/ssh-action@v1.0.3
@@ -166,11 +275,16 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
+          envs: APP_PATH,DEPLOY_ENV
           script: |
-            cd ${{ secrets.APP_PATH }}
+            set -e
+            cd "$APP_PATH"
 
-            # Install dependencies
-            pnpm install --frozen-lockfile
+            # Snapshot current state for rollback
+            pm2 save --force || true
+
+            # Install production dependencies
+            pnpm install --frozen-lockfile --prod
 
             # Generate Prisma client
             pnpm db:generate
@@ -178,10 +292,46 @@ jobs:
             # Run database migrations
             pnpm db:migrate:deploy
 
-            # Restart PM2 process
-            pm2 reload ecosystem.config.js --env production || pm2 start ecosystem.config.js --env production
+            # Reload (zero-downtime) or start the correct PM2 app for this env
+            pm2 reload ecosystem.config.js --env "$DEPLOY_ENV" \
+              || pm2 start ecosystem.config.js --env "$DEPLOY_ENV"
 
-            # Save PM2 process list
+            # Persist process list
             pm2 save
 
-            echo "Deployment completed successfully!"
+            echo "Deployed to $DEPLOY_ENV."
+        env:
+          APP_PATH: ${{ secrets.APP_PATH }}
+          DEPLOY_ENV: ${{ steps.ctx.outputs.env }}
+
+      - name: Health check
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+        run: |
+          echo "Waiting for application to become ready..."
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              --max-time 5 \
+              "https://$SERVER_HOST/health/readiness" || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check passed."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Health check failed after 2 minutes."
+          exit 1
+
+      - name: Rollback on failure
+        if: failure()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            echo "Rolling back to previous PM2 snapshot..."
+            pm2 resurrect || true
+            echo "Rollback attempted. Check server logs for details."
