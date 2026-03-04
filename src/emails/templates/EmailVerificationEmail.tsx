@@ -1,6 +1,7 @@
 import React from 'react';
 import { Body, Container, Head, Html, Link, Preview, Section, Text } from '@react-email/components';
 import { Tailwind } from '@react-email/tailwind';
+import { emailTailwindConfig } from '../tailwind.email.config';
 
 interface EmailVerificationEmailProps {
   username: string;
@@ -14,7 +15,7 @@ export function EmailVerificationEmail({ username, verificationUrl }: EmailVerif
     <Html>
       <Head />
       <Preview>Verify your FetchIt email</Preview>
-      <Tailwind>
+      <Tailwind config={emailTailwindConfig}>
         <Body className="bg-background font-sans text-gray-900">
           <Container className="mx-auto my-0 max-w-[600px] px-6 py-8">
             <Section className="rounded-t-xl bg-primary px-6 py-6 text-center">

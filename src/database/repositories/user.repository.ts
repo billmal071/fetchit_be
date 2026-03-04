@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { User, Prisma, UserStatus } from '@prisma/client';
+import { User, Prisma, UserStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { IUserRepository } from './interfaces';
 
@@ -119,6 +119,13 @@ export class UserRepository implements IUserRepository {
         emailVerified: verified,
         status: verified ? UserStatus.ACTIVE : UserStatus.PENDING,
       },
+    });
+  }
+
+  async updateRole(id: string, role: UserRole): Promise<User> {
+    return this.prisma.user.update({
+      where: { id },
+      data: { role },
     });
   }
 

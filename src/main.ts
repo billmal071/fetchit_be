@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import helmet from 'helmet';
-import compression from 'compression';
+import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 import { IAppConfig, ISwaggerConfig } from '@/config';
 
@@ -13,35 +13,52 @@ async function bootstrap(): Promise<void> {
     bufferLogs: true,
   });
 
+  // Request body size limits
+  app.use(json({ limit: '10kb' }));
+  app.use(urlencoded({ limit: '10kb', extended: true }));
+
   // Get config service
   const configService = app.get(ConfigService);
   const appConfig = configService.get<IAppConfig>('app');
   const swaggerConfig = configService.get<ISwaggerConfig>('swagger');
-  const corsOrigins = configService.get<string[]>('cors.origins');
+
+  // Validate CORS origins - filter out any malformed URLs
+  const rawOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000').split(',');
+  const origins = rawOrigins.map((o) => o.trim()).filter((o) => {
+    try { new URL(o); return true; } catch { return false; }
+  });
 
   // Use Winston logger
   app.useLogger(app.get(WINSTON_MODULE_NEST_PROVIDER));
 
-  // Security - Helmet
-  app.use(helmet());
-
-  // HTTP response compression (skip already-compressed content types)
+  // Security - Helmet with Content Security Policy
   app.use(
-    compression({
-      threshold: 1024, // only compress responses > 1KB
-      filter: (req, res) => {
-        const type = res.getHeader('Content-Type');
-        if (typeof type === 'string' && /(image|video|audio|zip|pdf)/i.test(type)) {
-          return false;
-        }
-        return compression.filter(req, res);
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", 'data:', 'https:'],
+          connectSrc: ["'self'"],
+          fontSrc: ["'self'"],
+          objectSrc: ["'none'"],
+          mediaSrc: ["'self'"],
+          frameSrc: ["'none'"],
+        },
       },
+      hsts: {
+        maxAge: 31536000,
+        includeSubDomains: true,
+        preload: true,
+      },
+      crossOriginEmbedderPolicy: false,
     }),
   );
 
   // CORS
   app.enableCors({
-    origin: corsOrigins,
+    origin: origins,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],

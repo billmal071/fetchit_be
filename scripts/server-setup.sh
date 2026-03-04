@@ -15,7 +15,7 @@ sudo apt update && sudo apt upgrade -y
 echo "Installing essential packages..."
 sudo apt install -y curl git build-essential nginx
 
-# Install Node.js 20.x via NodeSource
+# TODO:Install Node.js 20.x via nvm
 echo "Installing Node.js 20.x..."
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
