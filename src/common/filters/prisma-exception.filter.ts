@@ -10,7 +10,7 @@ import { IErrorResponse } from '../interfaces';
 export class PrismaExceptionFilter extends BaseExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(PrismaExceptionFilter.name);
 
-  catch(exception: Prisma.PrismaClientKnownRequestError, host: ArgumentsHost) {
+  catch(exception: Prisma.PrismaClientKnownRequestError, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
