@@ -6,7 +6,7 @@ import { UsersService } from '@/modules/users/users.service';
 import { UserResponseDto, CreateUserDto } from '@/modules/users/dto';
 import { LoginDto, AuthResponseDto } from './dto';
 import { EmailVerificationService } from './services';
-import { comparePassword } from '@/common/utils';
+import { comparePassword, hashToken, compareToken } from '@/common/utils';
 import { IJwtPayload, ITokens } from '@/common/interfaces';
 import { EnvConfig, IJwtConfig } from '@/config';
 import {
@@ -59,12 +59,9 @@ export class AuthService {
         this.logger.error(`Failed to send verification email: ${error.message}`);
       });
 
-    this.logger.log(`User registered: ${user.email}`);
+    this.logger.log(`User registered: ${user.id}`);
 
-    return {
-      user,
-      tokens,
-    };
+    return { user, tokens };
   }
 
   async login(loginDto: LoginDto): Promise<AuthResponseDto> {
@@ -91,7 +88,7 @@ export class AuthService {
     await this.updateRefreshToken(user.id, tokens.refreshToken);
     await this.usersService.updateLastLogin(user.id);
 
-    this.logger.log(`User logged in: ${user.email}`);
+    this.logger.log(`User logged in: ${user.id}`);
 
     return {
       user: plainToInstance(UserResponseDto, user),
@@ -111,14 +108,15 @@ export class AuthService {
       throw new InvalidTokenException('refresh token');
     }
 
-    if (user.refreshToken !== refreshToken) {
+    const isTokenValid = await compareToken(refreshToken, user.refreshToken);
+    if (!isTokenValid) {
       throw new InvalidTokenException('refresh token');
     }
 
     const tokens = await this.generateTokens(user.id, user.email, user.role);
     await this.updateRefreshToken(user.id, tokens.refreshToken);
 
-    this.logger.log(`Tokens refreshed for user: ${user.email}`);
+    this.logger.log(`Tokens refreshed for: ${userId}`);
 
     return tokens;
   }
@@ -134,10 +132,12 @@ export class AuthService {
       this.jwtService.signAsync(payload, {
         secret: this.jwtConfig.secret,
         expiresIn: this.jwtConfig.expiresIn,
+        algorithm: 'HS256',
       }),
       this.jwtService.signAsync(payload, {
         secret: this.jwtConfig.refreshSecret,
         expiresIn: this.jwtConfig.refreshExpiresIn,
+        algorithm: 'HS256',
       }),
     ]);
 
@@ -145,6 +145,7 @@ export class AuthService {
   }
 
   private async updateRefreshToken(userId: string, refreshToken: string): Promise<void> {
-    await this.usersService.updateRefreshToken(userId, refreshToken);
+    const hashedToken = await hashToken(refreshToken);
+    await this.usersService.updateRefreshToken(userId, hashedToken);
   }
 }

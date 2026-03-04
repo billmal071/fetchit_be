@@ -1,75 +1,64 @@
 import { NestFactory } from '@nestjs/core';
-import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
+import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import helmet from 'helmet';
-import compression from 'compression';
+import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 import { IAppConfig, ISwaggerConfig } from '@/config';
-
-const bootstrapLogger = new Logger('Bootstrap');
-const isProduction = process.env.NODE_ENV === 'production';
-
-process.on('uncaughtException', (error: Error) => {
-  bootstrapLogger.error(`Uncaught Exception: ${error.message}`, error.stack);
-  setTimeout(() => process.exit(1), 1000);
-});
-
-process.on('unhandledRejection', (reason: unknown) => {
-  bootstrapLogger.error(
-    `Unhandled Rejection at: Promise, reason: ${reason instanceof Error ? reason.message : String(reason)}`,
-    reason instanceof Error ? reason.stack : undefined,
-  );
-  if (isProduction) {
-    setTimeout(() => process.exit(1), 1000);
-  }
-});
-
-process.on('SIGTERM', () => {
-  bootstrapLogger.log('SIGTERM received. Graceful shutdown initiated...');
-  process.exit(0);
-});
-
-process.on('SIGINT', () => {
-  bootstrapLogger.log('SIGINT received. Graceful shutdown initiated...');
-  process.exit(0);
-});
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true,
   });
 
+  // Request body size limits
+  app.use(json({ limit: '10kb' }));
+  app.use(urlencoded({ limit: '10kb', extended: true }));
+
   // Get config service
   const configService = app.get(ConfigService);
   const appConfig = configService.get<IAppConfig>('app');
   const swaggerConfig = configService.get<ISwaggerConfig>('swagger');
-  const corsOrigins = configService.get<string[]>('cors.origins');
+
+  // Validate CORS origins - filter out any malformed URLs
+  const rawOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000').split(',');
+  const origins = rawOrigins.map((o) => o.trim()).filter((o) => {
+    try { new URL(o); return true; } catch { return false; }
+  });
 
   // Use Winston logger
   app.useLogger(app.get(WINSTON_MODULE_NEST_PROVIDER));
 
-  // Security - Helmet
-  app.use(helmet());
-
-  // HTTP response compression (skip already-compressed content types)
+  // Security - Helmet with Content Security Policy
   app.use(
-    compression({
-      threshold: 1024, // only compress responses > 1KB
-      filter: (req, res) => {
-        const type = res.getHeader('Content-Type');
-        if (typeof type === 'string' && /(image|video|audio|zip|pdf)/i.test(type)) {
-          return false;
-        }
-        return compression.filter(req, res);
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", 'data:', 'https:'],
+          connectSrc: ["'self'"],
+          fontSrc: ["'self'"],
+          objectSrc: ["'none'"],
+          mediaSrc: ["'self'"],
+          frameSrc: ["'none'"],
+        },
       },
+      hsts: {
+        maxAge: 31536000,
+        includeSubDomains: true,
+        preload: true,
+      },
+      crossOriginEmbedderPolicy: false,
     }),
   );
 
   // CORS
   app.enableCors({
-    origin: corsOrigins,
+    origin: origins,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
@@ -100,14 +89,17 @@ async function bootstrap(): Promise<void> {
       .setTitle(swaggerConfig.title || 'FetchIt API')
       .setDescription(swaggerConfig.description || 'FetchIt Backend API Documentation')
       .setVersion(swaggerConfig.version || '1.0')
-      .addBearerAuth({
-        type: 'http',
-        scheme: 'bearer',
-        bearerFormat: 'JWT',
-        name: 'JWT',
-        description: 'Enter JWT token',
-        in: 'header',
-      })
+      .addBearerAuth(
+        {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          name: 'JWT',
+          description: 'Enter JWT token',
+          in: 'header',
+        },
+        'JWT-auth',
+      )
       .addTag('Authentication', 'User authentication endpoints')
       .addTag('Users', 'User management endpoints')
       .addTag('Health', 'Health check endpoints')
