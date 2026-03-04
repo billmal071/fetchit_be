@@ -2,11 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { QUEUE_NAMES } from '@/common/constants';
+import { TemplateName } from '@/emails/email-template.service';
 
 export interface IEmailJob {
   to: string;
   subject: string;
-  template: string;
+  template: TemplateName;
   context: Record<string, unknown>;
 }
 

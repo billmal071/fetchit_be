@@ -12,6 +12,13 @@ export class RedisHealthIndicator extends HealthIndicator {
     super();
   }
 
+  async onModuleDestroy(): Promise<void> {
+    if (this.client?.isOpen) {
+      await this.client.quit();
+    }
+    this.client = null;
+  }
+
   private async getClient(): Promise<RedisClientType> {
     if (this.client) {
       return this.client;

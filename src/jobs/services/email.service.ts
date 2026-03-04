@@ -1,14 +1,8 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { IEmailProvider } from '@/common/interfaces';
-import { EmailTemplateService } from '@/emails/email-template.service';
-import { EmailQueue, IEmailJob } from '../queues';
+import { EmailTemplateService, TemplateName } from '@/emails/email-template.service';
+import { IEmailJob } from '../queues';
 
-/**
- * Email Service
- *
- * Sends emails directly via the provider (primary path), then enqueues for
- * async retry handling. This ensures reliable delivery regardless of queue health.
- */
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -16,7 +10,6 @@ export class EmailService {
   constructor(
     @Inject('EMAIL_PROVIDER') private readonly emailProvider: IEmailProvider,
     private readonly emailTemplateService: EmailTemplateService,
-    private readonly emailQueue: EmailQueue,
   ) {}
 
   async sendEmail(data: IEmailJob): Promise<void> {
@@ -25,11 +18,6 @@ export class EmailService {
     const html = await this.getEmailTemplate(template, context);
     await this.emailProvider.sendEmail({ to, subject, html });
     this.logger.log(`Email sent to ${to}`);
-
-    // Enqueue for retry tracking — non-critical, failure is silent
-    this.emailQueue.addEmailJob(data).catch((err: Error) => {
-      this.logger.debug(`Could not enqueue email for ${to}: ${err.message}`);
-    });
   }
 
   async sendWelcomeEmail(email: string, username: string): Promise<void> {
@@ -64,9 +52,9 @@ export class EmailService {
   }
 
   private async getEmailTemplate(
-    template: string,
+    template: TemplateName,
     context: Record<string, unknown>,
   ): Promise<string> {
-    return this.emailTemplateService.renderTemplate(template as never, context);
+    return this.emailTemplateService.renderTemplate(template, context);
   }
 }

@@ -9,7 +9,7 @@ export class DomainException extends BaseException {
     statusCode: HttpStatus = HttpStatus.BAD_REQUEST,
     details?: Record<string, unknown>,
   ) {
-    super(message, statusCode, details);
+    super(message, statusCode, details, code);
   }
 }
 

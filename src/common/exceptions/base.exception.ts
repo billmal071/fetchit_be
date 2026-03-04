@@ -5,12 +5,14 @@ export class BaseException extends HttpException {
     message: string,
     statusCode: HttpStatus = HttpStatus.INTERNAL_SERVER_ERROR,
     public readonly details?: Record<string, unknown>,
+    code?: string,
   ) {
     super(
       {
         message,
         statusCode,
-        details,
+        ...(details !== undefined && { details }),
+        ...(code !== undefined && { code }),
       },
       statusCode,
     );

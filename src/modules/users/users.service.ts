@@ -3,7 +3,7 @@ import { User, UserStatus, AuthProvider, UserRole } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { CreateUserDto, UpdateUserDto, UserResponseDto } from './dto';
 import { OnboardableRole } from './dto';
-import { ConflictException, NotFoundException, ForbiddenException } from '@/common/exceptions';
+import { ConflictException, NotFoundException, ForbiddenException, EmailNotVerifiedException } from '@/common/exceptions';
 import { hashPassword } from '@/common/utils';
 import { PaginationDto } from '@/common/dto';
 import { createPaginationMeta } from '@/common/utils';
@@ -147,6 +147,10 @@ export class UsersService {
     const user = await this.userRepository.findById(userId);
     if (!user) {
       throw new NotFoundException('User');
+    }
+
+    if (!user.emailVerified) {
+      throw new EmailNotVerifiedException();
     }
 
     if (user.role === UserRole.ADMIN) {

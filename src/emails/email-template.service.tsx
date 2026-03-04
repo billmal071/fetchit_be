@@ -4,7 +4,7 @@ import { WelcomeEmail } from './templates/WelcomeEmail';
 import { PasswordResetEmail } from './templates/PasswordResetEmail';
 import { EmailVerificationEmail } from './templates/EmailVerificationEmail';
 
-type TemplateName = 'welcome' | 'password-reset' | 'email-verification';
+export type TemplateName = 'welcome' | 'password-reset' | 'email-verification';
 
 @Injectable()
 export class EmailTemplateService {
