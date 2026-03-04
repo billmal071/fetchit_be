@@ -20,6 +20,7 @@ export interface IErrorResponse {
   message: string;
   error: string;
   statusCode: number;
+  code?: string;
   timestamp: string;
   path: string;
   details?: IValidationError[] | Record<string, unknown>;

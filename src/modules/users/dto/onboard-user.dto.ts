@@ -17,7 +17,7 @@ export class OnboardUserDto {
     example: 'CUSTOMER',
   })
   @IsIn(ONBOARDABLE_ROLES, {
-    message: `role must be one of: ${['CUSTOMER', 'PERSONAL_SHOPPER', 'HANDYMAN'].join(', ')}`,
+    message: `role must be one of: ${ONBOARDABLE_ROLES.join(', ')}`,
   })
   role: OnboardableRole;
 }

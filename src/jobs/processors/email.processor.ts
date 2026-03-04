@@ -31,7 +31,7 @@ export class EmailProcessor extends WorkerHost {
 
     this.logger.log(`Processing email job ${job.id}: ${subject} to ${to}`);
 
-    const html = await this.emailTemplateService.renderTemplate(template as never, context);
+    const html = await this.emailTemplateService.renderTemplate(template, context);
     await this.emailProvider.sendEmail({ to, subject, html });
 
     this.logger.log(`Email sent successfully to ${to}`);

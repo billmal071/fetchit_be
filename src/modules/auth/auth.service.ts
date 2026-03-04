@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { UserStatus } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { UsersService } from '@/modules/users/users.service';
 import { UserResponseDto, CreateUserDto } from '@/modules/users/dto';
@@ -109,11 +108,11 @@ export class AuthService {
     const user = await this.usersService.findById(userId);
 
     if (!user || !user.refreshToken) {
-      throw new InvalidTokenException(user?.refreshToken || '');
+      throw new InvalidTokenException('refresh token');
     }
 
     if (user.refreshToken !== refreshToken) {
-      throw new InvalidTokenException(user.refreshToken);
+      throw new InvalidTokenException('refresh token');
     }
 
     const tokens = await this.generateTokens(user.id, user.email, user.role);

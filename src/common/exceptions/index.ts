@@ -8,4 +8,13 @@ export {
   ValidationException,
   InternalServerException,
 } from './base.exception';
-export { DomainException } from './domain.exception';
+export {
+  DomainException,
+  InvalidCredentialsException,
+  TokenExpiredException,
+  EmailNotVerifiedException,
+  InvalidTokenException,
+  InvalidAdminSecretException,
+  ResourceNotFoundException,
+  ResourceAlreadyExistsException,
+} from './domain.exception';
