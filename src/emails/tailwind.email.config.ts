@@ -1,17 +1,7 @@
-interface IConfig {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  content: any[]; // Tailwind content can be very complex, keeping as any[] for simplicity here
-  theme: {
-    extend: {
-      colors: Record<string, string | Record<string, string>>;
-      borderRadius: Record<string, string>;
-    };
-  };
-}
+import type { TailwindConfig } from '@react-email/tailwind';
 
 // Tailwind config scoped for React Email templates only.
-export const emailTailwindConfig: IConfig = {
-  content: [],
+export const emailTailwindConfig: TailwindConfig = {
   theme: {
     extend: {
       colors: {

@@ -10,6 +10,7 @@ import {
   ForgotPasswordDto,
   ResetPasswordDto,
   VerifyEmailDto,
+  SendVerificationDto,
 } from './dto';
 import { PasswordResetService, EmailVerificationService, OAuthService } from './services';
 import { IGoogleProfile } from './strategies';
@@ -37,6 +38,7 @@ export class AuthController {
 
   @Post('register')
   @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiOperation({ summary: 'Register a new user' })
   @ApiCreatedSuccessResponse(AuthResponseDto)
   @ApiErrorResponses()
@@ -115,12 +117,13 @@ export class AuthController {
   // ==================== Email Verification ====================
 
   @Post('send-verification')
-  @ApiBearerAuth()
+  @Public()
+  @Throttle({ default: { limit: 1, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Request email verification link' })
   @ApiErrorResponses()
-  async sendVerificationEmail(@CurrentUser() user: IRequestUser): Promise<{ message: string }> {
-    await this.emailVerificationService.sendVerificationEmail(user);
+  async sendVerificationEmail(@Body() dto: SendVerificationDto): Promise<{ message: string }> {
+    await this.emailVerificationService.sendVerificationEmail(dto.email);
     return { message: SUCCESS_MESSAGES.EMAIL_VERIFICATION_SENT };
   }
 
@@ -160,7 +163,6 @@ export class AuthController {
         firstName: googleUser.firstName,
         lastName: googleUser.lastName,
         picture: googleUser.picture,
-        accessToken: googleUser.accessToken,
       });
       res.redirect(redirectUrl);
     } catch (error) {

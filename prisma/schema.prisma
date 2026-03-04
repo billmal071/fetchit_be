@@ -9,8 +9,9 @@ datasource db {
 
 enum UserRole {
   ADMIN
-  USER
-  MODERATOR
+  CUSTOMER
+  PERSONAL_SHOPPER
+  HANDYMAN
 }
 
 enum UserStatus {
@@ -30,7 +31,7 @@ model User {
   username      String       @unique @db.VarChar(100)
   email         String       @unique @db.VarChar(255)
   password      String?
-  role          UserRole     @default(USER)
+  role          UserRole     @default(CUSTOMER)
   status        UserStatus   @default(PENDING)
   refreshToken  String?      @map("refresh_token")
   avatar        String?      @db.VarChar(500)

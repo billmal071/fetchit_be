@@ -21,7 +21,7 @@ interface IAuthenticatedSocket extends Socket {
 
 @WebSocketGateway({
   cors: {
-    origin: '*',
+    origin: process.env.CORS_ORIGINS?.split(',').map((o) => o.trim()) ?? ['http://localhost:3000'],
     credentials: true,
   },
   namespace: '/events',
@@ -74,7 +74,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   }
 
   @SubscribeMessage('ping')
-  handlePing(@ConnectedSocket() _client: Socket): { event: string; data: string } {
+  handlePing(@ConnectedSocket() client: Socket): { event: string; data: string } {
     return { event: 'pong', data: 'pong' };
   }
 

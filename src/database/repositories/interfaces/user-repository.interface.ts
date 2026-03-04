@@ -1,4 +1,4 @@
-import { User, Prisma } from '@prisma/client';
+import { User, Prisma, UserRole } from '@prisma/client';
 import { ISoftDeleteRepository } from './base-repository.interface';
 
 /**
@@ -47,6 +47,11 @@ export interface IUserRepository extends ISoftDeleteRepository<
    * Update user's email verification status
    */
   updateEmailVerified(id: string, verified: boolean): Promise<void>;
+
+  /**
+   * Update user's role
+   */
+  updateRole(id: string, role: UserRole): Promise<User>;
 
   /**
    * Check if email exists

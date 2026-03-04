@@ -6,6 +6,7 @@ import { Request } from 'express';
 import { IJwtPayload } from '@/common/interfaces';
 import { IJwtConfig } from '@/config';
 import { UsersService } from '@/modules/users/users.service';
+import { compareToken } from '@/common/utils';
 
 @Injectable()
 export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh') {
@@ -17,7 +18,7 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
     super({
       jwtFromRequest: ExtractJwt.fromBodyField('refreshToken'),
       ignoreExpiration: false,
-      secretOrKey: jwtConfig?.refreshSecret || 'default-refresh-secret',
+      secretOrKey: jwtConfig?.refreshSecret,
       passReqToCallback: true,
     });
   }
@@ -33,7 +34,8 @@ export class JwtRefreshStrategy extends PassportStrategy(Strategy, 'jwt-refresh'
       throw new UnauthorizedException('Invalid refresh token');
     }
 
-    if (user.refreshToken !== refreshToken) {
+    const isTokenValid = await compareToken(refreshToken, user.refreshToken);
+    if (!isTokenValid) {
       throw new UnauthorizedException('Invalid refresh token');
     }
 

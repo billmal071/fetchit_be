@@ -7,6 +7,7 @@ import { PrismaService } from '@/database/prisma.service';
 import { IAppConfig, IJwtConfig } from '@/config';
 import { ITokens } from '@/common/interfaces';
 import { BadRequestException } from '@/common/exceptions';
+import { hashToken } from '@/common/utils';
 
 export interface IGoogleUser {
   googleId: string;
@@ -14,7 +15,6 @@ export interface IGoogleUser {
   firstName: string;
   lastName: string;
   picture: string;
-  accessToken: string;
 }
 
 export interface IOAuthResult {
@@ -86,11 +86,13 @@ export class OAuthService {
 
     // Generate tokens
     const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.usersService.updateRefreshToken(user.id, tokens.refreshToken);
+    const hashedRefreshToken = await hashToken(tokens.refreshToken);
+    await this.usersService.updateRefreshToken(user.id, hashedRefreshToken);
     await this.usersService.updateLastLogin(user.id);
 
-    // Build redirect URL with tokens
-    const redirectUrl = `${this.frontendUrl}/auth/oauth-callback?accessToken=${tokens.accessToken}&refreshToken=${tokens.refreshToken}`;
+    // Build redirect URL with tokens in URL fragment (hash) to keep them out of
+    // server logs, browser history, and Referer headers.
+    const redirectUrl = `${this.frontendUrl}/auth/oauth-callback#accessToken=${tokens.accessToken}&refreshToken=${tokens.refreshToken}`;
 
     this.logger.log(`OAuth login successful for: ${user.email}`);
 
@@ -126,10 +128,12 @@ export class OAuthService {
       this.jwtService.signAsync(payload, {
         secret: this.jwtConfig.secret,
         expiresIn: this.jwtConfig.expiresIn,
+        algorithm: 'HS256',
       }),
       this.jwtService.signAsync(payload, {
         secret: this.jwtConfig.refreshSecret,
         expiresIn: this.jwtConfig.refreshExpiresIn,
+        algorithm: 'HS256',
       }),
     ]);
 
@@ -137,6 +141,17 @@ export class OAuthService {
   }
 
   getFrontendErrorUrl(error: string): string {
-    return `${this.frontendUrl}/auth/oauth-error?error=${encodeURIComponent(error)}`;
+    // Log the detailed error server-side only; never expose raw messages to the client.
+    this.logger.error(`OAuth error: ${error}`);
+    const errorCode = this.mapErrorToCode(error);
+    return `${this.frontendUrl}/auth/oauth-error?error=${errorCode}`;
+  }
+
+  private mapErrorToCode(error: string): string {
+    const lower = error.toLowerCase();
+    if (lower.includes('already linked') || lower.includes('account exists')) {
+      return 'account_exists';
+    }
+    return 'oauth_failed';
   }
 }

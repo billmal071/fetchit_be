@@ -14,16 +14,11 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Response } from 'express';
 import { UsersService } from './users.service';
-import { CreateUserDto, UpdateUserDto, UserResponseDto } from './dto';
+import { UpdateUserDto, UserResponseDto, OnboardUserDto } from './dto';
 import { PaginationDto } from '@/common/dto';
 import { ParseUUIDPipe } from '@/common/pipes';
-import { Public, Roles, CurrentUser } from '@/common/decorators';
-import {
-  ApiSuccessResponse,
-  ApiCreatedSuccessResponse,
-  ApiPaginatedResponse,
-  ApiErrorResponses,
-} from '@/common/decorators';
+import { Roles, CurrentUser } from '@/common/decorators';
+import { ApiSuccessResponse, ApiPaginatedResponse, ApiErrorResponses } from '@/common/decorators';
 import { UserRole } from '@/common/enums';
 import { IPaginatedResult, IRequestUser } from '@/common/interfaces';
 import { SUCCESS_MESSAGES } from '@/common/constants';
@@ -33,19 +28,6 @@ import { SUCCESS_MESSAGES } from '@/common/constants';
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
-
-  @Post()
-  @Public()
-  @ApiOperation({ summary: 'Create a new user' })
-  @ApiCreatedSuccessResponse(UserResponseDto)
-  @ApiErrorResponses()
-  async create(@Body() createUserDto: CreateUserDto): Promise<{
-    data: UserResponseDto;
-    message: string;
-  }> {
-    const user = await this.usersService.create(createUserDto);
-    return { data: user, message: SUCCESS_MESSAGES.USER_CREATED };
-  }
 
   @Get()
   @Roles(UserRole.ADMIN)
@@ -64,6 +46,7 @@ export class UsersController {
   @Get('me')
   @ApiOperation({ summary: 'Get current user profile' })
   @ApiSuccessResponse(UserResponseDto)
+  @ApiBearerAuth()
   @ApiErrorResponses()
   async getProfile(
     @CurrentUser() user: IRequestUser,
@@ -72,6 +55,18 @@ export class UsersController {
     res.setHeader('Cache-Control', 'private, max-age=15');
     const userData = await this.usersService.findOne(user.id);
     return { data: userData };
+  }
+
+  @Post('onboard')
+  @ApiOperation({ summary: 'Select user role during onboarding' })
+  @ApiSuccessResponse(UserResponseDto)
+  @ApiErrorResponses()
+  async onboard(
+    @CurrentUser() user: IRequestUser,
+    @Body() dto: OnboardUserDto,
+  ): Promise<{ data: UserResponseDto; message: string }> {
+    const updatedUser = await this.usersService.onboard(user.id, dto.role);
+    return { data: updatedUser, message: SUCCESS_MESSAGES.USER_ONBOARDED };
   }
 
   @Get(':id')
