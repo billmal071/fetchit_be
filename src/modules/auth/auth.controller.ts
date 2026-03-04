@@ -38,6 +38,7 @@ export class AuthController {
 
   @Post('register')
   @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @ApiOperation({ summary: 'Register a new user' })
   @ApiCreatedSuccessResponse(AuthResponseDto)
   @ApiErrorResponses()
@@ -117,7 +118,7 @@ export class AuthController {
 
   @Post('send-verification')
   @Public()
-  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @Throttle({ default: { limit: 1, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Request email verification link' })
   @ApiErrorResponses()
@@ -162,7 +163,6 @@ export class AuthController {
         firstName: googleUser.firstName,
         lastName: googleUser.lastName,
         picture: googleUser.picture,
-        accessToken: googleUser.accessToken,
       });
       res.redirect(redirectUrl);
     } catch (error) {

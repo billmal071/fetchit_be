@@ -7,11 +7,9 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   constructor() {
     super({
-      log: [
-        { emit: 'event', level: 'query' },
-        { emit: 'event', level: 'error' },
-        { emit: 'event', level: 'warn' },
-      ],
+      log: process.env.NODE_ENV === 'production'
+        ? [{ emit: 'event', level: 'error' }, { emit: 'event', level: 'warn' }]
+        : [{ emit: 'event', level: 'query' }, { emit: 'event', level: 'error' }, { emit: 'event', level: 'warn' }],
     });
   }
 
@@ -36,9 +34,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
     for (const model of models) {
       const modelName = model as string;
-      const delegate = (this as Record<string, unknown>)[modelName] as
-        | { deleteMany?: () => Promise<unknown> }
-        | undefined;
+      const delegate = (this as Record<string, unknown>)[modelName] as { deleteMany?: () => Promise<unknown> } | undefined;
       if (delegate && typeof delegate.deleteMany === 'function') {
         await delegate.deleteMany();
       }
