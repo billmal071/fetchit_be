@@ -24,9 +24,16 @@ async function bootstrap(): Promise<void> {
 
   // Validate CORS origins - filter out any malformed URLs
   const rawOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000').split(',');
-  const origins = rawOrigins.map((o) => o.trim()).filter((o) => {
-    try { new URL(o); return true; } catch { return false; }
-  });
+  const origins = rawOrigins
+    .map((o) => o.trim())
+    .filter((o) => {
+      try {
+        new URL(o);
+        return true;
+      } catch {
+        return false;
+      }
+    });
 
   // Use Winston logger
   app.useLogger(app.get(WINSTON_MODULE_NEST_PROVIDER));
