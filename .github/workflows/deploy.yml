@@ -291,6 +291,11 @@ jobs:
           envs: APP_PATH,DEPLOY_ENV
           script: |
             set -e
+
+            # Load nvm/node/pnpm/pm2 into PATH
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
             cd "$APP_PATH"
 
             # Snapshot current state for rollback
@@ -345,6 +350,8 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           script: |
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
             echo "Rolling back to previous PM2 snapshot..."
             pm2 resurrect || true
             echo "Rollback attempted. Check server logs for details."
