@@ -292,9 +292,13 @@ jobs:
           script: |
             set -e
 
-            # Load nvm/node/pnpm/pm2 into PATH
+            # Load shell profile so node/pnpm/pm2 are on PATH
+            [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
+            [ -f "$HOME/.profile" ] && source "$HOME/.profile"
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
+            export DEPLOY_ENV="$DEPLOY_ENV"
 
             cd "$APP_PATH"
 
@@ -302,7 +306,7 @@ jobs:
             pm2 save --force || true
 
             # Install production dependencies
-            pnpm install --frozen-lockfile --prod
+            pnpm install --frozen-lockfile
 
             # Generate Prisma client
             pnpm db:generate
@@ -350,6 +354,8 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           script: |
+            [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
+            [ -f "$HOME/.profile" ] && source "$HOME/.profile"
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
             echo "Rolling back to previous PM2 snapshot..."
