@@ -15,7 +15,7 @@ async function bootstrap(): Promise<void> {
 
   // Request body size limits
   app.useBodyParser('json', { limit: '10kb' });
-  app.useBodyParser('urlencoded', { limit: '10kb' });
+  app.useBodyParser('urlencoded', { limit: '10kb', extended: true });
 
   // Get config service
   const configService = app.get(ConfigService);
