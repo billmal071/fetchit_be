@@ -12,7 +12,7 @@ export class ResendEmailProvider implements IEmailProvider {
 
   constructor(private readonly configService: ConfigService) {
     this.resendConfig = this.configService.get<IResendConfig>('resend') as IResendConfig;
-    this.resend = new Resend(this.resendConfig.apiKey);
+    this.resend = new Resend(this.resendConfig?.apiKey || '');
   }
 
   async sendEmail(payload: IEmailPayload): Promise<void> {
