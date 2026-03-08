@@ -151,7 +151,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: setup
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -292,11 +292,7 @@ jobs:
           script: |
             set -e
 
-            # Load shell profile so node/pnpm/pm2 are on PATH
-            [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
-            [ -f "$HOME/.profile" ] && source "$HOME/.profile"
-            export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            source ~/.nvm/nvm.sh
 
             export DEPLOY_ENV="$DEPLOY_ENV"
 
