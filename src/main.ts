@@ -1,21 +1,21 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import helmet from 'helmet';
-import { json, urlencoded } from 'express';
 import { AppModule } from './app.module';
 import { IAppConfig, ISwaggerConfig } from '@/config';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
   });
 
   // Request body size limits
-  app.use(json({ limit: '10kb' }));
-  app.use(urlencoded({ limit: '10kb', extended: true }));
+  app.useBodyParser('json', { limit: '10kb' });
+  app.useBodyParser('urlencoded', { limit: '10kb' });
 
   // Get config service
   const configService = app.get(ConfigService);
