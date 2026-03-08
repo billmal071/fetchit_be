@@ -1,16 +1,22 @@
+const ENV_SUFFIX = process.env.DEPLOY_ENV || 'development';
+
 module.exports = {
   apps: [
     {
-      name: 'fetchit-be',
+      name: `fetchit-be-${ENV_SUFFIX}`,
       script: 'dist/main.js',
       instances: 'max',
       exec_mode: 'cluster',
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',
-      env: {
+      env_development: {
         NODE_ENV: 'development',
         PORT: 6100,
+      },
+      env_staging: {
+        NODE_ENV: 'staging',
+        PORT: 6101,
       },
       env_production: {
         NODE_ENV: 'production',
