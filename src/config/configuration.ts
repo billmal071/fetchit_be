@@ -53,6 +53,8 @@ export interface IConfiguration {
   throttle: IThrottleConfig;
   cors: { origins: string[] };
   swagger: ISwaggerConfig;
+  google: IGoogleConfig;
+  resend: IResendConfig;
 }
 
 export default (): IConfiguration => ({
@@ -73,6 +75,8 @@ export default (): IConfiguration => ({
     host: process.env.REDIS_HOST || 'localhost',
     port: parseInt(process.env.REDIS_PORT || '6379', 10),
     password: process.env.REDIS_PASSWORD || '',
+    url: process.env.REDIS_URL || '',
+    tls: process.env.REDIS_TLS === 'true',
   },
   throttle: {
     ttl: parseInt(process.env.THROTTLE_TTL || '60', 10),
@@ -86,5 +90,16 @@ export default (): IConfiguration => ({
     title: process.env.SWAGGER_TITLE || 'FetchIt API',
     description: process.env.SWAGGER_DESCRIPTION || 'FetchIt Backend API Documentation',
     version: process.env.SWAGGER_VERSION || '1.0',
+  },
+  google: {
+    clientId: process.env.GOOGLE_CLIENT_ID || '',
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+    callbackUrl: process.env.GOOGLE_CALLBACK_URL || '',
+  },
+  resend: {
+    apiKey: process.env.RESEND_API_KEY || '',
+    from: process.env.RESEND_FROM || '',
+    fromEmail: process.env.RESEND_FROM_EMAIL || '',
+    fromName: process.env.RESEND_FROM_NAME || '',
   },
 });
