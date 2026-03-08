@@ -321,23 +321,30 @@ jobs:
           DEPLOY_ENV: ${{ steps.ctx.outputs.env }}
 
       - name: Health check
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          envs: APP_PORT
+          script: |
+            echo "Waiting for application to become ready..."
+            for i in $(seq 1 12); do
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                --max-time 5 \
+                "http://localhost:${APP_PORT:-6100}/health/readiness" || echo "000")
+              echo "Attempt $i: HTTP $STATUS"
+              if [ "$STATUS" = "200" ]; then
+                echo "Health check passed."
+                exit 0
+              fi
+              sleep 10
+            done
+            echo "Health check failed after 2 minutes."
+            exit 1
         env:
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-        run: |
-          echo "Waiting for application to become ready..."
-          for i in $(seq 1 12); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              --max-time 5 \
-              "https://$SERVER_HOST/health/readiness" || echo "000")
-            echo "Attempt $i: HTTP $STATUS"
-            if [ "$STATUS" = "200" ]; then
-              echo "Health check passed."
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "Health check failed after 2 minutes."
-          exit 1
+          APP_PORT: ${{ secrets.APP_PORT }}
 
       - name: Rollback on failure
         if: failure()
