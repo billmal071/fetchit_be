@@ -132,6 +132,37 @@ async function bootstrap(): Promise<void> {
   logger.log(`Application is running on: http://localhost:${port}`);
   logger.log(`API Documentation: http://localhost:${port}/docs`);
   logger.log(`Environment: ${appConfig?.nodeEnv}`);
+
+  // Graceful shutdown on signals
+  const shutdown = async (signal: string): Promise<void> => {
+    logger.warn(`Received ${signal}. Starting graceful shutdown...`);
+    try {
+      await app.close();
+      logger.log('Application shut down gracefully');
+      process.exit(0);
+    } catch (error) {
+      logger.error('Error during shutdown', error);
+      process.exit(1);
+    }
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
+  // Catch unhandled rejections and uncaught exceptions
+  process.on('unhandledRejection', (reason: unknown) => {
+    logger.error('Unhandled Rejection:', reason);
+  });
+
+  process.on('uncaughtException', (error: Error) => {
+    logger.error('Uncaught Exception:', error.stack || error.message);
+    // Give the logger time to flush, then exit
+    setTimeout(() => process.exit(1), 1000);
+  });
 }
 
-bootstrap();
+bootstrap().catch((error) => {
+  // eslint-disable-next-line no-console -- logger unavailable if bootstrap fails
+  console.error('Failed to start application:', error);
+  process.exit(1);
+});
