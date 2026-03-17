@@ -72,3 +72,52 @@ export class ResourceAlreadyExistsException extends DomainException {
     );
   }
 }
+
+// ==================== HANDYMAN EXCEPTIONS ====================
+
+export class HandymanProfileNotFoundException extends DomainException {
+  constructor() {
+    super('Handyman profile not found', 'HANDYMAN_PROFILE_NOT_FOUND', HttpStatus.NOT_FOUND);
+  }
+}
+
+export class HandymanNotVerifiedException extends DomainException {
+  constructor() {
+    super(
+      'You must be verified to perform this action',
+      'HANDYMAN_NOT_VERIFIED',
+      HttpStatus.FORBIDDEN,
+    );
+  }
+}
+
+export class InvalidVerificationTransitionException extends DomainException {
+  constructor(from: string, to: string) {
+    super(
+      `Cannot transition from ${from} to ${to}`,
+      'INVALID_VERIFICATION_TRANSITION',
+      HttpStatus.BAD_REQUEST,
+      { from, to },
+    );
+  }
+}
+
+export class DuplicateApplicationException extends DomainException {
+  constructor() {
+    super(
+      'You have already applied to this service request',
+      'DUPLICATE_APPLICATION',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class ServiceRequestNotOpenException extends DomainException {
+  constructor() {
+    super(
+      'This service request is no longer accepting applications',
+      'SERVICE_REQUEST_NOT_OPEN',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}

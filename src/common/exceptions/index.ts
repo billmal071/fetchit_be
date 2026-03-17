@@ -17,4 +17,9 @@ export {
   InvalidAdminSecretException,
   ResourceNotFoundException,
   ResourceAlreadyExistsException,
+  HandymanProfileNotFoundException,
+  HandymanNotVerifiedException,
+  InvalidVerificationTransitionException,
+  DuplicateApplicationException,
+  ServiceRequestNotOpenException,
 } from './domain.exception';
