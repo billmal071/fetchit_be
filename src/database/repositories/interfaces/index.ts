@@ -3,3 +3,8 @@ export * from './user-repository.interface';
 export * from './password-reset-repository.interface';
 export * from './email-verification-repository.interface';
 export * from './waitlist-repository.interface';
+export * from './handyman-profile-repository.interface';
+export * from './handyman-document-repository.interface';
+export * from './service-category-repository.interface';
+export * from './service-request-repository.interface';
+export * from './service-request-application-repository.interface';

@@ -13,6 +13,10 @@ import { AuthModule } from '@/modules/auth/auth.module';
 import { UsersModule } from '@/modules/users/users.module';
 import { HealthModule } from '@/modules/health/health.module';
 import { WaitlistModule } from '@/modules/waitlist/waitlist.module';
+import { ServiceCategoriesModule } from '@/modules/service-categories/service-categories.module';
+import { HandymanModule } from '@/modules/handyman/handyman.module';
+import { ServiceRequestsModule } from '@/modules/service-requests/service-requests.module';
+import { AdminModule } from '@/modules/admin/admin.module';
 import { JobsModule } from '@/jobs/jobs.module';
 import { GatewaysModule } from '@/gateways/gateways.module';
 
@@ -60,6 +64,12 @@ import { RolesGuard } from '@/common/guards';
     UsersModule,
     HealthModule,
     WaitlistModule,
+
+    // Feature Modules - Handyman Dashboard
+    ServiceCategoriesModule,
+    HandymanModule,
+    ServiceRequestsModule,
+    AdminModule,
 
     // Background Jobs (resilient to Redis failures)
     JobsModule,

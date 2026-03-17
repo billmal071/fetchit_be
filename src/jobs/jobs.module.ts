@@ -7,7 +7,11 @@ import { EmailQueue } from './queues';
 import { EmailProcessor } from './processors';
 import { EmailService, ResendEmailProvider } from './services';
 import { EmailTemplateService } from '@/emails/email-template.service';
-import { UserEventsListener } from './listeners';
+import {
+  UserEventsListener,
+  HandymanEventsListener,
+  ServiceRequestEventsListener,
+} from './listeners';
 
 const logger = new Logger('JobsModule');
 
@@ -63,6 +67,8 @@ const logger = new Logger('JobsModule');
     ResendEmailProvider,
     EmailTemplateService,
     UserEventsListener,
+    HandymanEventsListener,
+    ServiceRequestEventsListener,
     {
       provide: 'EMAIL_PROVIDER',
       useExisting: ResendEmailProvider,
