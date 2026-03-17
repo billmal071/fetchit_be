@@ -47,8 +47,12 @@ model User {
   googleId      String?      @unique @map("google_id")
 
   // Relations
-  passwordResets     PasswordReset[]
-  emailVerifications EmailVerification[]
+  passwordResets      PasswordReset[]
+  emailVerifications  EmailVerification[]
+  handymanProfile     HandymanProfile?
+  reviewedHandymen    HandymanProfile[]   @relation("ReviewedByAdmin")
+  reviewedDocuments   HandymanDocument[]  @relation("DocumentReviewedBy")
+  customerServiceRequests ServiceRequest[] @relation("CustomerRequests")
 
   @@map("users")
 }
@@ -154,4 +158,166 @@ model Waitlist {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("waitlist")
+}
+
+// ==================== HANDYMAN DASHBOARD ====================
+
+enum VerificationStatus {
+  UNVERIFIED
+  PROFILE_COMPLETE
+  DOCUMENTS_SUBMITTED
+  VERIFIED
+  REJECTED
+}
+
+enum DocumentType {
+  GOVERNMENT_ID
+  SELFIE
+  PROOF_OF_ADDRESS
+}
+
+enum DocumentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ServiceRequestStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum ApplicationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+}
+
+model ServiceCategory {
+  id          String   @id @default(uuid())
+  name        String   @unique @db.VarChar(100)
+  slug        String   @unique @db.VarChar(100)
+  description String?  @db.Text
+  icon        String?  @db.VarChar(100)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  handymanProfiles HandymanProfileCategory[]
+  serviceRequests  ServiceRequest[]
+
+  @@map("service_categories")
+}
+
+model HandymanProfile {
+  id                 String             @id @default(uuid())
+  userId             String             @unique @map("user_id")
+  bio                String?            @db.Text
+  location           String?            @db.VarChar(255)
+  latitude           Float?
+  longitude          Float?
+  hourlyRate         Decimal?           @map("hourly_rate") @db.Decimal(10, 2)
+  yearsOfExperience  Int?               @map("years_of_experience")
+  verificationStatus VerificationStatus @default(UNVERIFIED) @map("verification_status")
+  verifiedAt         DateTime?          @map("verified_at")
+  rejectionReason    String?            @map("rejection_reason") @db.Text
+  reviewedById       String?            @map("reviewed_by_id")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  // Relations
+  user               User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy         User?                        @relation("ReviewedByAdmin", fields: [reviewedById], references: [id])
+  documents          HandymanDocument[]
+  categories         HandymanProfileCategory[]
+  assignedRequests   ServiceRequest[]             @relation("AssignedHandyman")
+  applications       ServiceRequestApplication[]
+
+  @@index([verificationStatus])
+  @@map("handyman_profiles")
+}
+
+model HandymanProfileCategory {
+  handymanProfileId String @map("handyman_profile_id")
+  categoryId        String @map("category_id")
+
+  handymanProfile HandymanProfile @relation(fields: [handymanProfileId], references: [id], onDelete: Cascade)
+  category        ServiceCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([handymanProfileId, categoryId])
+  @@map("handyman_profile_categories")
+}
+
+model HandymanDocument {
+  id                String         @id @default(uuid())
+  handymanProfileId String         @map("handyman_profile_id")
+  type              DocumentType
+  fileUrl           String         @map("file_url") @db.VarChar(500)
+  fileName          String         @map("file_name") @db.VarChar(255)
+  status            DocumentStatus @default(PENDING)
+  rejectionReason   String?        @map("rejection_reason") @db.Text
+  reviewedById      String?        @map("reviewed_by_id")
+  reviewedAt        DateTime?      @map("reviewed_at")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+
+  // Relations
+  handymanProfile HandymanProfile @relation(fields: [handymanProfileId], references: [id], onDelete: Cascade)
+  reviewedBy      User?           @relation("DocumentReviewedBy", fields: [reviewedById], references: [id])
+
+  @@index([handymanProfileId])
+  @@map("handyman_documents")
+}
+
+model ServiceRequest {
+  id                  String               @id @default(uuid())
+  customerId          String               @map("customer_id")
+  categoryId          String               @map("category_id")
+  title               String               @db.VarChar(255)
+  description         String               @db.Text
+  location            String               @db.VarChar(255)
+  latitude            Float?
+  longitude           Float?
+  budgetMin           Decimal?             @map("budget_min") @db.Decimal(10, 2)
+  budgetMax           Decimal?             @map("budget_max") @db.Decimal(10, 2)
+  status              ServiceRequestStatus @default(OPEN)
+  assignedHandymanId  String?              @map("assigned_handyman_id")
+  completedAt         DateTime?            @map("completed_at")
+  cancelledAt         DateTime?            @map("cancelled_at")
+  createdAt           DateTime             @default(now()) @map("created_at")
+  updatedAt           DateTime             @updatedAt @map("updated_at")
+
+  // Relations
+  customer          User                         @relation("CustomerRequests", fields: [customerId], references: [id])
+  category          ServiceCategory              @relation(fields: [categoryId], references: [id])
+  assignedHandyman  HandymanProfile?             @relation("AssignedHandyman", fields: [assignedHandymanId], references: [id])
+  applications      ServiceRequestApplication[]
+
+  @@index([customerId])
+  @@index([assignedHandymanId])
+  @@index([status])
+  @@map("service_requests")
+}
+
+model ServiceRequestApplication {
+  id                String            @id @default(uuid())
+  serviceRequestId  String            @map("service_request_id")
+  handymanProfileId String            @map("handyman_profile_id")
+  coverMessage      String?           @map("cover_message") @db.Text
+  proposedRate      Decimal?          @map("proposed_rate") @db.Decimal(10, 2)
+  status            ApplicationStatus @default(PENDING)
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  // Relations
+  serviceRequest  ServiceRequest  @relation(fields: [serviceRequestId], references: [id], onDelete: Cascade)
+  handymanProfile HandymanProfile @relation(fields: [handymanProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([serviceRequestId, handymanProfileId])
+  @@map("service_request_applications")
 }

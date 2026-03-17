@@ -40,6 +40,11 @@ export const ERROR_MESSAGES = {
   EMAIL_NOT_VERIFIED: 'Please verify your email first',
   EMAIL_ALREADY_VERIFIED: 'Email is already verified',
   OAUTH_USER_NO_PASSWORD: 'Cannot change password for OAuth accounts',
+  HANDYMAN_PROFILE_NOT_FOUND: 'Handyman profile not found',
+  HANDYMAN_NOT_VERIFIED: 'Handyman is not verified',
+  INVALID_VERIFICATION_TRANSITION: 'Invalid verification status transition',
+  DUPLICATE_APPLICATION: 'You have already applied to this service request',
+  SERVICE_REQUEST_NOT_OPEN: 'This service request is no longer accepting applications',
 } as const;
 
 export const SUCCESS_MESSAGES = {
@@ -54,6 +59,22 @@ export const SUCCESS_MESSAGES = {
   EMAIL_VERIFICATION_SENT: 'Verification email sent. Please check your inbox.',
   EMAIL_VERIFIED: 'Email verified successfully',
   USER_ONBOARDED: 'User onboarded successfully',
+  PROFILE_COMPLETED: 'Profile completed successfully',
+  PROFILE_UPDATED: 'Profile updated successfully',
+  DOCUMENTS_SUBMITTED: 'Documents submitted for review',
+  DOCUMENT_UPLOADED: 'Document uploaded successfully',
+  DOCUMENT_DELETED: 'Document deleted successfully',
+  APPLICATION_SUBMITTED: 'Application submitted successfully',
+  APPLICATION_ACCEPTED: 'Application accepted successfully',
+  APPLICATION_REJECTED: 'Application rejected',
+  SERVICE_REQUEST_CREATED: 'Service request created successfully',
+  SERVICE_REQUEST_UPDATED: 'Service request updated successfully',
+  SERVICE_REQUEST_CANCELLED: 'Service request cancelled',
+  HANDYMAN_APPROVED: 'Handyman approved successfully',
+  HANDYMAN_REJECTED: 'Handyman rejected',
+  CATEGORY_CREATED: 'Category created successfully',
+  CATEGORY_UPDATED: 'Category updated successfully',
+  CATEGORY_DELETED: 'Category deactivated successfully',
 } as const;
 
 export const REGEX_PATTERNS = {
@@ -92,4 +113,17 @@ export const EVENTS = {
 
   // Waitlist events
   WAITLIST_JOINED: 'waitlist.joined',
+
+  // Handyman events
+  HANDYMAN_PROFILE_COMPLETED: 'handyman.profile.completed',
+  HANDYMAN_DOCUMENTS_SUBMITTED: 'handyman.documents.submitted',
+  HANDYMAN_VERIFIED: 'handyman.verified',
+  HANDYMAN_REJECTED: 'handyman.rejected',
+
+  // Service request events
+  SERVICE_REQUEST_CREATED: 'service-request.created',
+  SERVICE_REQUEST_APPLICATION_RECEIVED: 'service-request.application.received',
+  SERVICE_REQUEST_ASSIGNED: 'service-request.assigned',
+  SERVICE_REQUEST_COMPLETED: 'service-request.completed',
+  SERVICE_REQUEST_CANCELLED: 'service-request.cancelled',
 } as const;
