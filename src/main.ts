@@ -5,6 +5,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import helmet from 'helmet';
+import compression from 'compression';
 import { AppModule } from './app.module';
 import { IAppConfig, ISwaggerConfig } from '@/config';
 
@@ -62,6 +63,9 @@ async function bootstrap(): Promise<void> {
       crossOriginEmbedderPolicy: false,
     }),
   );
+
+  // Response compression
+  app.use(compression());
 
   // CORS
   app.enableCors({
@@ -132,6 +136,35 @@ async function bootstrap(): Promise<void> {
   logger.log(`Application is running on: http://localhost:${port}`);
   logger.log(`API Documentation: http://localhost:${port}/docs`);
   logger.log(`Environment: ${appConfig?.nodeEnv}`);
+
+  // Graceful shutdown on signals
+  const shutdown = async (signal: string): Promise<void> => {
+    logger.warn(`Received ${signal}. Starting graceful shutdown...`);
+    try {
+      await app.close();
+      logger.log('Application shut down gracefully');
+      process.exit(0);
+    } catch (error) {
+      logger.error('Error during shutdown', error);
+      process.exit(1);
+    }
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+
+  process.on('unhandledRejection', (reason: unknown) => {
+    logger.error('Unhandled Rejection:', reason);
+  });
+
+  process.on('uncaughtException', (error: Error) => {
+    logger.error('Uncaught Exception:', error.stack || error.message);
+    setTimeout(() => process.exit(1), 1000);
+  });
 }
 
-bootstrap();
+bootstrap().catch((error) => {
+  // eslint-disable-next-line no-console -- logger unavailable if bootstrap fails
+  console.error('Failed to start application:', error);
+  process.exit(1);
+});

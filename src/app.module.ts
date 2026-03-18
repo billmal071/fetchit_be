@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
@@ -8,6 +8,7 @@ import { WinstonModule } from 'nest-winston';
 import { configuration, validateEnv } from '@/config';
 import { winstonConfig } from '@/logs';
 import { DatabaseModule } from '@/database/database.module';
+import { AuditModule } from '@common/services/audit.module';
 import { CacheModule } from '@/cache';
 import { AuthModule } from '@/modules/auth/auth.module';
 import { UsersModule } from '@/modules/users/users.module';
@@ -21,7 +22,8 @@ import { JobsModule } from '@/jobs/jobs.module';
 import { GatewaysModule } from '@/gateways/gateways.module';
 
 import { GlobalExceptionFilter, PrismaExceptionFilter } from '@/common/filters';
-import { ResponseInterceptor, LoggingInterceptor } from '@/common/interceptors';
+import { ResponseInterceptor, LoggingInterceptor, TimeoutInterceptor } from '@/common/interceptors';
+import { CorrelationIdMiddleware } from '@common/middleware/correlation-id.middleware';
 import { JwtAuthGuard } from '@/modules/auth/guards';
 import { RolesGuard } from '@/common/guards';
 
@@ -58,6 +60,9 @@ import { RolesGuard } from '@/common/guards';
 
     // Database
     DatabaseModule,
+
+    // Audit Logging
+    AuditModule,
 
     // Feature Modules
     AuthModule,
@@ -102,6 +107,12 @@ import { RolesGuard } from '@/common/guards';
       useClass: LoggingInterceptor,
     },
 
+    // Global Timeout Interceptor (30s default)
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: TimeoutInterceptor,
+    },
+
     // Global JWT Auth Guard
     {
       provide: APP_GUARD,
@@ -121,4 +132,8 @@ import { RolesGuard } from '@/common/guards';
     },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(CorrelationIdMiddleware).forRoutes('*');
+  }
+}

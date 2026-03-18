@@ -9,9 +9,10 @@ import {
   IHandymanDocumentRepository,
 } from '@/database/repositories';
 import { PrismaService } from '@/database/prisma.service';
+import { AuditService } from '@common/services/audit.service';
 import { PaginationDto } from '@common/dto/pagination.dto';
 import { createPaginationMeta } from '@common/utils/pagination.util';
-import { EVENTS } from '@common/constants';
+import { EVENTS, AUDIT_ACTIONS } from '@common/constants';
 import {
   ResourceNotFoundException,
   InvalidVerificationTransitionException,
@@ -29,6 +30,7 @@ export class AdminVerificationService {
     private readonly documentRepo: IHandymanDocumentRepository,
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly auditService: AuditService,
   ) {}
 
   async getPendingHandymen(pagination: PaginationDto): Promise<IPaginatedResult<HandymanProfile>> {
@@ -99,6 +101,13 @@ export class AdminVerificationService {
       new HandymanVerifiedEvent(profile.userId, profileId, user.email, user.username),
     );
 
+    await this.auditService.log({
+      userId: adminUserId,
+      action: AUDIT_ACTIONS.HANDYMAN_APPROVE,
+      entity: 'HandymanProfile',
+      entityId: profileId,
+    });
+
     return updated;
   }
 
@@ -137,6 +146,14 @@ export class AdminVerificationService {
       new HandymanRejectedEvent(profile.userId, profileId, user.email, user.username, dto.reason),
     );
 
+    await this.auditService.log({
+      userId: adminUserId,
+      action: AUDIT_ACTIONS.HANDYMAN_REJECT,
+      entity: 'HandymanProfile',
+      entityId: profileId,
+      details: { reason: dto.reason },
+    });
+
     return updated;
   }
 
@@ -157,6 +174,14 @@ export class AdminVerificationService {
       rejectionReason: dto.status === 'REJECTED' ? dto.rejectionReason : null,
       reviewedBy: { connect: { id: adminUserId } },
       reviewedAt: new Date(),
+    });
+
+    await this.auditService.log({
+      userId: adminUserId,
+      action: AUDIT_ACTIONS.DOCUMENT_REVIEW,
+      entity: 'HandymanDocument',
+      entityId: docId,
+      details: { status: dto.status },
     });
 
     return updated;
