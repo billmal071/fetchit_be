@@ -53,6 +53,7 @@ model User {
   reviewedHandymen    HandymanProfile[]   @relation("ReviewedByAdmin")
   reviewedDocuments   HandymanDocument[]  @relation("DocumentReviewedBy")
   customerServiceRequests ServiceRequest[] @relation("CustomerRequests")
+  auditLogs               AuditLog[]
 
   @@map("users")
 }
@@ -301,6 +302,8 @@ model ServiceRequest {
   @@index([customerId])
   @@index([assignedHandymanId])
   @@index([status])
+  @@index([customerId, status])
+  @@index([assignedHandymanId, status])
   @@map("service_requests")
 }
 
@@ -319,5 +322,26 @@ model ServiceRequestApplication {
   handymanProfile HandymanProfile @relation(fields: [handymanProfileId], references: [id], onDelete: Cascade)
 
   @@unique([serviceRequestId, handymanProfileId])
+  @@index([handymanProfileId, status])
   @@map("service_request_applications")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  action      String   @db.VarChar(100)
+  entity      String   @db.VarChar(100)
+  entityId    String?  @map("entity_id")
+  details     Json?
+  ipAddress   String?  @map("ip_address") @db.VarChar(45)
+  userAgent   String?  @map("user_agent") @db.VarChar(500)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
 }
