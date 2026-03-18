@@ -107,10 +107,10 @@ import { RolesGuard } from '@/common/guards';
       useClass: LoggingInterceptor,
     },
 
-    // Global Timeout Interceptor (30s default)
+    // Global Timeout Interceptor (30s)
     {
       provide: APP_INTERCEPTOR,
-      useClass: TimeoutInterceptor,
+      useValue: new TimeoutInterceptor(30000),
     },
 
     // Global JWT Auth Guard
