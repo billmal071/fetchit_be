@@ -13,6 +13,7 @@ import {
   ValidatorConstraintInterface,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 @ValidatorConstraint({ name: 'isBudgetMaxValid', async: false })
 class BudgetMaxValidator implements ValidatorConstraintInterface {
@@ -28,39 +29,47 @@ class BudgetMaxValidator implements ValidatorConstraintInterface {
 }
 
 export class CreateServiceRequestDto {
+  @ApiProperty({ description: 'Service category ID', example: 'uuid' })
   @IsUUID()
   categoryId: string;
 
+  @ApiProperty({ description: 'Brief title', example: 'Fix leaking kitchen sink' })
   @IsString()
   @IsNotEmpty()
   @MaxLength(255)
   title: string;
 
+  @ApiProperty({ description: 'Detailed description of the work needed' })
   @IsString()
   @IsNotEmpty()
   description: string;
 
+  @ApiProperty({ description: 'Service location address', example: 'Lagos, Ikeja' })
   @IsString()
   @IsNotEmpty()
   @MaxLength(255)
   location: string;
 
+  @ApiPropertyOptional({ description: 'Location latitude', example: 6.6018 })
   @IsNumber()
   @IsOptional()
   @Type(() => Number)
   latitude?: number;
 
+  @ApiPropertyOptional({ description: 'Location longitude', example: 3.3515 })
   @IsNumber()
   @IsOptional()
   @Type(() => Number)
   longitude?: number;
 
+  @ApiPropertyOptional({ description: 'Minimum budget in NGN', example: 5000 })
   @IsNumber()
   @Min(0)
   @IsOptional()
   @Type(() => Number)
   budgetMin?: number;
 
+  @ApiPropertyOptional({ description: 'Maximum budget in NGN', example: 15000 })
   @IsNumber()
   @Min(0)
   @IsOptional()

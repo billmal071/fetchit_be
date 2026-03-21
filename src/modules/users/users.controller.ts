@@ -14,10 +14,10 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Response } from 'express';
 import { UsersService } from './users.service';
-import { UpdateUserDto, UserResponseDto, OnboardUserDto } from './dto';
+import { UpdateUserDto, UserResponseDto, OnboardUserDto, ONBOARDABLE_ROLES } from './dto';
 import { PaginationDto } from '@/common/dto';
 import { ParseUUIDPipe } from '@/common/pipes';
-import { Roles, CurrentUser } from '@/common/decorators';
+import { Roles, CurrentUser, Public } from '@/common/decorators';
 import { ApiSuccessResponse, ApiPaginatedResponse, ApiErrorResponses } from '@/common/decorators';
 import { UserRole } from '@/common/enums';
 import { IPaginatedResult, IRequestUser } from '@/common/interfaces';
@@ -67,6 +67,13 @@ export class UsersController {
   ): Promise<{ data: UserResponseDto; message: string }> {
     const updatedUser = await this.usersService.onboard(user.id, dto.role);
     return { data: updatedUser, message: SUCCESS_MESSAGES.USER_ONBOARDED };
+  }
+
+  @Get('roles')
+  @Public()
+  @ApiOperation({ summary: 'Get available onboardable roles' })
+  async getRoles(): Promise<{ data: { roles: readonly string[] } }> {
+    return { data: { roles: ONBOARDABLE_ROLES } };
   }
 
   @Get(':id')
