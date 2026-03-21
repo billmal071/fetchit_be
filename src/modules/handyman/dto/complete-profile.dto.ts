@@ -12,7 +12,10 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 
 export class CompleteProfileDto {
-  @ApiProperty({ description: 'Short bio describing your skills and experience', example: 'Experienced plumber with 5 years in residential and commercial work' })
+  @ApiProperty({
+    description: 'Short bio describing your skills and experience',
+    example: 'Experienced plumber with 5 years in residential and commercial work',
+  })
   @IsString()
   @IsNotEmpty()
   bio: string;
@@ -40,7 +43,12 @@ export class CompleteProfileDto {
   @Type(() => Number)
   hourlyRate: number;
 
-  @ApiPropertyOptional({ description: 'Years of professional experience', example: 5, minimum: 0, maximum: 50 })
+  @ApiPropertyOptional({
+    description: 'Years of professional experience',
+    example: 5,
+    minimum: 0,
+    maximum: 50,
+  })
   @IsNumber()
   @Min(0)
   @Max(50)
@@ -48,7 +56,11 @@ export class CompleteProfileDto {
   @Type(() => Number)
   yearsOfExperience?: number;
 
-  @ApiProperty({ description: 'Array of service category IDs the handyman specializes in', example: ['uuid-1', 'uuid-2'], type: [String] })
+  @ApiProperty({
+    description: 'Array of service category IDs the handyman specializes in',
+    example: ['uuid-1', 'uuid-2'],
+    type: [String],
+  })
   @IsArray()
   @IsUUID('4', { each: true })
   categoryIds: string[];
