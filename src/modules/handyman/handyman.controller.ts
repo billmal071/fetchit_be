@@ -99,12 +99,8 @@ export class HandymanController {
   @Post('documents/submit')
   @ApiOperation({
     summary: 'Submit documents for verification review',
-<<<<<<< HEAD
     description:
       'Step 3 of verification: submit uploaded documents for admin review. Requires at least one document uploaded. Transitions status from PROFILE_COMPLETE or REJECTED to DOCUMENTS_SUBMITTED. No request body needed.',
-=======
-    description: 'Step 3 of verification: submit uploaded documents for admin review. Requires at least one document uploaded. Transitions status from PROFILE_COMPLETE or REJECTED to DOCUMENTS_SUBMITTED. No request body needed.',
->>>>>>> 399d686 (feat: improve Swagger docs and add GET /users/roles endpoint)
   })
   async submitDocuments(
     @CurrentUser() user: IRequestUser,
