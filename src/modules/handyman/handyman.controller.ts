@@ -46,7 +46,10 @@ export class HandymanController {
   }
 
   @Post('profile/complete')
-  @ApiOperation({ summary: 'Complete handyman profile' })
+  @ApiOperation({
+    summary: 'Complete handyman profile',
+    description: 'Step 1 of verification: fill in bio, location, hourly rate, and select service categories. Transitions status to PROFILE_COMPLETE.',
+  })
   async completeProfile(
     @CurrentUser() user: IRequestUser,
     @Body() dto: CompleteProfileDto,
@@ -93,7 +96,10 @@ export class HandymanController {
   }
 
   @Post('documents/submit')
-  @ApiOperation({ summary: 'Submit documents for verification review' })
+  @ApiOperation({
+    summary: 'Submit documents for verification review',
+    description: 'Step 3 of verification: submit uploaded documents for admin review. Requires at least one document uploaded. Transitions status from PROFILE_COMPLETE or REJECTED to DOCUMENTS_SUBMITTED. No request body needed.',
+  })
   async submitDocuments(
     @CurrentUser() user: IRequestUser,
   ): Promise<{ data: HandymanProfile; message: string }> {
