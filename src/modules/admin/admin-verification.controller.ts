@@ -19,7 +19,7 @@ export class AdminVerificationController {
   constructor(private readonly adminVerificationService: AdminVerificationService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Get pending handyman verification requests' })
+  @ApiOperation({ summary: 'Get pending handyman verification requests', description: 'List handyman profiles with DOCUMENTS_SUBMITTED status, awaiting admin review.' })
   async getPendingHandymen(
     @Query() pagination: PaginationDto,
   ): Promise<{ data: HandymanProfile[]; meta: IMeta }> {
@@ -27,14 +27,14 @@ export class AdminVerificationController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get handyman profile for review with documents' })
+  @ApiOperation({ summary: 'Get handyman profile for review with documents', description: 'Get full handyman profile with documents for detailed review.' })
   async getHandymanForReview(@Param('id') id: string): Promise<{ data: HandymanProfile }> {
     const data = await this.adminVerificationService.getHandymanForReview(id);
     return { data };
   }
 
   @Patch(':id/approve')
-  @ApiOperation({ summary: 'Approve a handyman verification request' })
+  @ApiOperation({ summary: 'Approve a handyman verification request', description: 'Approve a handyman. Transitions status to VERIFIED and sends notification email.' })
   async approveHandyman(
     @Param('id') id: string,
     @CurrentUser() user: IRequestUser,
@@ -44,7 +44,7 @@ export class AdminVerificationController {
   }
 
   @Patch(':id/reject')
-  @ApiOperation({ summary: 'Reject a handyman verification request' })
+  @ApiOperation({ summary: 'Reject a handyman verification request', description: 'Reject a handyman with a reason. Transitions status to REJECTED. Handyman can resubmit.' })
   async rejectHandyman(
     @Param('id') id: string,
     @Body() dto: RejectHandymanDto,
@@ -55,7 +55,7 @@ export class AdminVerificationController {
   }
 
   @Patch(':id/documents/:docId/review')
-  @ApiOperation({ summary: 'Review a handyman document' })
+  @ApiOperation({ summary: 'Review a handyman document', description: 'Review an individual document, setting it to APPROVED or REJECTED.' })
   async reviewDocument(
     @Param('id') id: string,
     @Param('docId') docId: string,

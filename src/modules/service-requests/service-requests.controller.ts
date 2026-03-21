@@ -18,7 +18,7 @@ export class ServiceRequestsController {
 
   @Post()
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Create a new service request' })
+  @ApiOperation({ summary: 'Create a new service request', description: 'Create a service request as a customer. Emits a SERVICE_REQUEST_CREATED event.' })
   async create(
     @CurrentUser() user: IRequestUser,
     @Body() dto: CreateServiceRequestDto,
@@ -29,7 +29,7 @@ export class ServiceRequestsController {
 
   @Get()
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Get all service requests for the current customer' })
+  @ApiOperation({ summary: 'Get all service requests for the current customer', description: 'List your service requests with optional status filter and pagination.' })
   async findAll(
     @CurrentUser() user: IRequestUser,
     @Query() query: ServiceRequestQueryDto,
@@ -39,7 +39,7 @@ export class ServiceRequestsController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get a service request by ID' })
+  @ApiOperation({ summary: 'Get a service request by ID', description: 'Get full details of a service request. Accessible by the customer, assigned handyman, or admin.' })
   async findOne(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -50,7 +50,7 @@ export class ServiceRequestsController {
 
   @Patch(':id')
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Update a service request' })
+  @ApiOperation({ summary: 'Update a service request', description: 'Update a service request. Only allowed while status is OPEN.' })
   async update(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -62,7 +62,7 @@ export class ServiceRequestsController {
 
   @Delete(':id')
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Cancel a service request' })
+  @ApiOperation({ summary: 'Cancel a service request', description: 'Cancel a service request. Cannot cancel completed or already cancelled requests.' })
   async cancel(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -73,7 +73,7 @@ export class ServiceRequestsController {
 
   @Get(':id/applications')
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Get all applications for a service request' })
+  @ApiOperation({ summary: 'Get all applications for a service request', description: 'View all handyman applications for your service request.' })
   async getApplications(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -84,7 +84,7 @@ export class ServiceRequestsController {
 
   @Patch(':id/applications/:appId/accept')
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Accept an application for a service request' })
+  @ApiOperation({ summary: 'Accept an application for a service request', description: 'Accept a handyman application. Atomically assigns the handyman and rejects all other pending applications.' })
   async acceptApplication(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -96,7 +96,7 @@ export class ServiceRequestsController {
 
   @Patch(':id/applications/:appId/reject')
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Reject an application for a service request' })
+  @ApiOperation({ summary: 'Reject an application for a service request', description: 'Reject a handyman application.' })
   async rejectApplication(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -108,7 +108,7 @@ export class ServiceRequestsController {
 
   @Patch(':id/complete')
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Confirm completion of a service request' })
+  @ApiOperation({ summary: 'Confirm completion of a service request', description: 'Confirm completion of an in-progress service request.' })
   async confirmCompletion(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,

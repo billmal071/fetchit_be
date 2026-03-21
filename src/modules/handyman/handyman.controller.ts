@@ -30,7 +30,7 @@ export class HandymanController {
   constructor(private readonly handymanService: HandymanService) {}
 
   @Get('dashboard')
-  @ApiOperation({ summary: 'Get handyman dashboard with stats' })
+  @ApiOperation({ summary: 'Get handyman dashboard with stats', description: 'Returns verification status and counts of ongoing/completed service requests.' })
   async getDashboard(@CurrentUser() user: IRequestUser): Promise<{
     data: { profile: HandymanProfile; stats: { ongoingCount: number; completedCount: number } };
   }> {
@@ -39,14 +39,18 @@ export class HandymanController {
   }
 
   @Get('profile')
-  @ApiOperation({ summary: 'Get handyman profile' })
+  @ApiOperation({ summary: 'Get handyman profile', description: 'Returns the handyman profile for the authenticated user.' })
   async getProfile(@CurrentUser() user: IRequestUser): Promise<{ data: HandymanProfile }> {
     const data = await this.handymanService.getProfile(user.id);
     return { data };
   }
 
   @Post('profile/complete')
-  @ApiOperation({ summary: 'Complete handyman profile' })
+  @ApiOperation({
+    summary: 'Complete handyman profile',
+    description:
+      'Step 1 of verification: fill in bio, location, hourly rate, and select service categories. Transitions status to PROFILE_COMPLETE.',
+  })
   async completeProfile(
     @CurrentUser() user: IRequestUser,
     @Body() dto: CompleteProfileDto,
@@ -56,7 +60,7 @@ export class HandymanController {
   }
 
   @Patch('profile')
-  @ApiOperation({ summary: 'Update handyman profile' })
+  @ApiOperation({ summary: 'Update handyman profile', description: 'Update profile fields. If categoryIds provided, replaces all existing categories.' })
   async updateProfile(
     @CurrentUser() user: IRequestUser,
     @Body() dto: UpdateProfileDto,
@@ -66,7 +70,7 @@ export class HandymanController {
   }
 
   @Post('documents')
-  @ApiOperation({ summary: 'Upload a verification document' })
+  @ApiOperation({ summary: 'Upload a verification document', description: 'Upload a verification document (government ID, selfie, or proof of address).' })
   async uploadDocument(
     @CurrentUser() user: IRequestUser,
     @Body() dto: UploadDocumentDto,
@@ -76,14 +80,14 @@ export class HandymanController {
   }
 
   @Get('documents')
-  @ApiOperation({ summary: 'Get all uploaded documents' })
+  @ApiOperation({ summary: 'Get all uploaded documents', description: 'List all uploaded verification documents.' })
   async getDocuments(@CurrentUser() user: IRequestUser): Promise<{ data: HandymanDocument[] }> {
     const data = await this.handymanService.getDocuments(user.id);
     return { data };
   }
 
   @Delete('documents/:id')
-  @ApiOperation({ summary: 'Delete a document' })
+  @ApiOperation({ summary: 'Delete a document', description: 'Delete a pending document. Cannot delete while documents are under review.' })
   async deleteDocument(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -93,7 +97,11 @@ export class HandymanController {
   }
 
   @Post('documents/submit')
-  @ApiOperation({ summary: 'Submit documents for verification review' })
+  @ApiOperation({
+    summary: 'Submit documents for verification review',
+    description:
+      'Step 3 of verification: submit uploaded documents for admin review. Requires at least one document uploaded. Transitions status from PROFILE_COMPLETE or REJECTED to DOCUMENTS_SUBMITTED. No request body needed.',
+  })
   async submitDocuments(
     @CurrentUser() user: IRequestUser,
   ): Promise<{ data: HandymanProfile; message: string }> {
@@ -102,7 +110,7 @@ export class HandymanController {
   }
 
   @Get('service-requests')
-  @ApiOperation({ summary: 'Get assigned service requests' })
+  @ApiOperation({ summary: 'Get assigned service requests', description: 'List assigned service requests with optional ongoing/completed filter.' })
   async getServiceRequests(
     @CurrentUser() user: IRequestUser,
     @Query() query: HandymanServiceRequestQueryDto,
@@ -111,7 +119,7 @@ export class HandymanController {
   }
 
   @Get('service-requests/browse')
-  @ApiOperation({ summary: 'Browse open service requests (verified handymen only)' })
+  @ApiOperation({ summary: 'Browse open service requests (verified handymen only)', description: 'Browse open service requests available to apply to. Requires verified status.' })
   async browseOpenRequests(
     @CurrentUser() user: IRequestUser,
     @Query() pagination: PaginationDto,
@@ -120,7 +128,7 @@ export class HandymanController {
   }
 
   @Post('service-requests/:id/apply')
-  @ApiOperation({ summary: 'Apply to a service request' })
+  @ApiOperation({ summary: 'Apply to a service request', description: 'Apply to an open service request. Requires verified status. One application per request.' })
   async applyToRequest(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -131,7 +139,7 @@ export class HandymanController {
   }
 
   @Get('applications')
-  @ApiOperation({ summary: 'Get all applications by this handyman' })
+  @ApiOperation({ summary: 'Get all applications by this handyman', description: 'List all your applications to service requests.' })
   async getApplications(
     @CurrentUser() user: IRequestUser,
   ): Promise<{ data: ServiceRequestApplication[] }> {
@@ -140,7 +148,7 @@ export class HandymanController {
   }
 
   @Patch('service-requests/:id/start')
-  @ApiOperation({ summary: 'Start an assigned service request' })
+  @ApiOperation({ summary: 'Start an assigned service request', description: 'Mark an assigned service request as in-progress.' })
   async startRequest(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -150,7 +158,7 @@ export class HandymanController {
   }
 
   @Patch('service-requests/:id/complete')
-  @ApiOperation({ summary: 'Mark a service request as completed' })
+  @ApiOperation({ summary: 'Mark a service request as completed', description: 'Mark an in-progress service request as completed.' })
   async completeRequest(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
