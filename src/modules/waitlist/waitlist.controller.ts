@@ -21,7 +21,10 @@ export class WaitlistController {
   @Get()
   @Roles(UserRole.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get all waitlist entries (Admin only)' })
+  @ApiOperation({
+    summary: 'Get all waitlist entries (Admin only)',
+    description: 'List all waitlist entries with pagination. Admin only.',
+  })
   @ApiPaginatedResponse(WaitlistAdminResponseDto)
   @ApiErrorResponses()
   async findAll(
@@ -32,7 +35,10 @@ export class WaitlistController {
 
   @Post()
   @Public()
-  @ApiOperation({ summary: 'Join the waitlist' })
+  @ApiOperation({
+    summary: 'Join the waitlist',
+    description: 'Join the waitlist. Role-specific fields required based on selected role.',
+  })
   @ApiCreatedSuccessResponse(WaitlistResponseDto)
   @ApiErrorResponses()
   async create(

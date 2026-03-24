@@ -28,7 +28,10 @@ export class HealthController {
   @Get()
   @Public()
   @HealthCheck()
-  @ApiOperation({ summary: 'Check application health' })
+  @ApiOperation({
+    summary: 'Check application health',
+    description: 'Full health check: database, Redis, queue, memory, disk.',
+  })
   check(): Promise<HealthCheckResult> {
     return this.health.check([
       (): Promise<HealthIndicatorResult> => this.prismaHealth.isHealthy('database'),
@@ -46,7 +49,10 @@ export class HealthController {
 
   @Get('liveness')
   @Public()
-  @ApiOperation({ summary: 'Liveness probe for Kubernetes' })
+  @ApiOperation({
+    summary: 'Liveness probe for Kubernetes',
+    description: 'Kubernetes liveness probe. Always returns 200.',
+  })
   liveness(): { status: string; timestamp: string } {
     return { status: 'ok', timestamp: new Date().toISOString() };
   }
@@ -54,7 +60,10 @@ export class HealthController {
   @Get('readiness')
   @Public()
   @HealthCheck()
-  @ApiOperation({ summary: 'Readiness probe for Kubernetes' })
+  @ApiOperation({
+    summary: 'Readiness probe for Kubernetes',
+    description: 'Kubernetes readiness probe. Checks database connectivity.',
+  })
   readiness(): Promise<HealthCheckResult> {
     return this.health.check([
       (): Promise<HealthIndicatorResult> => this.prismaHealth.isHealthy('database'),

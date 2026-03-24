@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, Query } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import type { ServiceRequest, ServiceRequestApplication } from '@prisma/client';
 import { ServiceRequestsService } from './service-requests.service';
@@ -18,7 +18,10 @@ export class ServiceRequestsController {
 
   @Post()
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Create a new service request', description: 'Create a service request as a customer. Emits a SERVICE_REQUEST_CREATED event.' })
+  @ApiOperation({
+    summary: 'Create a new service request',
+    description: 'Create a service request as a customer. Emits a SERVICE_REQUEST_CREATED event.',
+  })
   async create(
     @CurrentUser() user: IRequestUser,
     @Body() dto: CreateServiceRequestDto,
@@ -29,7 +32,10 @@ export class ServiceRequestsController {
 
   @Get()
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Get all service requests for the current customer', description: 'List your service requests with optional status filter and pagination.' })
+  @ApiOperation({
+    summary: 'Get all service requests for the current customer',
+    description: 'List your service requests with optional status filter and pagination.',
+  })
   async findAll(
     @CurrentUser() user: IRequestUser,
     @Query() query: ServiceRequestQueryDto,
@@ -39,7 +45,12 @@ export class ServiceRequestsController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get a service request by ID', description: 'Get full details of a service request. Accessible by the customer, assigned handyman, or admin.' })
+  @ApiOperation({
+    summary: 'Get a service request by ID',
+    description:
+      'Get full details of a service request. Accessible by the customer, assigned handyman, or admin.',
+  })
+  @ApiParam({ name: 'id', description: 'Service request UUID' })
   async findOne(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -50,7 +61,11 @@ export class ServiceRequestsController {
 
   @Patch(':id')
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Update a service request', description: 'Update a service request. Only allowed while status is OPEN.' })
+  @ApiOperation({
+    summary: 'Update a service request',
+    description: 'Update a service request. Only allowed while status is OPEN.',
+  })
+  @ApiParam({ name: 'id', description: 'Service request UUID' })
   async update(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -62,7 +77,11 @@ export class ServiceRequestsController {
 
   @Delete(':id')
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Cancel a service request', description: 'Cancel a service request. Cannot cancel completed or already cancelled requests.' })
+  @ApiOperation({
+    summary: 'Cancel a service request',
+    description: 'Cancel a service request. Cannot cancel completed or already cancelled requests.',
+  })
+  @ApiParam({ name: 'id', description: 'Service request UUID' })
   async cancel(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -73,7 +92,11 @@ export class ServiceRequestsController {
 
   @Get(':id/applications')
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Get all applications for a service request', description: 'View all handyman applications for your service request.' })
+  @ApiOperation({
+    summary: 'Get all applications for a service request',
+    description: 'View all handyman applications for your service request.',
+  })
+  @ApiParam({ name: 'id', description: 'Service request UUID' })
   async getApplications(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -84,7 +107,13 @@ export class ServiceRequestsController {
 
   @Patch(':id/applications/:appId/accept')
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Accept an application for a service request', description: 'Accept a handyman application. Atomically assigns the handyman and rejects all other pending applications.' })
+  @ApiOperation({
+    summary: 'Accept an application for a service request',
+    description:
+      'Accept a handyman application. Atomically assigns the handyman and rejects all other pending applications.',
+  })
+  @ApiParam({ name: 'id', description: 'Service request UUID' })
+  @ApiParam({ name: 'appId', description: 'Application UUID' })
   async acceptApplication(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -96,7 +125,12 @@ export class ServiceRequestsController {
 
   @Patch(':id/applications/:appId/reject')
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Reject an application for a service request', description: 'Reject a handyman application.' })
+  @ApiOperation({
+    summary: 'Reject an application for a service request',
+    description: 'Reject a handyman application.',
+  })
+  @ApiParam({ name: 'id', description: 'Service request UUID' })
+  @ApiParam({ name: 'appId', description: 'Application UUID' })
   async rejectApplication(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -108,7 +142,11 @@ export class ServiceRequestsController {
 
   @Patch(':id/complete')
   @Roles(UserRole.CUSTOMER)
-  @ApiOperation({ summary: 'Confirm completion of a service request', description: 'Confirm completion of an in-progress service request.' })
+  @ApiOperation({
+    summary: 'Confirm completion of a service request',
+    description: 'Confirm completion of an in-progress service request.',
+  })
+  @ApiParam({ name: 'id', description: 'Service request UUID' })
   async confirmCompletion(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,

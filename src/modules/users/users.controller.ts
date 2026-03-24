@@ -11,7 +11,7 @@ import {
   HttpStatus,
   Res,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { Response } from 'express';
 import { UsersService } from './users.service';
 import { UpdateUserDto, UserResponseDto, OnboardUserDto, ONBOARDABLE_ROLES } from './dto';
@@ -31,7 +31,10 @@ export class UsersController {
 
   @Get()
   @Roles(UserRole.ADMIN)
-  @ApiOperation({ summary: 'Get all users (Admin only)' })
+  @ApiOperation({
+    summary: 'Get all users (Admin only)',
+    description: 'List all users with pagination. Admin only.',
+  })
   @ApiPaginatedResponse(UserResponseDto)
   @ApiErrorResponses()
   async findAll(
@@ -44,7 +47,10 @@ export class UsersController {
   }
 
   @Get('me')
-  @ApiOperation({ summary: 'Get current user profile' })
+  @ApiOperation({
+    summary: 'Get current user profile',
+    description: 'Get the authenticated user profile.',
+  })
   @ApiSuccessResponse(UserResponseDto)
   @ApiBearerAuth()
   @ApiErrorResponses()
@@ -58,7 +64,11 @@ export class UsersController {
   }
 
   @Post('onboard')
-  @ApiOperation({ summary: 'Select user role during onboarding' })
+  @ApiOperation({
+    summary: 'Select user role during onboarding',
+    description:
+      'Select a role during onboarding. Available roles: CUSTOMER, PERSONAL_SHOPPER, HANDYMAN.',
+  })
   @ApiSuccessResponse(UserResponseDto)
   @ApiErrorResponses()
   async onboard(
@@ -71,14 +81,21 @@ export class UsersController {
 
   @Get('roles')
   @Public()
-  @ApiOperation({ summary: 'Get available onboardable roles' })
+  @ApiOperation({
+    summary: 'Get available onboardable roles',
+    description: 'Get the list of roles available for onboarding. Public endpoint.',
+  })
   async getRoles(): Promise<{ data: { roles: readonly string[] } }> {
     return { data: { roles: ONBOARDABLE_ROLES } };
   }
 
   @Get(':id')
   @Roles(UserRole.ADMIN)
-  @ApiOperation({ summary: 'Get user by ID (Admin only)' })
+  @ApiOperation({
+    summary: 'Get user by ID (Admin only)',
+    description: 'Get a specific user by ID. Admin only.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the resource' })
   @ApiSuccessResponse(UserResponseDto)
   @ApiErrorResponses()
   async findOne(
@@ -91,7 +108,10 @@ export class UsersController {
   }
 
   @Patch('me')
-  @ApiOperation({ summary: 'Update current user profile' })
+  @ApiOperation({
+    summary: 'Update current user profile',
+    description: 'Update the authenticated user profile fields.',
+  })
   @ApiSuccessResponse(UserResponseDto)
   @ApiErrorResponses()
   async updateProfile(
@@ -104,7 +124,11 @@ export class UsersController {
 
   @Patch(':id')
   @Roles(UserRole.ADMIN)
-  @ApiOperation({ summary: 'Update user by ID (Admin only)' })
+  @ApiOperation({
+    summary: 'Update user by ID (Admin only)',
+    description: 'Update a user by ID. Admin only.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the resource' })
   @ApiSuccessResponse(UserResponseDto)
   @ApiErrorResponses()
   async update(
@@ -118,7 +142,11 @@ export class UsersController {
   @Delete(':id')
   @Roles(UserRole.ADMIN)
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Delete user by ID (Admin only)' })
+  @ApiOperation({
+    summary: 'Delete user by ID (Admin only)',
+    description: 'Soft-delete a user by ID. Admin only.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the resource' })
   @ApiErrorResponses()
   async remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
     await this.usersService.remove(id);

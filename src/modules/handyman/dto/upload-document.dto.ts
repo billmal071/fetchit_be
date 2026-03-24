@@ -3,11 +3,17 @@ import { ApiProperty } from '@nestjs/swagger';
 import { DocumentType } from '@prisma/client';
 
 export class UploadDocumentDto {
-  @ApiProperty({ enum: ['GOVERNMENT_ID', 'SELFIE', 'PROOF_OF_ADDRESS'], description: 'Document type' })
+  @ApiProperty({
+    enum: ['GOVERNMENT_ID', 'SELFIE', 'PROOF_OF_ADDRESS'],
+    description: 'Document type',
+  })
   @IsEnum(DocumentType)
   type: DocumentType;
 
-  @ApiProperty({ description: 'URL of the uploaded document', example: 'https://storage.example.com/doc.pdf' })
+  @ApiProperty({
+    description: 'URL of the uploaded document',
+    example: 'https://storage.example.com/doc.pdf',
+  })
   @IsUrl({}, { message: 'fileUrl must be a valid URL' })
   @IsNotEmpty()
   fileUrl: string;
