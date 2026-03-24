@@ -100,20 +100,22 @@ async function bootstrap(): Promise<void> {
       .setTitle(swaggerConfig.title || 'FetchIt API')
       .setDescription(swaggerConfig.description || 'FetchIt Backend API Documentation')
       .setVersion(swaggerConfig.version || '1.0')
-      .addBearerAuth(
-        {
-          type: 'http',
-          scheme: 'bearer',
-          bearerFormat: 'JWT',
-          name: 'JWT',
-          description: 'Enter JWT token',
-          in: 'header',
-        },
-        'JWT-auth',
-      )
+      .addBearerAuth({
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        name: 'Authorization',
+        description: 'Enter JWT token',
+        in: 'header',
+      })
       .addTag('Authentication', 'User authentication endpoints')
       .addTag('Users', 'User management endpoints')
       .addTag('Health', 'Health check endpoints')
+      .addTag('Waitlist', 'Waitlist management endpoints')
+      .addTag('Service Categories', 'Service category management')
+      .addTag('Handyman', 'Handyman profile, verification, and service request endpoints')
+      .addTag('Service Requests', 'Customer service request management')
+      .addTag('Admin - Handyman Verification', 'Admin endpoints for handyman verification review')
       .build();
 
     const document = SwaggerModule.createDocument(app, config);

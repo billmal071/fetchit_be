@@ -23,6 +23,27 @@ export class HandymanProfileRepository implements IHandymanProfileRepository {
     });
   }
 
+  async findByUserIdWithDetails(userId: string): Promise<HandymanProfile | null> {
+    return this.prisma.handymanProfile.findUnique({
+      where: { userId },
+      include: {
+        documents: true,
+        categories: {
+          include: { category: true },
+        },
+        user: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+            avatar: true,
+            phone: true,
+          },
+        },
+      },
+    });
+  }
+
   async findWithDocuments(id: string): Promise<HandymanProfile | null> {
     return this.prisma.handymanProfile.findUnique({
       where: { id },
