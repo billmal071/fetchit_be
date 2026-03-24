@@ -1,5 +1,5 @@
 import { Controller, Get, Patch, Param, Body, Query } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import type { HandymanProfile, HandymanDocument } from '@prisma/client';
 import { AdminVerificationService } from './admin-verification.service';
@@ -19,7 +19,10 @@ export class AdminVerificationController {
   constructor(private readonly adminVerificationService: AdminVerificationService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Get pending handyman verification requests', description: 'List handyman profiles with DOCUMENTS_SUBMITTED status, awaiting admin review.' })
+  @ApiOperation({
+    summary: 'Get pending handyman verification requests',
+    description: 'List handyman profiles with DOCUMENTS_SUBMITTED status, awaiting admin review.',
+  })
   async getPendingHandymen(
     @Query() pagination: PaginationDto,
   ): Promise<{ data: HandymanProfile[]; meta: IMeta }> {
@@ -27,14 +30,22 @@ export class AdminVerificationController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get handyman profile for review with documents', description: 'Get full handyman profile with documents for detailed review.' })
+  @ApiOperation({
+    summary: 'Get handyman profile for review with documents',
+    description: 'Get full handyman profile with documents for detailed review.',
+  })
+  @ApiParam({ name: 'id', description: 'Handyman profile UUID' })
   async getHandymanForReview(@Param('id') id: string): Promise<{ data: HandymanProfile }> {
     const data = await this.adminVerificationService.getHandymanForReview(id);
     return { data };
   }
 
   @Patch(':id/approve')
-  @ApiOperation({ summary: 'Approve a handyman verification request', description: 'Approve a handyman. Transitions status to VERIFIED and sends notification email.' })
+  @ApiOperation({
+    summary: 'Approve a handyman verification request',
+    description: 'Approve a handyman. Transitions status to VERIFIED and sends notification email.',
+  })
+  @ApiParam({ name: 'id', description: 'Handyman profile UUID' })
   async approveHandyman(
     @Param('id') id: string,
     @CurrentUser() user: IRequestUser,
@@ -44,7 +55,12 @@ export class AdminVerificationController {
   }
 
   @Patch(':id/reject')
-  @ApiOperation({ summary: 'Reject a handyman verification request', description: 'Reject a handyman with a reason. Transitions status to REJECTED. Handyman can resubmit.' })
+  @ApiOperation({
+    summary: 'Reject a handyman verification request',
+    description:
+      'Reject a handyman with a reason. Transitions status to REJECTED. Handyman can resubmit.',
+  })
+  @ApiParam({ name: 'id', description: 'Handyman profile UUID' })
   async rejectHandyman(
     @Param('id') id: string,
     @Body() dto: RejectHandymanDto,
@@ -55,7 +71,12 @@ export class AdminVerificationController {
   }
 
   @Patch(':id/documents/:docId/review')
-  @ApiOperation({ summary: 'Review a handyman document', description: 'Review an individual document, setting it to APPROVED or REJECTED.' })
+  @ApiOperation({
+    summary: 'Review a handyman document',
+    description: 'Review an individual document, setting it to APPROVED or REJECTED.',
+  })
+  @ApiParam({ name: 'id', description: 'Handyman profile UUID' })
+  @ApiParam({ name: 'docId', description: 'Document UUID' })
   async reviewDocument(
     @Param('id') id: string,
     @Param('docId') docId: string,

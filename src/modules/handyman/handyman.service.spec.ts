@@ -70,6 +70,7 @@ describe('HandymanService', () => {
   beforeEach(async () => {
     mockProfileRepo = {
       findByUserId: jest.fn(),
+      findByUserIdWithDetails: jest.fn(),
       findById: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
@@ -144,16 +145,17 @@ describe('HandymanService', () => {
   });
 
   describe('getProfile', () => {
-    it('should return profile when found', async () => {
-      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+    it('should return profile with details when found', async () => {
+      mockProfileRepo.findByUserIdWithDetails.mockResolvedValue(mockProfile);
 
       const result = await service.getProfile(userId);
 
       expect(result).toEqual(mockProfile);
+      expect(mockProfileRepo.findByUserIdWithDetails).toHaveBeenCalledWith(userId);
     });
 
     it('should throw HandymanProfileNotFoundException when not found', async () => {
-      mockProfileRepo.findByUserId.mockResolvedValue(null);
+      mockProfileRepo.findByUserIdWithDetails.mockResolvedValue(null);
 
       await expect(service.getProfile(userId)).rejects.toThrow(HandymanProfileNotFoundException);
     });

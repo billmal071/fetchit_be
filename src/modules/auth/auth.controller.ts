@@ -39,7 +39,10 @@ export class AuthController {
   @Post('register')
   @Public()
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @ApiOperation({ summary: 'Register a new user' })
+  @ApiOperation({
+    summary: 'Register a new user',
+    description: 'Create a new user account with email and password. Sends a verification email.',
+  })
   @ApiCreatedSuccessResponse(AuthResponseDto)
   @ApiErrorResponses()
   async register(@Body() createUserDto: CreateUserDto): Promise<{
@@ -54,7 +57,10 @@ export class AuthController {
   @Public()
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Login with email and password' })
+  @ApiOperation({
+    summary: 'Login with email and password',
+    description: 'Authenticate with email and password. Returns JWT access and refresh tokens.',
+  })
   @ApiSuccessResponse(AuthResponseDto)
   @ApiErrorResponses()
   async login(@Body() loginDto: LoginDto): Promise<{
@@ -68,7 +74,10 @@ export class AuthController {
   @Post('logout')
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Logout current user' })
+  @ApiOperation({
+    summary: 'Logout current user',
+    description: 'Invalidate the current refresh token.',
+  })
   @ApiErrorResponses()
   async logout(@CurrentUser() user: IRequestUser): Promise<{ message: string }> {
     await this.authService.logout(user.id);
@@ -79,7 +88,10 @@ export class AuthController {
   @Public()
   @UseGuards(JwtRefreshGuard)
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Refresh access token' })
+  @ApiOperation({
+    summary: 'Refresh access token',
+    description: 'Exchange a valid refresh token for new access and refresh tokens.',
+  })
   @ApiSuccessResponse(TokensDto)
   @ApiErrorResponses()
   async refreshTokens(
@@ -96,7 +108,10 @@ export class AuthController {
   @Public()
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Request password reset email' })
+  @ApiOperation({
+    summary: 'Request password reset email',
+    description: 'Send a password reset email to the registered address.',
+  })
   @ApiErrorResponses()
   async forgotPassword(@Body() dto: ForgotPasswordDto): Promise<{ message: string }> {
     await this.passwordResetService.requestPasswordReset(dto);
@@ -107,7 +122,10 @@ export class AuthController {
   @Public()
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Reset password with token' })
+  @ApiOperation({
+    summary: 'Reset password with token',
+    description: 'Reset password using a valid reset token from email.',
+  })
   @ApiErrorResponses()
   async resetPassword(@Body() dto: ResetPasswordDto): Promise<{ message: string }> {
     await this.passwordResetService.resetPassword(dto);
@@ -120,7 +138,10 @@ export class AuthController {
   @Public()
   @Throttle({ default: { limit: 1, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Request email verification link' })
+  @ApiOperation({
+    summary: 'Request email verification link',
+    description: 'Resend the email verification link.',
+  })
   @ApiErrorResponses()
   async sendVerificationEmail(@Body() dto: SendVerificationDto): Promise<{ message: string }> {
     await this.emailVerificationService.sendVerificationEmail(dto.email);
@@ -131,7 +152,10 @@ export class AuthController {
   @Public()
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Verify email with token' })
+  @ApiOperation({
+    summary: 'Verify email with token',
+    description: 'Verify email address using the token from verification email.',
+  })
   @ApiErrorResponses()
   async verifyEmail(@Body() dto: VerifyEmailDto): Promise<{ message: string }> {
     await this.emailVerificationService.verifyEmail(dto);
@@ -143,7 +167,10 @@ export class AuthController {
   @Get('google')
   @Public()
   @UseGuards(GoogleAuthGuard)
-  @ApiOperation({ summary: 'Initiate Google OAuth flow' })
+  @ApiOperation({
+    summary: 'Initiate Google OAuth flow',
+    description: 'Initiate Google OAuth2 authentication flow.',
+  })
   async googleAuth(): Promise<void> {
     // Guard redirects to Google
   }

@@ -91,7 +91,7 @@ export class HandymanService {
   }
 
   async getProfile(userId: string): Promise<HandymanProfile> {
-    const profile = await this.profileRepo.findByUserId(userId);
+    const profile = await this.profileRepo.findByUserIdWithDetails(userId);
     if (!profile) {
       throw new HandymanProfileNotFoundException();
     }

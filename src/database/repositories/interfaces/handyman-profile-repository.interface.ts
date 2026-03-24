@@ -18,6 +18,11 @@ export interface IHandymanProfileRepository extends IBaseRepository<
   findByUserId(userId: string): Promise<HandymanProfile | null>;
 
   /**
+   * Find handyman profile by user ID with documents, categories, and user info
+   */
+  findByUserIdWithDetails(userId: string): Promise<HandymanProfile | null>;
+
+  /**
    * Find handyman profile with documents, categories, and user info
    */
   findWithDocuments(id: string): Promise<HandymanProfile | null>;
