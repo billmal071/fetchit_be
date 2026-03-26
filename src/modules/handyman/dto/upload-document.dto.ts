@@ -6,6 +6,7 @@ export class UploadDocumentDto {
   @ApiProperty({
     enum: ['GOVERNMENT_ID', 'SELFIE', 'PROOF_OF_ADDRESS'],
     description: 'Document type',
+    example: 'GOVERNMENT_ID',
   })
   @IsEnum(DocumentType)
   type: DocumentType;

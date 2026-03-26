@@ -18,35 +18,7 @@ function prompt(question: string): Promise<string> {
   });
 }
 
-async function main(): Promise<void> {
-  console.log('Seeding database...');
-
-  const email = await prompt('Enter admin email: ');
-  const username = await prompt('Enter admin username: ');
-  const password = await prompt('Enter admin password: ');
-
-  if (!email || !username || !password) {
-    throw new Error('Email, username, and password are required');
-  }
-
-  const hashedPassword = await bcrypt.hash(password, 12);
-
-  const admin = await prisma.user.upsert({
-    where: { email },
-    update: {},
-    create: {
-      email,
-      username,
-      password: hashedPassword,
-      role: UserRole.ADMIN,
-      status: UserStatus.ACTIVE,
-      emailVerified: true,
-    },
-  });
-
-  console.log('Created admin user:', admin.email);
-
-  // Seed service categories
+async function seedCategories(): Promise<void> {
   const categories = [
     { name: 'Plumbing', slug: 'plumbing', description: 'Plumbing repairs, installations, and maintenance', icon: 'plumbing' },
     { name: 'Electrical', slug: 'electrical', description: 'Electrical wiring, repairs, and installations', icon: 'electrical' },
@@ -69,7 +41,47 @@ async function main(): Promise<void> {
   }
 
   console.log(`Seeded ${categories.length} service categories`);
+}
 
+async function seedAdmin(): Promise<void> {
+  const isInteractive = process.stdin.isTTY;
+
+  if (!isInteractive) {
+    console.log('Non-interactive mode: skipping admin user creation. Run interactively to create admin.');
+    return;
+  }
+
+  const email = await prompt('Enter admin email: ');
+  const username = await prompt('Enter admin username: ');
+  const password = await prompt('Enter admin password: ');
+
+  if (!email || !username || !password) {
+    console.log('Skipping admin creation: email, username, and password are required');
+    return;
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 12);
+
+  const admin = await prisma.user.upsert({
+    where: { email },
+    update: {},
+    create: {
+      email,
+      username,
+      password: hashedPassword,
+      role: UserRole.ADMIN,
+      status: UserStatus.ACTIVE,
+      emailVerified: true,
+    },
+  });
+
+  console.log('Created admin user:', admin.email);
+}
+
+async function main(): Promise<void> {
+  console.log('Seeding database...');
+  await seedCategories();
+  await seedAdmin();
   console.log('Seeding completed!');
 }
 
