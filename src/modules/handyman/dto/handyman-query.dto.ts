@@ -6,6 +6,7 @@ export class HandymanServiceRequestQueryDto extends PaginationDto {
   @ApiPropertyOptional({
     enum: ['ongoing', 'completed'],
     description: 'Filter service requests by status',
+    example: 'ongoing',
   })
   @IsOptional()
   @IsIn(['ongoing', 'completed'])

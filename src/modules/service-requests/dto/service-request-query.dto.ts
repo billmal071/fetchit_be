@@ -7,6 +7,7 @@ export class ServiceRequestQueryDto extends PaginationDto {
   @ApiPropertyOptional({
     enum: ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'],
     description: 'Filter by status',
+    example: 'OPEN',
   })
   @IsOptional()
   @IsEnum(ServiceRequestStatus)

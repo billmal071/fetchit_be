@@ -29,7 +29,10 @@ class BudgetMaxValidator implements ValidatorConstraintInterface {
 }
 
 export class CreateServiceRequestDto {
-  @ApiProperty({ description: 'Service category ID', example: 'uuid' })
+  @ApiProperty({
+    description: 'Service category ID',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+  })
   @IsUUID()
   categoryId: string;
 
@@ -39,7 +42,11 @@ export class CreateServiceRequestDto {
   @MaxLength(255)
   title: string;
 
-  @ApiProperty({ description: 'Detailed description of the work needed' })
+  @ApiProperty({
+    description: 'Detailed description of the work needed',
+    example:
+      'The kitchen sink has been leaking for two days. Water drips from the pipe under the sink when the faucet is on.',
+  })
   @IsString()
   @IsNotEmpty()
   description: string;

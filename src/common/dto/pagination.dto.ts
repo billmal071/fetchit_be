@@ -8,6 +8,7 @@ export class PaginationDto {
     description: 'Page number',
     default: API_CONSTANTS.DEFAULT_PAGE,
     minimum: 1,
+    example: 1,
   })
   @Type(() => Number)
   @IsInt()
@@ -20,6 +21,7 @@ export class PaginationDto {
     default: API_CONSTANTS.DEFAULT_PAGE_SIZE,
     minimum: 1,
     maximum: API_CONSTANTS.MAX_PAGE_SIZE,
+    example: 10,
   })
   @Type(() => Number)
   @IsInt()
@@ -30,6 +32,7 @@ export class PaginationDto {
 
   @ApiPropertyOptional({
     description: 'Field to sort by',
+    example: 'createdAt',
   })
   @IsString()
   @IsOptional()
@@ -39,6 +42,7 @@ export class PaginationDto {
     description: 'Sort order',
     enum: ['ASC', 'DESC'],
     default: 'DESC',
+    example: 'DESC',
   })
   @IsIn(['ASC', 'DESC'])
   @IsOptional()
