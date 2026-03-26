@@ -127,5 +127,8 @@
       "^@modules/(.*)$": "<rootDir>/modules/$1",
       "^@config/(.*)$": "<rootDir>/config/$1"
     }
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
   }
 }
