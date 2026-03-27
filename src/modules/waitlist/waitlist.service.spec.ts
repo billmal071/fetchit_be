@@ -3,6 +3,16 @@ import { WaitlistService } from './waitlist.service';
 import { IWaitlistRepository, WAITLIST_REPOSITORY } from '@/database/repositories';
 import { ConflictException } from '@/common/exceptions';
 import {
+  WaitlistRole,
+  WillingToPay,
+  MonthlyBudget,
+  UsedOwnMoney,
+  MaxSpendingAmount,
+  PayoutSpeed,
+} from '@prisma/client';
+import type { Waitlist } from '@prisma/client';
+import { PaginationDto } from '@common/dto/pagination.dto';
+import {
   WaitlistRoleDto,
   HowFindHelpDto,
   FirstServiceDto,
@@ -13,12 +23,12 @@ import {
   PayoutSpeedDto,
 } from './dto';
 
-const mockEntry = {
+const mockEntry: Waitlist = {
   id: 'entry-1',
   fullName: 'John Doe',
   email: 'john@example.com',
   city: 'Lagos',
-  role: 'USER',
+  role: WaitlistRole.USER,
   howFindHelp: 'SOCIAL_MEDIA',
   firstService: 'HANDYMAN',
   frustration: 'Hard to find reliable help',
@@ -76,7 +86,7 @@ describe('WaitlistService', () => {
       };
 
       waitlistRepository.findByEmail.mockResolvedValue(null);
-      waitlistRepository.create.mockResolvedValue(mockEntry as any);
+      waitlistRepository.create.mockResolvedValue(mockEntry);
 
       const result = await service.create(dto);
 
@@ -86,7 +96,7 @@ describe('WaitlistService', () => {
           fullName: 'John Doe',
           email: 'john@example.com',
           city: 'Lagos',
-          role: 'USER',
+          role: WaitlistRole.USER,
           howFindHelp: 'SOCIAL_MEDIA',
           firstService: 'HANDYMAN',
           frustration: 'Hard to find reliable help',
@@ -105,7 +115,7 @@ describe('WaitlistService', () => {
         firstService: FirstServiceDto.HANDYMAN,
       };
 
-      waitlistRepository.findByEmail.mockResolvedValue(mockEntry as any);
+      waitlistRepository.findByEmail.mockResolvedValue(mockEntry);
 
       await expect(service.create(dto)).rejects.toThrow(ConflictException);
       expect(waitlistRepository.create).not.toHaveBeenCalled();
@@ -114,13 +124,13 @@ describe('WaitlistService', () => {
     it('should create entry with HANDYMAN role and handyman-specific fields', async () => {
       const handymanEntry = {
         ...mockEntry,
-        role: 'HANDYMAN',
+        role: WaitlistRole.HANDYMAN,
         howFindHelp: null,
         firstService: null,
         frustration: null,
         mainSkill: 'Plumbing',
-        willingToPay: 'YES',
-        monthlyBudget: 'BUDGET_3000_5000',
+        willingToPay: WillingToPay.YES,
+        monthlyBudget: MonthlyBudget.BUDGET_3000_5000,
       };
 
       const dto = {
@@ -134,16 +144,16 @@ describe('WaitlistService', () => {
       };
 
       waitlistRepository.findByEmail.mockResolvedValue(null);
-      waitlistRepository.create.mockResolvedValue(handymanEntry as any);
+      waitlistRepository.create.mockResolvedValue(handymanEntry);
 
       const result = await service.create(dto);
 
       expect(waitlistRepository.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          role: 'HANDYMAN',
+          role: WaitlistRole.HANDYMAN,
           mainSkill: 'Plumbing',
-          willingToPay: 'YES',
-          monthlyBudget: 'BUDGET_3000_5000',
+          willingToPay: WillingToPay.YES,
+          monthlyBudget: MonthlyBudget.BUDGET_3000_5000,
           howFindHelp: null,
           firstService: null,
           frustration: null,
@@ -155,13 +165,13 @@ describe('WaitlistService', () => {
     it('should create entry with SHOPPER role and shopper-specific fields', async () => {
       const shopperEntry = {
         ...mockEntry,
-        role: 'SHOPPER',
+        role: WaitlistRole.SHOPPER,
         howFindHelp: null,
         firstService: null,
         frustration: null,
-        usedOwnMoney: 'YES',
-        maxSpendingAmount: 'AMOUNT_10000_30000',
-        payoutSpeed: 'SAME_DAY',
+        usedOwnMoney: UsedOwnMoney.YES,
+        maxSpendingAmount: MaxSpendingAmount.AMOUNT_10000_30000,
+        payoutSpeed: PayoutSpeed.SAME_DAY,
       };
 
       const dto = {
@@ -175,16 +185,16 @@ describe('WaitlistService', () => {
       };
 
       waitlistRepository.findByEmail.mockResolvedValue(null);
-      waitlistRepository.create.mockResolvedValue(shopperEntry as any);
+      waitlistRepository.create.mockResolvedValue(shopperEntry);
 
       const result = await service.create(dto);
 
       expect(waitlistRepository.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          role: 'SHOPPER',
-          usedOwnMoney: 'YES',
-          maxSpendingAmount: 'AMOUNT_10000_30000',
-          payoutSpeed: 'SAME_DAY',
+          role: WaitlistRole.SHOPPER,
+          usedOwnMoney: UsedOwnMoney.YES,
+          maxSpendingAmount: MaxSpendingAmount.AMOUNT_10000_30000,
+          payoutSpeed: PayoutSpeed.SAME_DAY,
           mainSkill: null,
           willingToPay: null,
           monthlyBudget: null,
@@ -204,7 +214,7 @@ describe('WaitlistService', () => {
       };
 
       waitlistRepository.findByEmail.mockResolvedValue(null);
-      waitlistRepository.create.mockResolvedValue({ ...mockEntry, frustration: null } as any);
+      waitlistRepository.create.mockResolvedValue({ ...mockEntry, frustration: null });
 
       await service.create(dto);
 
@@ -227,10 +237,10 @@ describe('WaitlistService', () => {
   describe('findAll', () => {
     it('should return paginated admin response', async () => {
       const entries = [mockEntry];
-      waitlistRepository.findAll.mockResolvedValue(entries as any);
+      waitlistRepository.findAll.mockResolvedValue(entries);
       waitlistRepository.count.mockResolvedValue(1);
 
-      const paginationDto = { page: 1, limit: 10, skip: 0 } as any;
+      const paginationDto = Object.assign(new PaginationDto(), { page: 1, limit: 10 });
       const result = await service.findAll(paginationDto);
 
       expect(result.data).toHaveLength(1);
@@ -248,7 +258,7 @@ describe('WaitlistService', () => {
       waitlistRepository.findAll.mockResolvedValue([]);
       waitlistRepository.count.mockResolvedValue(0);
 
-      const paginationDto = { page: 1, limit: 10, skip: 0 } as any;
+      const paginationDto = Object.assign(new PaginationDto(), { page: 1, limit: 10 });
       const result = await service.findAll(paginationDto);
 
       expect(result.data).toHaveLength(0);
@@ -259,13 +269,12 @@ describe('WaitlistService', () => {
       waitlistRepository.findAll.mockResolvedValue([]);
       waitlistRepository.count.mockResolvedValue(0);
 
-      const paginationDto = {
+      const paginationDto = Object.assign(new PaginationDto(), {
         page: 2,
         limit: 5,
         sortBy: 'email',
         sortOrder: 'ASC' as const,
-        skip: 5,
-      } as any;
+      });
 
       await service.findAll(paginationDto);
 
