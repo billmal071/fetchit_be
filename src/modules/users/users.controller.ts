@@ -10,6 +10,7 @@ import {
   HttpCode,
   HttpStatus,
   Res,
+  ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { Response } from 'express';
@@ -148,7 +149,13 @@ export class UsersController {
   })
   @ApiParam({ name: 'id', description: 'UUID of the resource' })
   @ApiErrorResponses()
-  async remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
+  async remove(
+    @CurrentUser() user: IRequestUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<void> {
+    if (user.id === id) {
+      throw new ForbiddenException('You cannot delete your own account');
+    }
     await this.usersService.remove(id);
   }
 }
