@@ -14,9 +14,18 @@ import {
   UploadDocumentDto,
   ApplyServiceRequestDto,
   HandymanServiceRequestQueryDto,
+  HandymanProfileResponseDto,
+  HandymanDocumentResponseDto,
 } from './dto';
 import { Roles } from '@common/decorators/roles.decorator';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
+import {
+  ApiSuccessResponse,
+  ApiCreatedSuccessResponse,
+  ApiPaginatedResponse,
+  ApiErrorResponses,
+} from '@/common/decorators';
+import { ServiceRequestResponseDto, ApplicationResponseDto } from '@modules/service-requests/dto';
 import { IRequestUser } from '@common/interfaces';
 import type { IPaginatedResult } from '@common/interfaces';
 import { PaginationDto } from '@common/dto/pagination.dto';
@@ -34,6 +43,7 @@ export class HandymanController {
     summary: 'Get handyman dashboard with stats',
     description: 'Returns verification status and counts of ongoing/completed service requests.',
   })
+  @ApiErrorResponses()
   async getDashboard(@CurrentUser() user: IRequestUser): Promise<{
     data: { profile: HandymanProfile; stats: { ongoingCount: number; completedCount: number } };
   }> {
@@ -46,6 +56,8 @@ export class HandymanController {
     summary: 'Get handyman profile',
     description: 'Returns the handyman profile for the authenticated user.',
   })
+  @ApiSuccessResponse(HandymanProfileResponseDto)
+  @ApiErrorResponses()
   async getProfile(@CurrentUser() user: IRequestUser): Promise<{ data: HandymanProfile }> {
     const data = await this.handymanService.getProfile(user.id);
     return { data };
@@ -57,6 +69,8 @@ export class HandymanController {
     description:
       'Step 1 of verification: fill in bio, location, hourly rate, and select service categories. Transitions status to PROFILE_COMPLETE.',
   })
+  @ApiCreatedSuccessResponse(HandymanProfileResponseDto)
+  @ApiErrorResponses()
   async completeProfile(
     @CurrentUser() user: IRequestUser,
     @Body() dto: CompleteProfileDto,
@@ -71,6 +85,8 @@ export class HandymanController {
     description:
       'Update profile fields. If categoryIds provided, replaces all existing categories.',
   })
+  @ApiSuccessResponse(HandymanProfileResponseDto)
+  @ApiErrorResponses()
   async updateProfile(
     @CurrentUser() user: IRequestUser,
     @Body() dto: UpdateProfileDto,
@@ -84,6 +100,8 @@ export class HandymanController {
     summary: 'Upload a verification document',
     description: 'Upload a verification document (government ID, selfie, or proof of address).',
   })
+  @ApiCreatedSuccessResponse(HandymanDocumentResponseDto)
+  @ApiErrorResponses()
   async uploadDocument(
     @CurrentUser() user: IRequestUser,
     @Body() dto: UploadDocumentDto,
@@ -97,6 +115,8 @@ export class HandymanController {
     summary: 'Get all uploaded documents',
     description: 'List all uploaded verification documents.',
   })
+  @ApiSuccessResponse(HandymanDocumentResponseDto, true)
+  @ApiErrorResponses()
   async getDocuments(@CurrentUser() user: IRequestUser): Promise<{ data: HandymanDocument[] }> {
     const data = await this.handymanService.getDocuments(user.id);
     return { data };
@@ -108,6 +128,7 @@ export class HandymanController {
     description: 'Delete a pending document. Cannot delete while documents are under review.',
   })
   @ApiParam({ name: 'id', description: 'Document UUID' })
+  @ApiErrorResponses()
   async deleteDocument(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -122,6 +143,8 @@ export class HandymanController {
     description:
       'Step 3 of verification: submit uploaded documents for admin review. Requires at least one document uploaded. Transitions status from PROFILE_COMPLETE or REJECTED to DOCUMENTS_SUBMITTED. No request body needed.',
   })
+  @ApiSuccessResponse(HandymanProfileResponseDto)
+  @ApiErrorResponses()
   async submitDocuments(
     @CurrentUser() user: IRequestUser,
   ): Promise<{ data: HandymanProfile; message: string }> {
@@ -134,6 +157,8 @@ export class HandymanController {
     summary: 'Get assigned service requests',
     description: 'List assigned service requests with optional ongoing/completed filter.',
   })
+  @ApiPaginatedResponse(ServiceRequestResponseDto)
+  @ApiErrorResponses()
   async getServiceRequests(
     @CurrentUser() user: IRequestUser,
     @Query() query: HandymanServiceRequestQueryDto,
@@ -146,6 +171,8 @@ export class HandymanController {
     summary: 'Browse open service requests (verified handymen only)',
     description: 'Browse open service requests available to apply to. Requires verified status.',
   })
+  @ApiPaginatedResponse(ServiceRequestResponseDto)
+  @ApiErrorResponses()
   async browseOpenRequests(
     @CurrentUser() user: IRequestUser,
     @Query() pagination: PaginationDto,
@@ -160,6 +187,8 @@ export class HandymanController {
       'Apply to an open service request. Requires verified status. One application per request.',
   })
   @ApiParam({ name: 'id', description: 'Service request UUID' })
+  @ApiCreatedSuccessResponse(ApplicationResponseDto)
+  @ApiErrorResponses()
   async applyToRequest(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -174,6 +203,8 @@ export class HandymanController {
     summary: 'Get all applications by this handyman',
     description: 'List all your applications to service requests.',
   })
+  @ApiSuccessResponse(ApplicationResponseDto, true)
+  @ApiErrorResponses()
   async getApplications(
     @CurrentUser() user: IRequestUser,
   ): Promise<{ data: ServiceRequestApplication[] }> {
@@ -187,6 +218,8 @@ export class HandymanController {
     description: 'Mark an assigned service request as in-progress.',
   })
   @ApiParam({ name: 'id', description: 'Service request UUID' })
+  @ApiSuccessResponse(ServiceRequestResponseDto)
+  @ApiErrorResponses()
   async startRequest(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -201,6 +234,8 @@ export class HandymanController {
     description: 'Mark an in-progress service request as completed.',
   })
   @ApiParam({ name: 'id', description: 'Service request UUID' })
+  @ApiSuccessResponse(ServiceRequestResponseDto)
+  @ApiErrorResponses()
   async completeRequest(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,

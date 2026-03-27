@@ -6,6 +6,8 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy, JwtRefreshStrategy, GoogleStrategy } from './strategies';
 import { PasswordResetService, EmailVerificationService, OAuthService } from './services';
+import { PassportTokenValidator } from './guards/passport-token-validator';
+import { TOKEN_VALIDATOR } from './guards/interfaces/token-validator.interface';
 import { UsersModule } from '@/modules/users/users.module';
 import { IJwtConfig } from '@/config';
 
@@ -36,7 +38,8 @@ import { IJwtConfig } from '@/config';
     JwtStrategy,
     JwtRefreshStrategy,
     GoogleStrategy,
+    { provide: TOKEN_VALIDATOR, useClass: PassportTokenValidator },
   ],
-  exports: [AuthService],
+  exports: [AuthService, TOKEN_VALIDATOR],
 })
 export class AuthModule {}

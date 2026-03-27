@@ -1,9 +1,14 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam } from '@nestjs/swagger';
 import { ServiceCategoriesService } from './service-categories.service';
-import { CreateCategoryDto, UpdateCategoryDto } from './dto';
+import { CreateCategoryDto, UpdateCategoryDto, CategoryResponseDto } from './dto';
 import { Public } from '@common/decorators/public.decorator';
 import { Roles } from '@common/decorators/roles.decorator';
+import {
+  ApiSuccessResponse,
+  ApiCreatedSuccessResponse,
+  ApiErrorResponses,
+} from '@/common/decorators';
 import { UserRole } from '@prisma/client';
 import type { ServiceCategory } from '@prisma/client';
 import { SUCCESS_MESSAGES } from '@common/constants';
@@ -19,6 +24,8 @@ export class ServiceCategoriesController {
     summary: 'Get all active service categories',
     description: 'Returns all active service categories. No authentication required.',
   })
+  @ApiSuccessResponse(CategoryResponseDto, true)
+  @ApiErrorResponses()
   async findAll(): Promise<{ data: ServiceCategory[] }> {
     const categories = await this.serviceCategoriesService.findAll();
     return { data: categories };
@@ -32,6 +39,8 @@ export class ServiceCategoriesController {
     description:
       'Create a new service category. Generates a URL-safe slug from the name. Admin only.',
   })
+  @ApiCreatedSuccessResponse(CategoryResponseDto)
+  @ApiErrorResponses()
   async create(
     @Body() dto: CreateCategoryDto,
   ): Promise<{ data: ServiceCategory; message: string }> {
@@ -48,6 +57,8 @@ export class ServiceCategoriesController {
       'Update an existing service category. Re-generates slug if name changes. Admin only.',
   })
   @ApiParam({ name: 'id', description: 'Category UUID' })
+  @ApiSuccessResponse(CategoryResponseDto)
+  @ApiErrorResponses()
   async update(
     @Param('id') id: string,
     @Body() dto: UpdateCategoryDto,
@@ -64,6 +75,7 @@ export class ServiceCategoriesController {
     description: 'Soft-deactivates a service category (sets isActive to false). Admin only.',
   })
   @ApiParam({ name: 'id', description: 'Category UUID' })
+  @ApiErrorResponses()
   async remove(@Param('id') id: string): Promise<{ message: string }> {
     await this.serviceCategoriesService.deactivate(id);
     return { message: SUCCESS_MESSAGES.CATEGORY_DELETED };

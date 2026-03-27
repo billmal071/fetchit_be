@@ -3,9 +3,21 @@ import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam } from '@nestjs/swagger'
 import { UserRole } from '@prisma/client';
 import type { ServiceRequest, ServiceRequestApplication } from '@prisma/client';
 import { ServiceRequestsService } from './service-requests.service';
-import { CreateServiceRequestDto, UpdateServiceRequestDto, ServiceRequestQueryDto } from './dto';
+import {
+  CreateServiceRequestDto,
+  UpdateServiceRequestDto,
+  ServiceRequestQueryDto,
+  ServiceRequestResponseDto,
+  ApplicationResponseDto,
+} from './dto';
 import { Roles } from '@common/decorators/roles.decorator';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
+import {
+  ApiSuccessResponse,
+  ApiCreatedSuccessResponse,
+  ApiPaginatedResponse,
+  ApiErrorResponses,
+} from '@/common/decorators';
 import { IRequestUser } from '@common/interfaces';
 import type { IMeta } from '@common/interfaces';
 import { SUCCESS_MESSAGES } from '@common/constants';
@@ -22,6 +34,8 @@ export class ServiceRequestsController {
     summary: 'Create a new service request',
     description: 'Create a service request as a customer. Emits a SERVICE_REQUEST_CREATED event.',
   })
+  @ApiCreatedSuccessResponse(ServiceRequestResponseDto)
+  @ApiErrorResponses()
   async create(
     @CurrentUser() user: IRequestUser,
     @Body() dto: CreateServiceRequestDto,
@@ -36,6 +50,8 @@ export class ServiceRequestsController {
     summary: 'Get all service requests for the current customer',
     description: 'List your service requests with optional status filter and pagination.',
   })
+  @ApiPaginatedResponse(ServiceRequestResponseDto)
+  @ApiErrorResponses()
   async findAll(
     @CurrentUser() user: IRequestUser,
     @Query() query: ServiceRequestQueryDto,
@@ -51,6 +67,8 @@ export class ServiceRequestsController {
       'Get full details of a service request. Accessible by the customer, assigned handyman, or admin.',
   })
   @ApiParam({ name: 'id', description: 'Service request UUID' })
+  @ApiSuccessResponse(ServiceRequestResponseDto)
+  @ApiErrorResponses()
   async findOne(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -66,6 +84,8 @@ export class ServiceRequestsController {
     description: 'Update a service request. Only allowed while status is OPEN.',
   })
   @ApiParam({ name: 'id', description: 'Service request UUID' })
+  @ApiSuccessResponse(ServiceRequestResponseDto)
+  @ApiErrorResponses()
   async update(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -82,6 +102,8 @@ export class ServiceRequestsController {
     description: 'Cancel a service request. Cannot cancel completed or already cancelled requests.',
   })
   @ApiParam({ name: 'id', description: 'Service request UUID' })
+  @ApiSuccessResponse(ServiceRequestResponseDto)
+  @ApiErrorResponses()
   async cancel(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -97,6 +119,8 @@ export class ServiceRequestsController {
     description: 'View all handyman applications for your service request.',
   })
   @ApiParam({ name: 'id', description: 'Service request UUID' })
+  @ApiSuccessResponse(ApplicationResponseDto, true)
+  @ApiErrorResponses()
   async getApplications(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -114,6 +138,8 @@ export class ServiceRequestsController {
   })
   @ApiParam({ name: 'id', description: 'Service request UUID' })
   @ApiParam({ name: 'appId', description: 'Application UUID' })
+  @ApiSuccessResponse(ServiceRequestResponseDto)
+  @ApiErrorResponses()
   async acceptApplication(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -131,6 +157,8 @@ export class ServiceRequestsController {
   })
   @ApiParam({ name: 'id', description: 'Service request UUID' })
   @ApiParam({ name: 'appId', description: 'Application UUID' })
+  @ApiSuccessResponse(ApplicationResponseDto)
+  @ApiErrorResponses()
   async rejectApplication(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,
@@ -147,6 +175,8 @@ export class ServiceRequestsController {
     description: 'Confirm completion of an in-progress service request.',
   })
   @ApiParam({ name: 'id', description: 'Service request UUID' })
+  @ApiSuccessResponse(ServiceRequestResponseDto)
+  @ApiErrorResponses()
   async confirmCompletion(
     @CurrentUser() user: IRequestUser,
     @Param('id') id: string,

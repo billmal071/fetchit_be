@@ -1,0 +1,80 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { UsersController } from './users.controller';
+import { UsersService } from './users.service';
+import { SUCCESS_MESSAGES } from '@/common/constants';
+import { ONBOARDABLE_ROLES } from './dto';
+import { PaginationDto } from '@/common/dto';
+
+const mockUser = { id: 'u1', email: 'a@b.com', role: 'CUSTOMER' };
+const mockRes = { setHeader: jest.fn() } as any;
+
+describe('UsersController', () => {
+  let controller: UsersController;
+  let usersService: Record<string, jest.Mock>;
+
+  beforeEach(async () => {
+    usersService = {
+      findAll: jest.fn().mockResolvedValue({ data: [], meta: {} }),
+      findOne: jest.fn().mockResolvedValue(mockUser),
+      update: jest.fn().mockResolvedValue(mockUser),
+      remove: jest.fn(),
+      onboard: jest.fn().mockResolvedValue(mockUser),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [UsersController],
+      providers: [{ provide: UsersService, useValue: usersService }],
+    }).compile();
+
+    controller = module.get(UsersController);
+  });
+
+  it('findAll should call usersService.findAll and set cache header', async () => {
+    await controller.findAll(Object.assign(new PaginationDto(), { page: 1, limit: 10 }), mockRes);
+    expect(usersService.findAll).toHaveBeenCalledWith(
+      Object.assign(new PaginationDto(), { page: 1, limit: 10 }),
+    );
+    expect(mockRes.setHeader).toHaveBeenCalledWith('Cache-Control', 'private, max-age=30');
+  });
+
+  it('getProfile should call usersService.findOne with user id', async () => {
+    const result = await controller.getProfile(mockUser as any, mockRes);
+    expect(usersService.findOne).toHaveBeenCalledWith('u1');
+    expect(result.data).toBeDefined();
+  });
+
+  it('onboard should call usersService.onboard', async () => {
+    const result = await controller.onboard(mockUser as any, { role: 'CUSTOMER' as any });
+    expect(usersService.onboard).toHaveBeenCalledWith('u1', 'CUSTOMER');
+    expect(result.message).toBe(SUCCESS_MESSAGES.USER_ONBOARDED);
+  });
+
+  it('getRoles should return ONBOARDABLE_ROLES', async () => {
+    const result = await controller.getRoles();
+    expect(result.data.roles).toBe(ONBOARDABLE_ROLES);
+  });
+
+  it('findOne should call usersService.findOne with param id', async () => {
+    const result = await controller.findOne('u2', mockRes);
+    expect(usersService.findOne).toHaveBeenCalledWith('u2');
+    expect(result.data).toBeDefined();
+  });
+
+  it('updateProfile should call usersService.update with user id', async () => {
+    const dto = { username: 'new' };
+    const result = await controller.updateProfile(mockUser as any, dto);
+    expect(usersService.update).toHaveBeenCalledWith('u1', dto);
+    expect(result.message).toBe(SUCCESS_MESSAGES.USER_UPDATED);
+  });
+
+  it('update should call usersService.update with param id', async () => {
+    const result = await controller.update('u2', { username: 'new' });
+    expect(usersService.update).toHaveBeenCalledWith('u2', { username: 'new' });
+    expect(result.message).toBe(SUCCESS_MESSAGES.USER_UPDATED);
+  });
+
+  it('remove should call usersService.remove', async () => {
+    await controller.remove('u2');
+    expect(usersService.remove).toHaveBeenCalledWith('u2');
+  });
+});
