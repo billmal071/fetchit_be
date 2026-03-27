@@ -7,22 +7,24 @@ import {
   ForbiddenException,
   EmailNotVerifiedException,
 } from '@/common/exceptions';
-
+import { UserRole, UserStatus, AuthProvider } from '@prisma/client';
+import { PaginationDto } from '@common/dto/pagination.dto';
+import type { User } from '@prisma/client';
 import * as hashUtil from '@/common/utils/hash.util';
 
-const mockUser = {
+const mockUser: User = {
   id: 'user-1',
   username: 'johndoe',
   email: 'john@example.com',
   password: 'hashed_password',
-  role: 'CUSTOMER',
-  status: 'ACTIVE',
+  role: UserRole.CUSTOMER,
+  status: UserStatus.ACTIVE,
   emailVerified: true,
   refreshToken: null,
   avatar: null,
   phone: null,
   lastLoginAt: null,
-  provider: 'LOCAL',
+  provider: AuthProvider.LOCAL,
   googleId: null,
   createdAt: new Date(),
   updatedAt: new Date(),
@@ -77,7 +79,7 @@ describe('UsersService', () => {
     it('should create a user with hashed password', async () => {
       userRepository.findByEmail.mockResolvedValue(null);
       userRepository.findByUsername.mockResolvedValue(null);
-      userRepository.create.mockResolvedValue(mockUser as any);
+      userRepository.create.mockResolvedValue(mockUser);
       jest.spyOn(hashUtil, 'hashPassword').mockResolvedValue('hashed_password');
 
       const result = await service.create(createUserDto);
@@ -94,7 +96,7 @@ describe('UsersService', () => {
     });
 
     it('should throw ConflictException if email already exists', async () => {
-      userRepository.findByEmail.mockResolvedValue(mockUser as any);
+      userRepository.findByEmail.mockResolvedValue(mockUser);
 
       await expect(service.create(createUserDto)).rejects.toThrow(ConflictException);
       expect(userRepository.create).not.toHaveBeenCalled();
@@ -102,7 +104,7 @@ describe('UsersService', () => {
 
     it('should throw ConflictException if username already exists', async () => {
       userRepository.findByEmail.mockResolvedValue(null);
-      userRepository.findByUsername.mockResolvedValue(mockUser as any);
+      userRepository.findByUsername.mockResolvedValue(mockUser);
 
       await expect(service.create(createUserDto)).rejects.toThrow(ConflictException);
       expect(userRepository.create).not.toHaveBeenCalled();
@@ -114,10 +116,12 @@ describe('UsersService', () => {
   describe('findAll', () => {
     it('should return paginated results with meta', async () => {
       const users = [mockUser];
-      userRepository.findAll.mockResolvedValue(users as any);
+      userRepository.findAll.mockResolvedValue(users);
       userRepository.count.mockResolvedValue(1);
 
-      const result = await service.findAll({ page: 1, limit: 10 } as any);
+      const result = await service.findAll(
+        Object.assign(new PaginationDto(), { page: 1, limit: 10 }),
+      );
 
       expect(result.data).toHaveLength(1);
       expect(result.meta).toEqual(
@@ -139,7 +143,7 @@ describe('UsersService', () => {
       userRepository.findAll.mockResolvedValue([]);
       userRepository.count.mockResolvedValue(0);
 
-      const result = await service.findAll({} as any);
+      const result = await service.findAll(new PaginationDto());
 
       expect(result.data).toHaveLength(0);
       expect(result.meta.total).toBe(0);
@@ -150,7 +154,7 @@ describe('UsersService', () => {
 
   describe('findOne', () => {
     it('should return user DTO when found', async () => {
-      userRepository.findById.mockResolvedValue(mockUser as any);
+      userRepository.findById.mockResolvedValue(mockUser);
 
       const result = await service.findOne('user-1');
 
@@ -173,8 +177,8 @@ describe('UsersService', () => {
 
     it('should update and return user DTO', async () => {
       const updatedUser = { ...mockUser, username: 'janedoe' };
-      userRepository.findById.mockResolvedValue(mockUser as any);
-      userRepository.update.mockResolvedValue(updatedUser as any);
+      userRepository.findById.mockResolvedValue(mockUser);
+      userRepository.update.mockResolvedValue(updatedUser);
 
       const result = await service.update('user-1', updateDto);
 
@@ -194,7 +198,7 @@ describe('UsersService', () => {
 
   describe('remove', () => {
     it('should soft delete by default', async () => {
-      userRepository.findById.mockResolvedValue(mockUser as any);
+      userRepository.findById.mockResolvedValue(mockUser);
       userRepository.softDelete.mockResolvedValue(undefined);
 
       await service.remove('user-1');
@@ -204,7 +208,7 @@ describe('UsersService', () => {
     });
 
     it('should hard delete when hard=true', async () => {
-      userRepository.findById.mockResolvedValue(mockUser as any);
+      userRepository.findById.mockResolvedValue(mockUser);
       userRepository.delete.mockResolvedValue(undefined);
 
       await service.remove('user-1', true);
@@ -224,11 +228,11 @@ describe('UsersService', () => {
 
   describe('onboard', () => {
     it('should update role and return user DTO', async () => {
-      const onboardedUser = { ...mockUser, role: 'HANDYMAN' };
-      userRepository.findById.mockResolvedValue(mockUser as any);
-      userRepository.updateRole.mockResolvedValue(onboardedUser as any);
+      const onboardedUser = { ...mockUser, role: UserRole.HANDYMAN };
+      userRepository.findById.mockResolvedValue(mockUser);
+      userRepository.updateRole.mockResolvedValue(onboardedUser);
 
-      const result = await service.onboard('user-1', 'HANDYMAN' as any);
+      const result = await service.onboard('user-1', UserRole.HANDYMAN);
 
       expect(result).toHaveProperty('role', 'HANDYMAN');
       expect(userRepository.updateRole).toHaveBeenCalledWith('user-1', 'HANDYMAN');
@@ -237,25 +241,25 @@ describe('UsersService', () => {
     it('should throw NotFoundException when user not found', async () => {
       userRepository.findById.mockResolvedValue(null);
 
-      await expect(service.onboard('nonexistent', 'CUSTOMER' as any)).rejects.toThrow(
+      await expect(service.onboard('nonexistent', UserRole.CUSTOMER)).rejects.toThrow(
         NotFoundException,
       );
     });
 
     it('should throw EmailNotVerifiedException when email not verified', async () => {
       const unverifiedUser = { ...mockUser, emailVerified: false };
-      userRepository.findById.mockResolvedValue(unverifiedUser as any);
+      userRepository.findById.mockResolvedValue(unverifiedUser);
 
-      await expect(service.onboard('user-1', 'CUSTOMER' as any)).rejects.toThrow(
+      await expect(service.onboard('user-1', UserRole.CUSTOMER)).rejects.toThrow(
         EmailNotVerifiedException,
       );
     });
 
     it('should throw ForbiddenException when user is ADMIN', async () => {
-      const adminUser = { ...mockUser, role: 'ADMIN' };
-      userRepository.findById.mockResolvedValue(adminUser as any);
+      const adminUser = { ...mockUser, role: UserRole.ADMIN };
+      userRepository.findById.mockResolvedValue(adminUser);
 
-      await expect(service.onboard('user-1', 'CUSTOMER' as any)).rejects.toThrow(
+      await expect(service.onboard('user-1', UserRole.CUSTOMER)).rejects.toThrow(
         ForbiddenException,
       );
     });
@@ -265,7 +269,7 @@ describe('UsersService', () => {
 
   describe('findByEmail', () => {
     it('should delegate to repository', async () => {
-      userRepository.findByEmail.mockResolvedValue(mockUser as any);
+      userRepository.findByEmail.mockResolvedValue(mockUser);
 
       const result = await service.findByEmail('john@example.com');
 
@@ -284,7 +288,7 @@ describe('UsersService', () => {
 
   describe('findById', () => {
     it('should delegate to repository', async () => {
-      userRepository.findById.mockResolvedValue(mockUser as any);
+      userRepository.findById.mockResolvedValue(mockUser);
 
       const result = await service.findById('user-1');
 

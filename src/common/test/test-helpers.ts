@@ -1,4 +1,4 @@
-import { ExecutionContext, CallHandler } from '@nestjs/common';
+import { ExecutionContext, CallHandler, ArgumentsHost } from '@nestjs/common';
 import { of } from 'rxjs';
 import { IRequestUser } from '../interfaces';
 
@@ -34,7 +34,7 @@ export function createMockExecutionContext(
       getRequest: jest.fn().mockReturnValue(request),
       getResponse: jest.fn().mockReturnValue(response),
     }),
-    getHandler: jest.fn().mockReturnValue(overrides.handler || (() => {})),
+    getHandler: jest.fn().mockReturnValue(overrides.handler || ((): void => {})),
     getClass: jest.fn().mockReturnValue(overrides.class || class {}),
     getType: jest.fn().mockReturnValue('http'),
     getArgs: jest.fn().mockReturnValue([request, response]),
@@ -53,7 +53,7 @@ export function createMockCallHandler<T = unknown>(returnValue?: T): CallHandler
 export function createMockArgumentsHost(
   request?: Record<string, unknown>,
   response?: Record<string, unknown>,
-) {
+): ArgumentsHost {
   const req = {
     url: '/test',
     method: 'GET',
@@ -76,7 +76,7 @@ export function createMockArgumentsHost(
     switchToRpc: jest.fn(),
     switchToWs: jest.fn(),
     getType: jest.fn().mockReturnValue('http'),
-  };
+  } as unknown as ArgumentsHost;
 }
 
 export function mockUser(role = 'CUSTOMER', overrides: Partial<IRequestUser> = {}): IRequestUser {

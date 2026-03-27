@@ -2,6 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ServiceCategoriesController } from './service-categories.controller';
 import { ServiceCategoriesService } from './service-categories.service';
 import { SUCCESS_MESSAGES } from '@common/constants';
+import { CreateCategoryDto } from './dto/create-category.dto';
+import { UpdateCategoryDto } from './dto/update-category.dto';
 
 describe('ServiceCategoriesController', () => {
   let controller: ServiceCategoriesController;
@@ -30,14 +32,14 @@ describe('ServiceCategoriesController', () => {
   });
 
   it('create calls service and returns message', async () => {
-    const dto = { name: 'Plumbing' } as any;
+    const dto = { name: 'Plumbing' } as CreateCategoryDto;
     const result = await controller.create(dto);
     expect(service.create).toHaveBeenCalledWith(dto);
     expect(result.message).toBe(SUCCESS_MESSAGES.CATEGORY_CREATED);
   });
 
   it('update calls service with id and dto', async () => {
-    const dto = { name: 'Updated' } as any;
+    const dto = { name: 'Updated' } as UpdateCategoryDto;
     const result = await controller.update('c1', dto);
     expect(service.update).toHaveBeenCalledWith('c1', dto);
     expect(result.message).toBe(SUCCESS_MESSAGES.CATEGORY_UPDATED);

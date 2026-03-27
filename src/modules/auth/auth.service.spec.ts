@@ -13,9 +13,9 @@ import {
 
 describe('AuthService', () => {
   let authService: AuthService;
-  let usersService: jest.Mocked<typeof mockUsersService>;
-  let jwtService: jest.Mocked<typeof mockJwtService>;
-  let emailVerificationService: jest.Mocked<typeof mockEmailVerificationService>;
+  let usersService: typeof mockUsersService;
+  let jwtService: typeof mockJwtService;
+  let emailVerificationService: typeof mockEmailVerificationService;
 
   let hashedPassword: string;
   let hashedRefreshToken: string;
@@ -70,12 +70,12 @@ describe('AuthService', () => {
     }).compile();
 
     authService = module.get<AuthService>(AuthService);
-    usersService = mockUsersService as any;
-    jwtService = mockJwtService as any;
-    emailVerificationService = mockEmailVerificationService as any;
+    usersService = mockUsersService;
+    jwtService = mockJwtService;
+    emailVerificationService = mockEmailVerificationService;
   });
 
-  const createMockUser = (overrides: Record<string, any> = {}) => ({
+  const createMockUser = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
     id: 'user-1',
     username: 'johndoe',
     email: 'john@example.com',
@@ -108,7 +108,7 @@ describe('AuthService', () => {
         updatedAt: new Date(),
       };
 
-      usersService.create.mockResolvedValue(mockCreatedUser as any);
+      usersService.create.mockResolvedValue(mockCreatedUser);
       usersService.updateRefreshToken.mockResolvedValue(undefined);
 
       const result = await authService.register(createUserDto);
@@ -144,7 +144,7 @@ describe('AuthService', () => {
         updatedAt: new Date(),
       };
 
-      usersService.create.mockResolvedValue(mockCreatedUser as any);
+      usersService.create.mockResolvedValue(mockCreatedUser);
       jwtService.signAsync.mockRejectedValueOnce(new Error('JWT signing failed'));
       usersService.remove.mockResolvedValue(undefined);
 
@@ -158,7 +158,7 @@ describe('AuthService', () => {
   describe('login', () => {
     it('should return tokens for valid credentials', async () => {
       const mockUser = createMockUser();
-      usersService.findByEmail.mockResolvedValue(mockUser as any);
+      usersService.findByEmail.mockResolvedValue(mockUser);
       usersService.updateRefreshToken.mockResolvedValue(undefined);
       usersService.updateLastLogin.mockResolvedValue(undefined);
 
@@ -190,7 +190,7 @@ describe('AuthService', () => {
 
     it('should throw InvalidCredentialsException when password is null (OAuth user)', async () => {
       const oauthUser = createMockUser({ password: null });
-      usersService.findByEmail.mockResolvedValue(oauthUser as any);
+      usersService.findByEmail.mockResolvedValue(oauthUser);
 
       const loginDto = { email: 'john@example.com', password: rawPassword };
 
@@ -201,7 +201,7 @@ describe('AuthService', () => {
 
     it('should throw InvalidCredentialsException when password is wrong', async () => {
       const mockUser = createMockUser();
-      usersService.findByEmail.mockResolvedValue(mockUser as any);
+      usersService.findByEmail.mockResolvedValue(mockUser);
 
       const loginDto = { email: 'john@example.com', password: 'WrongPassword1!' };
 
@@ -212,7 +212,7 @@ describe('AuthService', () => {
 
     it('should throw EmailNotVerifiedException when email not verified', async () => {
       const unverifiedUser = createMockUser({ emailVerified: false });
-      usersService.findByEmail.mockResolvedValue(unverifiedUser as any);
+      usersService.findByEmail.mockResolvedValue(unverifiedUser);
 
       const loginDto = { email: 'john@example.com', password: rawPassword };
 
@@ -235,7 +235,7 @@ describe('AuthService', () => {
   describe('refreshTokens', () => {
     it('should return new tokens for valid refresh token', async () => {
       const mockUser = createMockUser({ refreshToken: hashedRefreshToken });
-      usersService.findById.mockResolvedValue(mockUser as any);
+      usersService.findById.mockResolvedValue(mockUser);
       usersService.updateRefreshToken.mockResolvedValue(undefined);
 
       const result = await authService.refreshTokens('user-1', rawRefreshToken);
@@ -261,7 +261,7 @@ describe('AuthService', () => {
 
     it('should throw InvalidTokenException when no stored refresh token', async () => {
       const mockUser = createMockUser({ refreshToken: null });
-      usersService.findById.mockResolvedValue(mockUser as any);
+      usersService.findById.mockResolvedValue(mockUser);
 
       await expect(authService.refreshTokens('user-1', rawRefreshToken)).rejects.toThrow(
         InvalidTokenException,
@@ -272,7 +272,7 @@ describe('AuthService', () => {
 
     it('should throw InvalidTokenException when token does not match', async () => {
       const mockUser = createMockUser({ refreshToken: hashedRefreshToken });
-      usersService.findById.mockResolvedValue(mockUser as any);
+      usersService.findById.mockResolvedValue(mockUser);
 
       await expect(authService.refreshTokens('user-1', 'wrong-refresh-token')).rejects.toThrow(
         InvalidTokenException,

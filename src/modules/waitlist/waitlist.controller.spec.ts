@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { WaitlistController } from './waitlist.controller';
 import { WaitlistService } from './waitlist.service';
 import { PaginationDto } from '@common/dto/pagination.dto';
+import { CreateWaitlistDto, WaitlistRoleDto } from './dto';
 
 describe('WaitlistController', () => {
   let controller: WaitlistController;
@@ -28,7 +29,12 @@ describe('WaitlistController', () => {
   });
 
   it('create should call waitlistService.create and return message', async () => {
-    const dto = { fullName: 'Test', email: 'a@b.com', role: 'USER' } as any;
+    const dto: CreateWaitlistDto = {
+      fullName: 'Test',
+      email: 'a@b.com',
+      city: 'Lagos',
+      role: WaitlistRoleDto.USER,
+    };
     const result = await controller.create(dto);
     expect(waitlistService.create).toHaveBeenCalledWith(dto);
     expect(result.message).toBe('Successfully joined the waitlist');
