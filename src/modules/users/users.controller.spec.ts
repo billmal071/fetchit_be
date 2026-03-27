@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ForbiddenException } from '@nestjs/common';
 import { Response } from 'express';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
@@ -78,7 +79,12 @@ describe('UsersController', () => {
   });
 
   it('remove should call usersService.remove', async () => {
-    await controller.remove('u2');
+    await controller.remove(mockUser, 'u2');
     expect(usersService.remove).toHaveBeenCalledWith('u2');
+  });
+
+  it('remove should throw ForbiddenException when deleting own account', async () => {
+    await expect(controller.remove(mockUser, 'u1')).rejects.toThrow(ForbiddenException);
+    expect(usersService.remove).not.toHaveBeenCalled();
   });
 });
