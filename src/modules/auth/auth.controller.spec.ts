@@ -3,6 +3,8 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { PasswordResetService, EmailVerificationService, OAuthService } from './services';
 import { SUCCESS_MESSAGES } from '@/common/constants';
+import { CreateUserDto } from '@/modules/users/dto';
+import { Response } from 'express';
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -45,7 +47,7 @@ describe('AuthController', () => {
   });
 
   it('register should call authService.register and return data with message', async () => {
-    const dto = { email: 'a@b.com', password: 'P@ss1234', username: 'user1' } as any;
+    const dto = { email: 'a@b.com', password: 'P@ss1234', username: 'user1' } as CreateUserDto;
     const result = await controller.register(dto);
     expect(authService.register).toHaveBeenCalledWith(dto);
     expect(result.message).toBe(SUCCESS_MESSAGES.USER_CREATED);
@@ -102,7 +104,7 @@ describe('AuthController', () => {
   });
 
   it('googleAuthCallback should redirect to redirectUrl on success', async () => {
-    const res = { redirect: jest.fn() } as any;
+    const res = { redirect: jest.fn() } as Partial<Response> as Response;
     const googleUser = {
       googleId: 'g1',
       email: 'a@b.com',
@@ -116,7 +118,7 @@ describe('AuthController', () => {
 
   it('googleAuthCallback should redirect to error URL on failure', async () => {
     oauthService.handleGoogleLogin.mockRejectedValue(new Error('OAuth failed'));
-    const res = { redirect: jest.fn() } as any;
+    const res = { redirect: jest.fn() } as Partial<Response> as Response;
     const googleUser = {
       googleId: 'g1',
       email: 'a@b.com',
