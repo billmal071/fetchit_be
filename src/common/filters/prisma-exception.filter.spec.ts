@@ -20,7 +20,7 @@ describe('PrismaExceptionFilter', () => {
 
   beforeEach(() => {
     // BaseExceptionFilter needs an httpAdapter; pass null and override catch
-    filter = new PrismaExceptionFilter(null as any);
+    filter = new PrismaExceptionFilter();
     jest.spyOn(Logger.prototype, 'error').mockImplementation();
     mockResponse = { status: jest.fn().mockReturnThis(), json: jest.fn() };
   });
@@ -29,9 +29,9 @@ describe('PrismaExceptionFilter', () => {
     jest.restoreAllMocks();
   });
 
-  function callFilter(code: string, meta?: Record<string, unknown>) {
+  function callFilter(code: string, meta?: Record<string, unknown>): void {
     const host = createMockArgumentsHost({ url: '/api/test' }, mockResponse);
-    filter.catch(createPrismaError(code, meta), host as any);
+    filter.catch(createPrismaError(code, meta), host);
   }
 
   it('should return 400 for P2000 (value too long)', () => {

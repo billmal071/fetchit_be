@@ -3,8 +3,11 @@ import { AdminVerificationController } from './admin-verification.controller';
 import { AdminVerificationService } from './admin-verification.service';
 import { SUCCESS_MESSAGES } from '@common/constants';
 import { PaginationDto } from '@common/dto/pagination.dto';
+import { IRequestUser } from '@common/interfaces';
+import { RejectHandymanDto } from './dto/reject-handyman.dto';
+import { ReviewDocumentDto } from './dto/review-document.dto';
 
-const admin = { id: 'admin1', email: 'admin@test.com', role: 'ADMIN' } as any;
+const admin: IRequestUser = { id: 'admin1', email: 'admin@test.com', role: 'ADMIN' };
 const mockProfile = { id: 'p1' };
 
 describe('AdminVerificationController', () => {
@@ -47,14 +50,14 @@ describe('AdminVerificationController', () => {
   });
 
   it('rejectHandyman calls service with id, admin id, and dto', async () => {
-    const dto = { reason: 'Invalid docs' } as any;
+    const dto: RejectHandymanDto = { reason: 'Invalid docs' };
     const result = await controller.rejectHandyman('p1', dto, admin);
     expect(service.rejectHandyman).toHaveBeenCalledWith('p1', 'admin1', dto);
     expect(result.message).toBe(SUCCESS_MESSAGES.HANDYMAN_REJECTED);
   });
 
   it('reviewDocument calls service with all params', async () => {
-    const dto = { status: 'APPROVED' } as any;
+    const dto = { status: 'APPROVED' } as ReviewDocumentDto;
     const result = await controller.reviewDocument('p1', 'd1', dto, admin);
     expect(service.reviewDocument).toHaveBeenCalledWith('p1', 'd1', 'admin1', dto);
     expect(result.message).toBe('Document reviewed successfully');

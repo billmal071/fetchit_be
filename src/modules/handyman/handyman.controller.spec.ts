@@ -3,8 +3,16 @@ import { HandymanController } from './handyman.controller';
 import { HandymanService } from './handyman.service';
 import { SUCCESS_MESSAGES } from '@common/constants';
 import { PaginationDto } from '@common/dto/pagination.dto';
+import { IRequestUser } from '@common/interfaces';
+import {
+  CompleteProfileDto,
+  UpdateProfileDto,
+  UploadDocumentDto,
+  ApplyServiceRequestDto,
+  HandymanServiceRequestQueryDto,
+} from './dto';
 
-const user = { id: 'u1', email: 'a@b.com', role: 'HANDYMAN' } as any;
+const user: IRequestUser = { id: 'u1', email: 'a@b.com', role: 'HANDYMAN' };
 const mockData = { id: 'p1' };
 
 describe('HandymanController', () => {
@@ -48,21 +56,21 @@ describe('HandymanController', () => {
   });
 
   it('completeProfile calls service and returns message', async () => {
-    const dto = { bio: 'hi' } as any;
+    const dto = { bio: 'hi' } as CompleteProfileDto;
     const result = await controller.completeProfile(user, dto);
     expect(service.completeProfile).toHaveBeenCalledWith('u1', dto);
     expect(result.message).toBe(SUCCESS_MESSAGES.PROFILE_COMPLETED);
   });
 
   it('updateProfile calls service with user id', async () => {
-    const dto = { bio: 'new' } as any;
+    const dto = { bio: 'new' } as UpdateProfileDto;
     const result = await controller.updateProfile(user, dto);
     expect(service.updateProfile).toHaveBeenCalledWith('u1', dto);
     expect(result.message).toBe(SUCCESS_MESSAGES.PROFILE_UPDATED);
   });
 
   it('uploadDocument calls service', async () => {
-    const dto = { type: 'GOVERNMENT_ID', fileUrl: 'url' } as any;
+    const dto = { type: 'GOVERNMENT_ID', fileUrl: 'url' } as UploadDocumentDto;
     const result = await controller.uploadDocument(user, dto);
     expect(service.uploadDocument).toHaveBeenCalledWith('u1', dto);
     expect(result.message).toBe(SUCCESS_MESSAGES.DOCUMENT_UPLOADED);
@@ -87,7 +95,9 @@ describe('HandymanController', () => {
   });
 
   it('getServiceRequests calls service with query', async () => {
-    const query = { status: 'ongoing' } as any;
+    const query = Object.assign(new HandymanServiceRequestQueryDto(), {
+      filter: 'ongoing' as const,
+    });
     await controller.getServiceRequests(user, query);
     expect(service.getServiceRequests).toHaveBeenCalledWith('u1', query);
   });
@@ -99,7 +109,7 @@ describe('HandymanController', () => {
   });
 
   it('applyToRequest calls service with user id, request id, dto', async () => {
-    const dto = { coverMessage: 'hi' } as any;
+    const dto = { coverMessage: 'hi' } as ApplyServiceRequestDto;
     const result = await controller.applyToRequest(user, 'sr1', dto);
     expect(service.applyToRequest).toHaveBeenCalledWith('u1', 'sr1', dto);
     expect(result.message).toBe(SUCCESS_MESSAGES.APPLICATION_SUBMITTED);

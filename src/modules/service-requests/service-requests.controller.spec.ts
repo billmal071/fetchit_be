@@ -2,8 +2,10 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ServiceRequestsController } from './service-requests.controller';
 import { ServiceRequestsService } from './service-requests.service';
 import { SUCCESS_MESSAGES } from '@common/constants';
+import { IRequestUser } from '@common/interfaces';
+import { CreateServiceRequestDto, UpdateServiceRequestDto, ServiceRequestQueryDto } from './dto';
 
-const user = { id: 'u1', email: 'a@b.com', role: 'CUSTOMER' } as any;
+const user: IRequestUser = { id: 'u1', email: 'a@b.com', role: 'CUSTOMER' };
 const mockData = { id: 'sr1' };
 
 describe('ServiceRequestsController', () => {
@@ -32,14 +34,14 @@ describe('ServiceRequestsController', () => {
   });
 
   it('create calls service with user id and dto', async () => {
-    const dto = { title: 'Fix sink' } as any;
+    const dto = { title: 'Fix sink' } as CreateServiceRequestDto;
     const result = await controller.create(user, dto);
     expect(service.create).toHaveBeenCalledWith('u1', dto);
     expect(result.message).toBe(SUCCESS_MESSAGES.SERVICE_REQUEST_CREATED);
   });
 
   it('findAll calls service with user id and query', async () => {
-    const query = { status: 'OPEN' } as any;
+    const query = { status: 'OPEN' } as ServiceRequestQueryDto;
     await controller.findAll(user, query);
     expect(service.findAll).toHaveBeenCalledWith('u1', query);
   });
@@ -50,7 +52,7 @@ describe('ServiceRequestsController', () => {
   });
 
   it('update calls service with id, user id, and dto', async () => {
-    const dto = { title: 'Updated' } as any;
+    const dto = { title: 'Updated' } as UpdateServiceRequestDto;
     const result = await controller.update(user, 'sr1', dto);
     expect(service.update).toHaveBeenCalledWith('sr1', 'u1', dto);
     expect(result.message).toBe(SUCCESS_MESSAGES.SERVICE_REQUEST_UPDATED);

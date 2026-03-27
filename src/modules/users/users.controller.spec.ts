@@ -1,12 +1,16 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
+import { ForbiddenException } from '@nestjs/common';
+import { Response } from 'express';
 import { SUCCESS_MESSAGES } from '@/common/constants';
-import { ONBOARDABLE_ROLES } from './dto';
+import { ONBOARDABLE_ROLES, OnboardUserDto, UpdateUserDto } from './dto';
 import { PaginationDto } from '@/common/dto';
+import { IRequestUser } from '@/common/interfaces';
+import { UserRole } from '@/common/enums';
 
-const mockUser = { id: 'u1', email: 'a@b.com', role: 'CUSTOMER' };
-const mockRes = { setHeader: jest.fn() } as any;
+const mockUser: IRequestUser = { id: 'u1', email: 'a@b.com', role: 'CUSTOMER' };
+const mockRes = { setHeader: jest.fn() } as Partial<Response> as Response;
 
 describe('UsersController', () => {
   let controller: UsersController;
@@ -38,13 +42,14 @@ describe('UsersController', () => {
   });
 
   it('getProfile should call usersService.findOne with user id', async () => {
-    const result = await controller.getProfile(mockUser as any, mockRes);
+    const result = await controller.getProfile(mockUser, mockRes);
     expect(usersService.findOne).toHaveBeenCalledWith('u1');
     expect(result.data).toBeDefined();
   });
 
   it('onboard should call usersService.onboard', async () => {
-    const result = await controller.onboard(mockUser as any, { role: 'CUSTOMER' as any });
+    const dto: OnboardUserDto = { role: UserRole.CUSTOMER };
+    const result = await controller.onboard(mockUser, dto);
     expect(usersService.onboard).toHaveBeenCalledWith('u1', 'CUSTOMER');
     expect(result.message).toBe(SUCCESS_MESSAGES.USER_ONBOARDED);
   });
@@ -61,8 +66,8 @@ describe('UsersController', () => {
   });
 
   it('updateProfile should call usersService.update with user id', async () => {
-    const dto = { username: 'new' };
-    const result = await controller.updateProfile(mockUser as any, dto);
+    const dto = { username: 'new' } as UpdateUserDto;
+    const result = await controller.updateProfile(mockUser, dto);
     expect(usersService.update).toHaveBeenCalledWith('u1', dto);
     expect(result.message).toBe(SUCCESS_MESSAGES.USER_UPDATED);
   });
@@ -74,7 +79,12 @@ describe('UsersController', () => {
   });
 
   it('remove should call usersService.remove', async () => {
-    await controller.remove('u2');
+    await controller.remove(mockUser, 'u2');
     expect(usersService.remove).toHaveBeenCalledWith('u2');
+  });
+
+  it('remove should throw ForbiddenException when deleting own account', async () => {
+    await expect(controller.remove(mockUser, 'u1')).rejects.toThrow(ForbiddenException);
+    expect(usersService.remove).not.toHaveBeenCalled();
   });
 });

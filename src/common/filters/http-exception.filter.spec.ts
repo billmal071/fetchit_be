@@ -25,9 +25,9 @@ describe('GlobalExceptionFilter', () => {
     jest.restoreAllMocks();
   });
 
-  function callFilter(exception: unknown) {
+  function callFilter(exception: unknown): void {
     const host = createMockArgumentsHost({ url: '/api/test', method: 'GET' }, mockResponse);
-    filter.catch(exception, host as any);
+    filter.catch(exception, host);
   }
 
   it('should handle HttpException with string response', () => {
