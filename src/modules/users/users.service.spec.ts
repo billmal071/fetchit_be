@@ -26,6 +26,7 @@ const mockUser: User = {
   lastLoginAt: null,
   provider: AuthProvider.LOCAL,
   googleId: null,
+  onboardedAt: null,
   createdAt: new Date(),
   updatedAt: new Date(),
   deletedAt: null,
@@ -262,6 +263,16 @@ describe('UsersService', () => {
       await expect(service.onboard('user-1', UserRole.CUSTOMER)).rejects.toThrow(
         ForbiddenException,
       );
+    });
+
+    it('should throw ForbiddenException when user has already been onboarded', async () => {
+      const alreadyOnboardedUser = { ...mockUser, onboardedAt: new Date('2026-01-01') };
+      userRepository.findById.mockResolvedValue(alreadyOnboardedUser);
+
+      await expect(service.onboard('user-1', UserRole.HANDYMAN)).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(userRepository.updateRole).not.toHaveBeenCalled();
     });
   });
 

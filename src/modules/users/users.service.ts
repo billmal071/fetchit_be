@@ -162,6 +162,10 @@ export class UsersService {
       throw new ForbiddenException('Admin users cannot change their role');
     }
 
+    if (user.onboardedAt) {
+      throw new ForbiddenException('User has already been onboarded');
+    }
+
     const updatedUser = await this.userRepository.updateRole(userId, role);
     this.logger.log(`User ${userId} onboarded as ${role}`);
 

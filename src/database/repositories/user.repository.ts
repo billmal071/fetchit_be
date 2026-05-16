@@ -125,7 +125,7 @@ export class UserRepository implements IUserRepository {
   async updateRole(id: string, role: UserRole): Promise<User> {
     return this.prisma.user.update({
       where: { id },
-      data: { role },
+      data: { role, onboardedAt: new Date() },
     });
   }
 
