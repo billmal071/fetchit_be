@@ -53,6 +53,14 @@ describe('UsersController', () => {
     expect(result.message).toBe(SUCCESS_MESSAGES.USER_ONBOARDED);
   });
 
+  it('onboard should propagate ForbiddenException when user already onboarded', async () => {
+    usersService.onboard.mockRejectedValue(
+      new ForbiddenException('User has already been onboarded'),
+    );
+    const dto: OnboardUserDto = { role: UserRole.HANDYMAN };
+    await expect(controller.onboard(mockUser, dto)).rejects.toThrow(ForbiddenException);
+  });
+
   it('getRoles should return ONBOARDABLE_ROLES', async () => {
     const result = await controller.getRoles();
     expect(result.data.roles).toBe(ONBOARDABLE_ROLES);
