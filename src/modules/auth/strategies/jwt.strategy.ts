@@ -3,6 +3,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { UserStatus } from '@prisma/client';
+import { EmailNotVerifiedException } from '@/common/exceptions';
 import { IJwtPayload, IRequestUser } from '@/common/interfaces';
 import { IJwtConfig } from '@/config';
 import { UsersService } from '@/modules/users/users.service';
@@ -26,6 +27,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     if (!user) {
       throw new UnauthorizedException('User not found');
+    }
+
+    // An unverified user is technically not ACTIVE yet. Surface the actionable
+    // "verify your email" 403 instead of a generic "account is not active" 401,
+    // otherwise this preempts the EmailNotVerifiedException guard on routes like
+    // /users/onboard and users get an opaque auth error before verifying.
+    if (!user.emailVerified) {
+      throw new EmailNotVerifiedException();
     }
 
     if (user.status !== UserStatus.ACTIVE) {
