@@ -9,6 +9,14 @@ module.exports = {
       exec_mode: 'cluster',
       autorestart: true,
       watch: false,
+      // Crashloop backstop: a process must stay up at least `min_uptime` to count
+      // as a healthy start. If it keeps exiting sooner, PM2 gives up after
+      // `max_restarts` consecutive fast crashes and marks the app "errored"
+      // (visible/alertable) instead of retrying forever. Without this, a startup
+      // crash on 2026-03-18 (TimeoutInterceptor DI error) racked up ~2,500
+      // unbounded restarts before it was noticed.
+      min_uptime: '30s',
+      max_restarts: 10,
       max_memory_restart: '1G',
       env_development: {
         NODE_ENV: 'development',
