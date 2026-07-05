@@ -5,7 +5,10 @@ module.exports = {
     {
       name: `fetchit-be-${ENV_SUFFIX}`,
       script: 'dist/main.js',
-      instances: 'max',
+      // Only production needs multi-core cluster scaling. dev/staging share a
+      // small, memory-constrained box with many other apps, so run a single
+      // instance there to conserve RAM.
+      instances: ENV_SUFFIX === 'production' ? 'max' : 1,
       exec_mode: 'cluster',
       autorestart: true,
       watch: false,
