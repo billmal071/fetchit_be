@@ -30,7 +30,7 @@ export class TokenExpiredException extends DomainException {
 export class EmailNotVerifiedException extends DomainException {
   constructor() {
     super(
-      'Email not verified. Please verify your email before logging in.',
+      'Email not verified. Please verify your email to continue.',
       'AUTH_EMAIL_NOT_VERIFIED',
       HttpStatus.FORBIDDEN,
     );
