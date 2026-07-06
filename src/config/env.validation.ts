@@ -7,6 +7,15 @@ export const envSchema = z.object({
   API_PREFIX: z.string().default('api'),
   API_VERSION: z.string().default('v1'),
 
+  // Frontend web app (the URL users open in a browser, NOT the API host).
+  // Required and validated so the app fails fast instead of silently falling
+  // back to http://localhost:4200 — email verification links and OAuth
+  // callback/redirect URLs are built from this value.
+  FRONTEND_URL: z.string().url({
+    message:
+      'FRONTEND_URL must be a valid URL pointing at the frontend web app (e.g. https://app.example.com)',
+  }),
+
   // Database
   DATABASE_URL: z.string().url({ message: 'DATABASE_URL must be a valid PostgreSQL URL' }),
 
