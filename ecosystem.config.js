@@ -7,9 +7,10 @@ module.exports = {
       script: 'dist/main.js',
       // Only production needs multi-core cluster scaling. dev/staging share a
       // small, memory-constrained box with many other apps, so run a single
-      // instance there to conserve RAM.
+      // fork-mode process there — cluster mode with one instance just adds the
+      // cluster master/IPC overhead with nothing to load-balance.
       instances: ENV_SUFFIX === 'production' ? 'max' : 1,
-      exec_mode: 'cluster',
+      exec_mode: ENV_SUFFIX === 'production' ? 'cluster' : 'fork',
       autorestart: true,
       watch: false,
       // Crashloop backstop: a process must stay up at least `min_uptime` to count
