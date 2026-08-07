@@ -23,18 +23,29 @@ async function bootstrap(): Promise<void> {
   const appConfig = configService.get<IAppConfig>('app');
   const swaggerConfig = configService.get<ISwaggerConfig>('swagger');
 
-  // Validate CORS origins - filter out any malformed URLs
+  // Validate CORS origins. Entries are either exact URLs or wildcard patterns
+  // like https://*.fetchit.com.ng, where * matches one or more subdomain
+  // labels (dev.fetchit.com.ng, dev.api.fetchit.com.ng, ...) but not the apex
+  // domain — list the apex as its own entry. Malformed entries are dropped.
   const rawOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000').split(',');
-  const origins = rawOrigins
-    .map((o) => o.trim())
-    .filter((o) => {
+  const origins: (string | RegExp)[] = [];
+  for (const rawOrigin of rawOrigins) {
+    const entry = rawOrigin.trim();
+    if (!entry) continue;
+    if (entry.includes('*')) {
+      const pattern = entry
+        .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*/g, '[a-z0-9-]+(?:\\.[a-z0-9-]+)*');
+      origins.push(new RegExp(`^${pattern}$`, 'i'));
+    } else {
       try {
-        new URL(o);
-        return true;
+        new URL(entry);
+        origins.push(entry);
       } catch {
-        return false;
+        // skip malformed entry
       }
-    });
+    }
+  }
 
   // Use Winston logger
   app.useLogger(app.get(WINSTON_MODULE_NEST_PROVIDER));
