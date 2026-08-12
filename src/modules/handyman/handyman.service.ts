@@ -63,10 +63,9 @@ export class HandymanService {
     profile: HandymanProfile;
     stats: { ongoingCount: number; completedCount: number };
   }> {
-    const profile = await this.profileRepo.findByUserId(userId);
-    if (!profile) {
-      throw new HandymanProfileNotFoundException();
-    }
+    // An onboarded handyman always has a profile: create a default one lazily
+    // if the row does not exist yet (it is otherwise created on completion).
+    const profile = await this.profileRepo.ensureByUserId(userId);
 
     const [ongoingCount, completedCount] = await Promise.all([
       this.serviceRequestRepo
@@ -92,10 +91,14 @@ export class HandymanService {
 
   async getProfile(userId: string): Promise<HandymanProfile> {
     const profile = await this.profileRepo.findByUserIdWithDetails(userId);
-    if (!profile) {
-      throw new HandymanProfileNotFoundException();
+    if (profile) {
+      return profile;
     }
-    return profile;
+    // No profile row yet (handyman onboarded but hasn't completed step 1).
+    // Materialize a default UNVERIFIED profile so an authenticated handyman
+    // never gets a 404 here, then return it with the same detail shape.
+    await this.profileRepo.ensureByUserId(userId);
+    return (await this.profileRepo.findByUserIdWithDetails(userId))!;
   }
 
   async completeProfile(userId: string, dto: CompleteProfileDto): Promise<HandymanProfile> {

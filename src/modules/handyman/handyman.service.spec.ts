@@ -71,6 +71,7 @@ describe('HandymanService', () => {
     mockProfileRepo = {
       findByUserId: jest.fn(),
       findByUserIdWithDetails: jest.fn(),
+      ensureByUserId: jest.fn(),
       findById: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
@@ -123,7 +124,7 @@ describe('HandymanService', () => {
 
   describe('getDashboard', () => {
     it('should return profile and stats', async () => {
-      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockProfileRepo.ensureByUserId.mockResolvedValue(mockProfile);
       // Call order: ASSIGNED (1st), COMPLETED (2nd via Promise.all), IN_PROGRESS (3rd inside .then)
       mockServiceRequestRepo.countByHandymanAndStatus
         .mockResolvedValueOnce(2) // ASSIGNED
@@ -137,10 +138,20 @@ describe('HandymanService', () => {
       expect(result.stats.completedCount).toBe(5);
     });
 
-    it('should throw HandymanProfileNotFoundException when no profile', async () => {
-      mockProfileRepo.findByUserId.mockResolvedValue(null);
+    it('should lazily create a default profile when none exists', async () => {
+      const defaultProfile = { ...mockProfile, verificationStatus: VerificationStatus.UNVERIFIED };
+      mockProfileRepo.ensureByUserId.mockResolvedValue(defaultProfile);
+      mockServiceRequestRepo.countByHandymanAndStatus
+        .mockResolvedValueOnce(0) // ASSIGNED
+        .mockResolvedValueOnce(0) // COMPLETED
+        .mockResolvedValueOnce(0); // IN_PROGRESS
 
-      await expect(service.getDashboard(userId)).rejects.toThrow(HandymanProfileNotFoundException);
+      const result = await service.getDashboard(userId);
+
+      expect(mockProfileRepo.ensureByUserId).toHaveBeenCalledWith(userId);
+      expect(result.profile).toEqual(defaultProfile);
+      expect(result.stats.ongoingCount).toBe(0);
+      expect(result.stats.completedCount).toBe(0);
     });
   });
 
@@ -154,10 +165,18 @@ describe('HandymanService', () => {
       expect(mockProfileRepo.findByUserIdWithDetails).toHaveBeenCalledWith(userId);
     });
 
-    it('should throw HandymanProfileNotFoundException when not found', async () => {
-      mockProfileRepo.findByUserIdWithDetails.mockResolvedValue(null);
+    it('should lazily create and return a default profile when none exists', async () => {
+      const defaultProfile = { ...mockProfile, verificationStatus: VerificationStatus.UNVERIFIED };
+      // First lookup misses, then returns the freshly-created row.
+      mockProfileRepo.findByUserIdWithDetails
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(defaultProfile);
+      mockProfileRepo.ensureByUserId.mockResolvedValue(defaultProfile);
 
-      await expect(service.getProfile(userId)).rejects.toThrow(HandymanProfileNotFoundException);
+      const result = await service.getProfile(userId);
+
+      expect(mockProfileRepo.ensureByUserId).toHaveBeenCalledWith(userId);
+      expect(result).toEqual(defaultProfile);
     });
   });
 

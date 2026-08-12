@@ -23,6 +23,18 @@ export class HandymanProfileRepository implements IHandymanProfileRepository {
     });
   }
 
+  async ensureByUserId(userId: string): Promise<HandymanProfile> {
+    // upsert with an empty update makes this a safe get-or-create: if a row
+    // already exists it is returned untouched; otherwise a default profile
+    // (verificationStatus defaults to UNVERIFIED) is created. The unique
+    // constraint on userId makes concurrent first-time reads collapse to one row.
+    return this.prisma.handymanProfile.upsert({
+      where: { userId },
+      update: {},
+      create: { userId },
+    });
+  }
+
   async findByUserIdWithDetails(userId: string): Promise<HandymanProfile | null> {
     return this.prisma.handymanProfile.findUnique({
       where: { userId },
