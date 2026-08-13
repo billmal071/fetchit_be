@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
 
 jobs:
   # ─── Install & cache (shared across quality jobs) ──────────────────────────
@@ -146,6 +146,40 @@ jobs:
 
       - name: Run tests
         run: pnpm test
+
+  # ─── Security Audit ────────────────────────────────────────────────────────
+  # Reports known dependency vulnerabilities (pnpm audit). Non-blocking for
+  # now — there is a backlog of pre-existing transitive advisories; this keeps
+  # them visible on every run. Tighten to a hard gate (drop continue-on-error,
+  # lower --audit-level) once the backlog is triaged.
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Restore node_modules
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            ~/.pnpm-store
+          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Audit dependencies
+        continue-on-error: true
+        run: pnpm audit --audit-level=high
 
   # ─── Build ─────────────────────────────────────────────────────────────────
   build:
