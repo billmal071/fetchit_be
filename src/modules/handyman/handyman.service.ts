@@ -90,15 +90,10 @@ export class HandymanService {
   }
 
   async getProfile(userId: string): Promise<HandymanProfile> {
-    const profile = await this.profileRepo.findByUserIdWithDetails(userId);
-    if (profile) {
-      return profile;
-    }
-    // No profile row yet (handyman onboarded but hasn't completed step 1).
-    // Materialize a default UNVERIFIED profile so an authenticated handyman
-    // never gets a 404 here, then return it with the same detail shape.
-    await this.profileRepo.ensureByUserId(userId);
-    return (await this.profileRepo.findByUserIdWithDetails(userId))!;
+    // An onboarded handyman may not have a profile row yet (it is created on
+    // completion). Return a default UNVERIFIED profile in that case so an
+    // authenticated handyman never gets a 404 here.
+    return this.profileRepo.ensureByUserIdWithDetails(userId);
   }
 
   async completeProfile(userId: string, dto: CompleteProfileDto): Promise<HandymanProfile> {
@@ -213,10 +208,9 @@ export class HandymanService {
   }
 
   async getDocuments(userId: string): Promise<HandymanDocument[]> {
-    const profile = await this.profileRepo.findByUserId(userId);
-    if (!profile) {
-      throw new HandymanProfileNotFoundException();
-    }
+    // Read endpoint: a freshly-onboarded handyman with no profile yet has no
+    // documents, so return an empty list rather than 404.
+    const profile = await this.profileRepo.ensureByUserId(userId);
 
     return this.documentRepo.findByProfileId(profile.id);
   }
@@ -285,10 +279,9 @@ export class HandymanService {
     userId: string,
     query: HandymanServiceRequestQueryDto,
   ): Promise<IPaginatedResult<ServiceRequest>> {
-    const profile = await this.profileRepo.findByUserId(userId);
-    if (!profile) {
-      throw new HandymanProfileNotFoundException();
-    }
+    // Read endpoint: no profile yet means no assigned requests — return an
+    // empty page rather than 404.
+    const profile = await this.profileRepo.ensureByUserId(userId);
 
     const { page = 1, limit = 10, filter } = query;
 
@@ -403,10 +396,9 @@ export class HandymanService {
   }
 
   async getApplications(userId: string): Promise<ServiceRequestApplication[]> {
-    const profile = await this.profileRepo.findByUserId(userId);
-    if (!profile) {
-      throw new HandymanProfileNotFoundException();
-    }
+    // Read endpoint: no profile yet means no applications — return an empty
+    // list rather than 404.
+    const profile = await this.profileRepo.ensureByUserId(userId);
 
     return this.applicationRepo.findByHandymanProfileId(profile.id);
   }

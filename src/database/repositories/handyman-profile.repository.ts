@@ -7,6 +7,24 @@ import { IHandymanProfileRepository } from './interfaces';
 export class HandymanProfileRepository implements IHandymanProfileRepository {
   constructor(private readonly prisma: PrismaService) {}
 
+  // Shared "with details" shape so findByUserIdWithDetails and
+  // ensureByUserIdWithDetails always return the same relations.
+  private static readonly detailsInclude = {
+    documents: true,
+    categories: {
+      include: { category: true },
+    },
+    user: {
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        avatar: true,
+        phone: true,
+      },
+    },
+  } satisfies Prisma.HandymanProfileInclude;
+
   async create(data: Prisma.HandymanProfileCreateInput): Promise<HandymanProfile> {
     return this.prisma.handymanProfile.create({ data });
   }
@@ -24,35 +42,44 @@ export class HandymanProfileRepository implements IHandymanProfileRepository {
   }
 
   async ensureByUserId(userId: string): Promise<HandymanProfile> {
-    // upsert with an empty update makes this a safe get-or-create: if a row
-    // already exists it is returned untouched; otherwise a default profile
-    // (verificationStatus defaults to UNVERIFIED) is created. The unique
-    // constraint on userId makes concurrent first-time reads collapse to one row.
-    return this.prisma.handymanProfile.upsert({
-      where: { userId },
-      update: {},
-      create: { userId },
-    });
+    return this.getOrCreate(userId);
+  }
+
+  async ensureByUserIdWithDetails(userId: string): Promise<HandymanProfile> {
+    return this.getOrCreate(userId, HandymanProfileRepository.detailsInclude);
+  }
+
+  /**
+   * Get-or-create a handyman profile by userId. Race-safe: on the rare
+   * concurrent first-time read where two requests both try to create, the
+   * loser's P2002 unique-constraint error is swallowed and the row is re-read.
+   * A default profile has verificationStatus UNVERIFIED (schema default).
+   */
+  private async getOrCreate(
+    userId: string,
+    include?: Prisma.HandymanProfileInclude,
+  ): Promise<HandymanProfile> {
+    const existing = await this.prisma.handymanProfile.findUnique({ where: { userId }, include });
+    if (existing) {
+      return existing;
+    }
+    try {
+      return await this.prisma.handymanProfile.create({ data: { userId }, include });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002' // unique constraint (userId) — created concurrently
+      ) {
+        return this.prisma.handymanProfile.findUniqueOrThrow({ where: { userId }, include });
+      }
+      throw error;
+    }
   }
 
   async findByUserIdWithDetails(userId: string): Promise<HandymanProfile | null> {
     return this.prisma.handymanProfile.findUnique({
       where: { userId },
-      include: {
-        documents: true,
-        categories: {
-          include: { category: true },
-        },
-        user: {
-          select: {
-            id: true,
-            username: true,
-            email: true,
-            avatar: true,
-            phone: true,
-          },
-        },
-      },
+      include: HandymanProfileRepository.detailsInclude,
     });
   }
 
