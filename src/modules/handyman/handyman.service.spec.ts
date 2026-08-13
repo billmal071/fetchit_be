@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ServiceRequestStatus, VerificationStatus } from '@prisma/client';
 import { HandymanService } from './handyman.service';
+import { HandymanServiceRequestQueryDto } from './dto';
 import {
   HANDYMAN_PROFILE_REPOSITORY,
   HANDYMAN_DOCUMENT_REPOSITORY,
@@ -71,6 +72,8 @@ describe('HandymanService', () => {
     mockProfileRepo = {
       findByUserId: jest.fn(),
       findByUserIdWithDetails: jest.fn(),
+      ensureByUserId: jest.fn(),
+      ensureByUserIdWithDetails: jest.fn(),
       findById: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
@@ -123,7 +126,7 @@ describe('HandymanService', () => {
 
   describe('getDashboard', () => {
     it('should return profile and stats', async () => {
-      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockProfileRepo.ensureByUserId.mockResolvedValue(mockProfile);
       // Call order: ASSIGNED (1st), COMPLETED (2nd via Promise.all), IN_PROGRESS (3rd inside .then)
       mockServiceRequestRepo.countByHandymanAndStatus
         .mockResolvedValueOnce(2) // ASSIGNED
@@ -137,27 +140,83 @@ describe('HandymanService', () => {
       expect(result.stats.completedCount).toBe(5);
     });
 
-    it('should throw HandymanProfileNotFoundException when no profile', async () => {
-      mockProfileRepo.findByUserId.mockResolvedValue(null);
+    it('should lazily create a default profile when none exists', async () => {
+      const defaultProfile = { ...mockProfile, verificationStatus: VerificationStatus.UNVERIFIED };
+      mockProfileRepo.ensureByUserId.mockResolvedValue(defaultProfile);
+      mockServiceRequestRepo.countByHandymanAndStatus
+        .mockResolvedValueOnce(0) // ASSIGNED
+        .mockResolvedValueOnce(0) // COMPLETED
+        .mockResolvedValueOnce(0); // IN_PROGRESS
 
-      await expect(service.getDashboard(userId)).rejects.toThrow(HandymanProfileNotFoundException);
+      const result = await service.getDashboard(userId);
+
+      expect(mockProfileRepo.ensureByUserId).toHaveBeenCalledWith(userId);
+      expect(result.profile).toEqual(defaultProfile);
+      expect(result.stats.ongoingCount).toBe(0);
+      expect(result.stats.completedCount).toBe(0);
     });
   });
 
   describe('getProfile', () => {
-    it('should return profile with details when found', async () => {
-      mockProfileRepo.findByUserIdWithDetails.mockResolvedValue(mockProfile);
+    it('should return the existing profile with details', async () => {
+      mockProfileRepo.ensureByUserIdWithDetails.mockResolvedValue(mockProfile);
 
       const result = await service.getProfile(userId);
 
       expect(result).toEqual(mockProfile);
-      expect(mockProfileRepo.findByUserIdWithDetails).toHaveBeenCalledWith(userId);
+      expect(mockProfileRepo.ensureByUserIdWithDetails).toHaveBeenCalledWith(userId);
     });
 
-    it('should throw HandymanProfileNotFoundException when not found', async () => {
-      mockProfileRepo.findByUserIdWithDetails.mockResolvedValue(null);
+    it('should return a lazily-created default profile when none exists (no 404)', async () => {
+      const defaultProfile = { ...mockProfile, verificationStatus: VerificationStatus.UNVERIFIED };
+      mockProfileRepo.ensureByUserIdWithDetails.mockResolvedValue(defaultProfile);
 
-      await expect(service.getProfile(userId)).rejects.toThrow(HandymanProfileNotFoundException);
+      const result = await service.getProfile(userId);
+
+      expect(mockProfileRepo.ensureByUserIdWithDetails).toHaveBeenCalledWith(userId);
+      expect(result).toEqual(defaultProfile);
+    });
+  });
+
+  // Read-only list endpoints must not 404 for a freshly-onboarded handyman
+  // who has no profile row yet; they lazily materialize a default profile and
+  // return empty results (consistent with getProfile/getDashboard).
+  describe('lazy read endpoints for onboarded handyman without a profile', () => {
+    const defaultProfile = { ...mockProfile, verificationStatus: VerificationStatus.UNVERIFIED };
+
+    it('getDocuments returns an empty list instead of 404', async () => {
+      mockProfileRepo.ensureByUserId.mockResolvedValue(defaultProfile);
+      mockDocumentRepo.findByProfileId.mockResolvedValue([]);
+
+      const result = await service.getDocuments(userId);
+
+      expect(mockProfileRepo.ensureByUserId).toHaveBeenCalledWith(userId);
+      expect(mockDocumentRepo.findByProfileId).toHaveBeenCalledWith(profileId);
+      expect(result).toEqual([]);
+    });
+
+    it('getApplications returns an empty list instead of 404', async () => {
+      mockProfileRepo.ensureByUserId.mockResolvedValue(defaultProfile);
+      mockApplicationRepo.findByHandymanProfileId.mockResolvedValue([]);
+
+      const result = await service.getApplications(userId);
+
+      expect(mockProfileRepo.ensureByUserId).toHaveBeenCalledWith(userId);
+      expect(mockApplicationRepo.findByHandymanProfileId).toHaveBeenCalledWith(profileId);
+      expect(result).toEqual([]);
+    });
+
+    it('getServiceRequests returns an empty page instead of 404', async () => {
+      mockProfileRepo.ensureByUserId.mockResolvedValue(defaultProfile);
+      mockPrisma.serviceRequest.findMany.mockResolvedValue([]);
+      mockPrisma.serviceRequest.count.mockResolvedValue(0);
+
+      const query = Object.assign(new HandymanServiceRequestQueryDto(), { page: 1, limit: 10 });
+      const result = await service.getServiceRequests(userId, query);
+
+      expect(mockProfileRepo.ensureByUserId).toHaveBeenCalledWith(userId);
+      expect(result.data).toEqual([]);
+      expect(result.meta.total).toBe(0);
     });
   });
 

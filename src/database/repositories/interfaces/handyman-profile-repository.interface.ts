@@ -18,6 +18,19 @@ export interface IHandymanProfileRepository extends IBaseRepository<
   findByUserId(userId: string): Promise<HandymanProfile | null>;
 
   /**
+   * Return the handyman profile for a user, creating a default UNVERIFIED
+   * profile if none exists yet. Idempotent and safe under concurrent
+   * first-time reads (userId is unique).
+   */
+  ensureByUserId(userId: string): Promise<HandymanProfile>;
+
+  /**
+   * Like ensureByUserId, but returns the profile with documents, categories,
+   * and user info included.
+   */
+  ensureByUserIdWithDetails(userId: string): Promise<HandymanProfile>;
+
+  /**
    * Find handyman profile by user ID with documents, categories, and user info
    */
   findByUserIdWithDetails(userId: string): Promise<HandymanProfile | null>;
