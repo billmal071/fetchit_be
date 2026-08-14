@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, VersioningType } from '@nestjs/common';
+import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -8,6 +8,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import { AppModule } from './app.module';
 import { IAppConfig, ISwaggerConfig } from '@/config';
+import { parseCorsOrigins } from '@common/utils';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -23,32 +24,26 @@ async function bootstrap(): Promise<void> {
   const appConfig = configService.get<IAppConfig>('app');
   const swaggerConfig = configService.get<ISwaggerConfig>('swagger');
 
-  // Validate CORS origins. Entries are either exact URLs or wildcard patterns
-  // like https://*.fetchit.com.ng, where * matches one or more subdomain
-  // labels (dev.fetchit.com.ng, dev.api.fetchit.com.ng, ...) but not the apex
-  // domain — list the apex as its own entry. Malformed entries are dropped.
-  const rawOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000').split(',');
-  const origins: (string | RegExp)[] = [];
-  for (const rawOrigin of rawOrigins) {
-    const entry = rawOrigin.trim();
-    if (!entry) continue;
-    if (entry.includes('*')) {
-      const pattern = entry
-        .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*/g, '[a-z0-9-]+(?:\\.[a-z0-9-]+)*');
-      origins.push(new RegExp(`^${pattern}$`, 'i'));
-    } else {
-      try {
-        new URL(entry);
-        origins.push(entry);
-      } catch {
-        // skip malformed entry
-      }
-    }
-  }
+  // Exact origins and `https://*.example.com` subdomain wildcards; malformed
+  // entries are dropped. See parseCorsOrigins for the accepted forms.
+  const origins = parseCorsOrigins(process.env.CORS_ORIGINS);
 
   // Use Winston logger
   app.useLogger(app.get(WINSTON_MODULE_NEST_PROVIDER));
+
+  // A dropped origin fails as a browser CORS error at runtime, a long way from
+  // the typo that caused it, so surface it at boot.
+  const configuredOriginCount = (process.env.CORS_ORIGINS || '')
+    .split(',')
+    .filter((entry) => entry.trim()).length;
+  if (configuredOriginCount > origins.length) {
+    Logger.warn(
+      `Ignored ${configuredOriginCount - origins.length} malformed CORS_ORIGINS entr` +
+        `${configuredOriginCount - origins.length === 1 ? 'y' : 'ies'}; ` +
+        `allowing: ${origins.map(String).join(', ') || '(none)'}`,
+      'Bootstrap',
+    );
+  }
 
   // Security - Helmet with Content Security Policy
   app.use(
