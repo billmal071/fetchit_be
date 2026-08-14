@@ -6,7 +6,7 @@ import {
   LoginDto,
   RefreshTokenDto,
   AuthResponseDto,
-  TokensDto,
+  RefreshTokensResponseDto,
   ForgotPasswordDto,
   ResetPasswordDto,
   VerifyEmailDto,
@@ -23,7 +23,7 @@ import {
   ApiErrorResponses,
 } from '@/common/decorators';
 import { SUCCESS_MESSAGES } from '@/common/constants';
-import { IRequestUser } from '@/common/interfaces';
+import { IRequestUser, ITokens } from '@/common/interfaces';
 import { Throttle } from '@nestjs/throttler';
 
 @ApiTags('Authentication')
@@ -92,14 +92,15 @@ export class AuthController {
     summary: 'Refresh access token',
     description: 'Exchange a valid refresh token for new access and refresh tokens.',
   })
-  @ApiSuccessResponse(TokensDto)
+  @ApiSuccessResponse(RefreshTokensResponseDto)
   @ApiErrorResponses()
   async refreshTokens(
     @Body() refreshTokenDto: RefreshTokenDto,
     @CurrentUser() user: { id: string; refreshToken: string },
-  ): Promise<{ data: { accessToken: string; refreshToken: string } }> {
+  ): Promise<{ data: { tokens: ITokens } }> {
     const tokens = await this.authService.refreshTokens(user.id, user.refreshToken);
-    return { data: tokens };
+    // Nested under `tokens` to match register and login.
+    return { data: { tokens } };
   }
 
   // ==================== Password Reset ====================

@@ -24,3 +24,12 @@ export class AuthResponseDto {
   @ApiProperty({ type: TokensDto })
   tokens: TokensDto;
 }
+
+/**
+ * `POST /auth/refresh` payload. Nests the pair under `tokens` so it matches
+ * the shape of `AuthResponseDto` returned by register and login.
+ */
+export class RefreshTokensResponseDto {
+  @ApiProperty({ type: TokensDto })
+  tokens: TokensDto;
+}
