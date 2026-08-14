@@ -2,7 +2,8 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { UsersService } from './users.service';
 import { IUserRepository, USER_REPOSITORY } from '@/database/repositories';
 import {
-  ConflictException,
+  EmailAlreadyExistsException,
+  UsernameAlreadyExistsException,
   NotFoundException,
   ForbiddenException,
   EmailNotVerifiedException,
@@ -96,18 +97,18 @@ describe('UsersService', () => {
       expect(result).toHaveProperty('email', 'john@example.com');
     });
 
-    it('should throw ConflictException if email already exists', async () => {
+    it('should throw EmailAlreadyExistsException if email already exists', async () => {
       userRepository.findByEmail.mockResolvedValue(mockUser);
 
-      await expect(service.create(createUserDto)).rejects.toThrow(ConflictException);
+      await expect(service.create(createUserDto)).rejects.toThrow(EmailAlreadyExistsException);
       expect(userRepository.create).not.toHaveBeenCalled();
     });
 
-    it('should throw ConflictException if username already exists', async () => {
+    it('should throw UsernameAlreadyExistsException if username already exists', async () => {
       userRepository.findByEmail.mockResolvedValue(null);
       userRepository.findByUsername.mockResolvedValue(mockUser);
 
-      await expect(service.create(createUserDto)).rejects.toThrow(ConflictException);
+      await expect(service.create(createUserDto)).rejects.toThrow(UsernameAlreadyExistsException);
       expect(userRepository.create).not.toHaveBeenCalled();
     });
   });

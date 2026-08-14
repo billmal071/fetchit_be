@@ -23,7 +23,7 @@ import { GatewaysModule } from '@/gateways/gateways.module';
 
 import { GlobalExceptionFilter, PrismaExceptionFilter } from '@/common/filters';
 import { ResponseInterceptor, LoggingInterceptor, TimeoutInterceptor } from '@/common/interceptors';
-import { CorrelationIdMiddleware } from '@common/middleware/correlation-id.middleware';
+import { ALL_ROUTES, CorrelationIdMiddleware } from '@common/middleware/correlation-id.middleware';
 import { JwtAuthGuard } from '@/modules/auth/guards';
 import { RolesGuard } from '@/common/guards';
 
@@ -134,6 +134,6 @@ import { RolesGuard } from '@/common/guards';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(CorrelationIdMiddleware).forRoutes('*');
+    consumer.apply(CorrelationIdMiddleware).forRoutes(ALL_ROUTES);
   }
 }
