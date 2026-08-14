@@ -206,11 +206,22 @@ socket.on('connect', () => {
 socket.emit('ping'); // Returns 'pong'
 ```
 
-## Default Admin User
+## Admin User
 
-After running the seed command, you can login with:
-- **Email**: admin@fetchit.com
-- **Password**: Admin@123
+There is no default admin account. `pnpm db:seed` always seeds the service
+categories, then prompts for an admin email, username, and password:
+
+```
+Enter admin email:
+Enter admin username:
+Enter admin password:
+```
+
+The prompt requires an interactive TTY. When stdin is not a TTY — CI, the
+deploy pipeline, `pnpm db:seed < /dev/null` — admin creation is skipped and
+only the categories are seeded. Deployed environments therefore have no admin
+until someone runs the seed interactively on the server (or creates the user
+directly).
 
 ## License
 
