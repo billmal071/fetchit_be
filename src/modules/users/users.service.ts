@@ -4,7 +4,8 @@ import { plainToInstance } from 'class-transformer';
 import { CreateUserDto, UpdateUserDto, UserResponseDto } from './dto';
 import { OnboardableRole } from './dto';
 import {
-  ConflictException,
+  EmailAlreadyExistsException,
+  UsernameAlreadyExistsException,
   NotFoundException,
   ForbiddenException,
   EmailNotVerifiedException,
@@ -13,7 +14,6 @@ import { hashPassword } from '@/common/utils';
 import { PaginationDto } from '@/common/dto';
 import { createPaginationMeta } from '@/common/utils';
 import { IPaginatedResult } from '@/common/interfaces';
-import { ERROR_MESSAGES } from '@/common/constants';
 import { IUserRepository, USER_REPOSITORY } from '@/database/repositories';
 
 @Injectable()
@@ -28,12 +28,12 @@ export class UsersService {
   async create(createUserDto: CreateUserDto): Promise<UserResponseDto> {
     const existingEmail = await this.userRepository.findByEmail(createUserDto.email);
     if (existingEmail) {
-      throw new ConflictException(ERROR_MESSAGES.USER_EXISTS);
+      throw new EmailAlreadyExistsException();
     }
 
     const existingUsername = await this.userRepository.findByUsername(createUserDto.username);
     if (existingUsername) {
-      throw new ConflictException('User with this username already exists');
+      throw new UsernameAlreadyExistsException();
     }
 
     const hashedPassword = await hashPassword(createUserDto.password);

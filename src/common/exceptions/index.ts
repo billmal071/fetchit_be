@@ -17,6 +17,8 @@ export {
   InvalidAdminSecretException,
   ResourceNotFoundException,
   ResourceAlreadyExistsException,
+  EmailAlreadyExistsException,
+  UsernameAlreadyExistsException,
   HandymanProfileNotFoundException,
   HandymanNotVerifiedException,
   InvalidVerificationTransitionException,

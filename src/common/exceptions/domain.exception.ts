@@ -73,6 +73,18 @@ export class ResourceAlreadyExistsException extends DomainException {
   }
 }
 
+export class EmailAlreadyExistsException extends DomainException {
+  constructor() {
+    super('User with this email already exists', 'USER_EMAIL_EXISTS', HttpStatus.CONFLICT);
+  }
+}
+
+export class UsernameAlreadyExistsException extends DomainException {
+  constructor() {
+    super('User with this username already exists', 'USER_USERNAME_EXISTS', HttpStatus.CONFLICT);
+  }
+}
+
 // ==================== HANDYMAN EXCEPTIONS ====================
 
 export class HandymanProfileNotFoundException extends DomainException {

@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
+import { hashToken } from '@/common/utils';
 import { AuthService } from './auth.service';
 import { UsersService } from '@/modules/users/users.service';
 import { EmailVerificationService } from './services';
@@ -53,7 +54,7 @@ describe('AuthService', () => {
 
   beforeAll(async () => {
     hashedPassword = await bcrypt.hash(rawPassword, 12);
-    hashedRefreshToken = await bcrypt.hash(rawRefreshToken, 12);
+    hashedRefreshToken = hashToken(rawRefreshToken);
   });
 
   beforeEach(async () => {
