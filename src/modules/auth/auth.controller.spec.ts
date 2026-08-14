@@ -73,7 +73,9 @@ describe('AuthController', () => {
       { id: 'u1', refreshToken: 'rt' },
     );
     expect(authService.refreshTokens).toHaveBeenCalledWith('u1', 'rt');
-    expect(result.data.accessToken).toBeDefined();
+    // Nested under `tokens` to match the register and login responses.
+    expect(result.data.tokens.accessToken).toBeDefined();
+    expect(result.data.tokens.refreshToken).toBeDefined();
   });
 
   it('forgotPassword should call passwordResetService', async () => {
