@@ -118,3 +118,17 @@ export interface IEmailPayload {
 export interface IEmailProvider {
   sendEmail(payload: IEmailPayload): Promise<void>;
 }
+
+/**
+ * The subset of a multipart file the application actually uses.
+ *
+ * Deliberately narrower than `Express.Multer.File`: `originalname` and
+ * `mimetype` are client-controlled and only ever used as a display label or
+ * ignored outright, so nothing downstream should be tempted to trust them.
+ */
+export interface IUploadedFile {
+  buffer: Buffer;
+  originalname?: string;
+  mimetype?: string;
+  size?: number;
+}

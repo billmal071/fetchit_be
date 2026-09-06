@@ -1,3 +1,5 @@
+import type { IStorageConfig } from '@/storage/interfaces';
+
 export interface IAppConfig {
   nodeEnv: string;
   port: number;
@@ -55,6 +57,7 @@ export interface IConfiguration {
   swagger: ISwaggerConfig;
   google: IGoogleConfig;
   resend: IResendConfig;
+  storage: IStorageConfig;
 }
 
 export default (): IConfiguration => ({
@@ -101,5 +104,21 @@ export default (): IConfiguration => ({
     from: process.env.RESEND_FROM || '',
     fromEmail: process.env.RESEND_FROM_EMAIL || '',
     fromName: process.env.RESEND_FROM_NAME || '',
+  },
+  storage: {
+    driver: process.env.STORAGE_DRIVER === 's3-compatible' ? 's3-compatible' : 'local',
+    publicBaseUrl: process.env.STORAGE_PUBLIC_BASE_URL || undefined,
+    maxFileSize: parseInt(process.env.STORAGE_MAX_FILE_SIZE || '5242880', 10),
+    local: {
+      root: process.env.STORAGE_LOCAL_ROOT || './storage/uploads',
+    },
+    s3: {
+      endpoint: process.env.STORAGE_S3_ENDPOINT || undefined,
+      region: process.env.STORAGE_S3_REGION || 'auto',
+      bucket: process.env.STORAGE_S3_BUCKET || '',
+      accessKeyId: process.env.STORAGE_S3_ACCESS_KEY_ID || '',
+      secretAccessKey: process.env.STORAGE_S3_SECRET_ACCESS_KEY || '',
+      forcePathStyle: process.env.STORAGE_S3_FORCE_PATH_STYLE !== 'false',
+    },
   },
 });

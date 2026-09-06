@@ -90,8 +90,13 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     return errorNames[status] || 'Error';
   }
 
+  /**
+   * class-validator prefixes each message with the offending property, so the
+   * first token is the field name. Return it verbatim: lower-casing it turned
+   * `fileUrl` into `fileurl` and broke field-level error mapping on clients.
+   */
   private extractFieldFromMessage(message: string): string {
-    const match = message.match(/^(\w+)/);
-    return match ? match[1].toLowerCase() : 'unknown';
+    const match = message.match(/^([A-Za-z0-9_$]+(?:\.[A-Za-z0-9_$]+)*)/);
+    return match ? match[1] : 'unknown';
   }
 }

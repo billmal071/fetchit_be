@@ -1,6 +1,7 @@
+import { randomUUID } from 'crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { ServiceRequestStatus, VerificationStatus } from '@prisma/client';
+import { DocumentType, ServiceRequestStatus, VerificationStatus } from '@prisma/client';
 import type {
   HandymanProfile,
   HandymanDocument,
@@ -19,7 +20,9 @@ import {
 } from '@/database/repositories';
 import { PrismaService } from '@/database/prisma.service';
 import { EVENTS } from '@common/constants';
-import { IPaginatedResult } from '@common/interfaces';
+import { IPaginatedResult, IUploadedFile } from '@common/interfaces';
+import { ALLOWED_UPLOAD_MIME_TYPES, sanitizeFileName, sniffFileType } from '@common/utils';
+import { StorageService } from '@/storage';
 import { createPaginationMeta } from '@common/utils/pagination.util';
 import { PaginationDto } from '@common/dto/pagination.dto';
 import {
@@ -30,7 +33,7 @@ import {
   ServiceRequestNotOpenException,
   ResourceNotFoundException,
 } from '@common/exceptions/domain.exception';
-import { ForbiddenException } from '@common/exceptions/base.exception';
+import { BadRequestException, ForbiddenException } from '@common/exceptions/base.exception';
 import {
   HandymanProfileCompletedEvent,
   HandymanDocumentsSubmittedEvent,
@@ -57,6 +60,7 @@ export class HandymanService {
     private readonly applicationRepo: IServiceRequestApplicationRepository,
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly storage: StorageService,
   ) {}
 
   async getDashboard(userId: string): Promise<{
@@ -205,6 +209,58 @@ export class HandymanService {
       fileUrl: dto.fileUrl,
       fileName: dto.fileName,
     });
+  }
+
+  /**
+   * Store an uploaded verification document and record it in one call.
+   *
+   * Nothing the client sent about the file is trusted: the MIME type comes from
+   * sniffing the bytes, the storage key is generated here, and the original
+   * filename survives only as a sanitized display label.
+   */
+  async uploadDocumentFile(
+    userId: string,
+    type: DocumentType,
+    file: IUploadedFile | undefined,
+  ): Promise<HandymanDocument> {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('A file is required under the "file" field');
+    }
+
+    const profile = await this.profileRepo.findByUserId(userId);
+    if (!profile) {
+      throw new HandymanProfileNotFoundException();
+    }
+
+    const sniffed = sniffFileType(file.buffer);
+    if (!sniffed) {
+      throw new BadRequestException(
+        `Unsupported file type. Allowed types: ${ALLOWED_UPLOAD_MIME_TYPES.join(', ')}`,
+      );
+    }
+
+    const key = `handyman-documents/${profile.id}/${type.toLowerCase()}/${randomUUID()}.${sniffed.extension}`;
+
+    const stored = await this.storage.upload({
+      key,
+      body: file.buffer,
+      contentType: sniffed.mimeType,
+    });
+
+    try {
+      return await this.documentRepo.create({
+        handymanProfile: { connect: { id: profile.id } },
+        type,
+        fileUrl: stored.url,
+        fileName: sanitizeFileName(file.originalname, `${type.toLowerCase()}.${sniffed.extension}`),
+      });
+    } catch (error) {
+      // Do not leave an orphaned object behind if the row could not be written.
+      // StorageService.delete swallows and logs its own failures, so cleanup
+      // can never mask the database error we are about to rethrow.
+      await this.storage.delete(stored.key);
+      throw error;
+    }
   }
 
   async getDocuments(userId: string): Promise<HandymanDocument[]> {
