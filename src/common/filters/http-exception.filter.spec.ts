@@ -65,6 +65,21 @@ describe('GlobalExceptionFilter', () => {
     expect(body.details[0]).toHaveProperty('message', 'email must be valid');
   });
 
+  it('should preserve camelCase field names in validation details', () => {
+    // Lower-casing here turned `fileUrl` into `fileurl` and broke field-level
+    // error mapping on clients.
+    callFilter(
+      new BadRequestException({
+        message: ['fileUrl must be a valid URL', 'fileName should not be empty'],
+      }),
+    );
+    const body = mockResponse.json.mock.calls[0][0];
+    expect(body.details.map((detail: { field: string }) => detail.field)).toEqual([
+      'fileUrl',
+      'fileName',
+    ]);
+  });
+
   it('should include details when present in response object', () => {
     callFilter(new HttpException({ message: 'Bad', details: { foo: 'bar' } }, 400));
     const body = mockResponse.json.mock.calls[0][0];

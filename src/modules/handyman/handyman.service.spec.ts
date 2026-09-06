@@ -10,6 +10,7 @@ import {
   SERVICE_REQUEST_APPLICATION_REPOSITORY,
 } from '@/database/repositories';
 import { PrismaService } from '@/database/prisma.service';
+import { StorageService } from '@/storage';
 import { EVENTS } from '@common/constants';
 import {
   HandymanProfileNotFoundException,
@@ -19,7 +20,7 @@ import {
   ServiceRequestNotOpenException,
   ResourceNotFoundException,
 } from '@common/exceptions/domain.exception';
-import { ForbiddenException } from '@common/exceptions/base.exception';
+import { BadRequestException, ForbiddenException } from '@common/exceptions/base.exception';
 
 describe('HandymanService', () => {
   let service: HandymanService;
@@ -29,6 +30,7 @@ describe('HandymanService', () => {
   let mockApplicationRepo: Record<string, jest.Mock>;
   let mockPrisma: Record<string, Record<string, jest.Mock>>;
   let mockEventEmitter: { emit: jest.Mock };
+  let mockStorage: Record<string, jest.Mock>;
 
   const userId = 'user-1';
   const profileId = 'profile-1';
@@ -109,6 +111,18 @@ describe('HandymanService', () => {
 
     mockEventEmitter = { emit: jest.fn() };
 
+    mockStorage = {
+      upload: jest.fn().mockImplementation(async ({ key, contentType }) => ({
+        key,
+        url: `https://files.test/${key}`,
+        size: 4,
+        contentType,
+      })),
+      delete: jest.fn().mockResolvedValue(undefined),
+      getUrl: jest.fn((key: string) => `https://files.test/${key}`),
+      getProviderName: jest.fn(() => 'stub'),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         HandymanService,
@@ -118,6 +132,7 @@ describe('HandymanService', () => {
         { provide: SERVICE_REQUEST_APPLICATION_REPOSITORY, useValue: mockApplicationRepo },
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EventEmitter2, useValue: mockEventEmitter },
+        { provide: StorageService, useValue: mockStorage },
       ],
     }).compile();
 
@@ -306,6 +321,100 @@ describe('HandymanService', () => {
       await expect(service.uploadDocument(userId, dto)).rejects.toThrow(
         HandymanProfileNotFoundException,
       );
+    });
+  });
+
+  describe('uploadDocumentFile', () => {
+    const pdf = Buffer.concat([Buffer.from('%PDF-1.7'), Buffer.alloc(16)]);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+
+    it('sniffs the bytes, generates its own key, and records the document', async () => {
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockDocumentRepo.create.mockResolvedValue(mockDocument);
+
+      const result = await service.uploadDocumentFile(userId, 'GOVERNMENT_ID', {
+        buffer: pdf,
+        originalname: 'my id.pdf',
+        mimetype: 'application/octet-stream',
+      });
+
+      expect(result).toEqual(mockDocument);
+
+      const uploaded = mockStorage.upload.mock.calls[0][0];
+      expect(uploaded.contentType).toBe('application/pdf');
+      expect(uploaded.key).toMatch(
+        new RegExp(`^handyman-documents/${profileId}/government_id/[0-9a-f-]{36}\\.pdf$`),
+      );
+
+      expect(mockDocumentRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'GOVERNMENT_ID',
+          fileUrl: `https://files.test/${uploaded.key}`,
+        }),
+      );
+    });
+
+    it('never lets a client filename reach the storage key', async () => {
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockDocumentRepo.create.mockResolvedValue(mockDocument);
+
+      await service.uploadDocumentFile(userId, 'SELFIE', {
+        buffer: png,
+        originalname: '../../../etc/passwd',
+      });
+
+      const uploaded = mockStorage.upload.mock.calls[0][0];
+      expect(uploaded.key).not.toContain('..');
+      expect(uploaded.key).not.toContain('passwd');
+      expect(uploaded.key.endsWith('.png')).toBe(true);
+      expect(mockDocumentRepo.create.mock.calls[0][0].fileName).toBe('passwd');
+    });
+
+    it('rejects a file whose bytes are not on the allowlist', async () => {
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+
+      await expect(
+        service.uploadDocumentFile(userId, 'SELFIE', {
+          buffer: Buffer.from('MZ not a document'),
+          originalname: 'evil.png',
+          mimetype: 'image/png',
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(mockStorage.upload).not.toHaveBeenCalled();
+    });
+
+    it('rejects a missing or empty file', async () => {
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+
+      await expect(service.uploadDocumentFile(userId, 'SELFIE', undefined)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(
+        service.uploadDocumentFile(userId, 'SELFIE', { buffer: Buffer.alloc(0) }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws when the handyman has no profile yet', async () => {
+      mockProfileRepo.findByUserId.mockResolvedValue(null);
+
+      await expect(service.uploadDocumentFile(userId, 'SELFIE', { buffer: png })).rejects.toThrow(
+        HandymanProfileNotFoundException,
+      );
+
+      expect(mockStorage.upload).not.toHaveBeenCalled();
+    });
+
+    it('removes the stored object when the database write fails', async () => {
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockDocumentRepo.create.mockRejectedValue(new Error('db down'));
+
+      await expect(service.uploadDocumentFile(userId, 'SELFIE', { buffer: png })).rejects.toThrow(
+        'db down',
+      );
+
+      const uploaded = mockStorage.upload.mock.calls[0][0];
+      expect(mockStorage.delete).toHaveBeenCalledWith(uploaded.key);
     });
   });
 

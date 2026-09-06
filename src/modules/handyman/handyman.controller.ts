@@ -1,5 +1,24 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, Query } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam } from '@nestjs/swagger';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  ApiTags,
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiBody,
+  ApiConsumes,
+} from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import type {
   HandymanProfile,
@@ -12,6 +31,7 @@ import {
   CompleteProfileDto,
   UpdateProfileDto,
   UploadDocumentDto,
+  UploadDocumentFileDto,
   ApplyServiceRequestDto,
   HandymanServiceRequestQueryDto,
   HandymanProfileResponseDto,
@@ -26,7 +46,7 @@ import {
   ApiErrorResponses,
 } from '@/common/decorators';
 import { ServiceRequestResponseDto, ApplicationResponseDto } from '@modules/service-requests/dto';
-import { IRequestUser } from '@common/interfaces';
+import { IRequestUser, IUploadedFile } from '@common/interfaces';
 import type { IPaginatedResult } from '@common/interfaces';
 import { PaginationDto } from '@common/dto/pagination.dto';
 import { SUCCESS_MESSAGES } from '@common/constants';
@@ -107,6 +127,28 @@ export class HandymanController {
     @Body() dto: UploadDocumentDto,
   ): Promise<{ data: HandymanDocument; message: string }> {
     const data = await this.handymanService.uploadDocument(user.id, dto);
+    return { data, message: SUCCESS_MESSAGES.DOCUMENT_UPLOADED };
+  }
+
+  @Post('documents/upload')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Upload a verification document file',
+    description:
+      'Step 2 of verification: upload the document itself as multipart/form-data and record it in one call. ' +
+      'Accepts PDF, JPEG, PNG and WebP up to 5 MB. The declared filename and content type are ignored — the ' +
+      'type is determined from the file bytes and the storage key is generated server-side.',
+  })
+  @ApiBody({ type: UploadDocumentFileDto })
+  @ApiCreatedSuccessResponse(HandymanDocumentResponseDto)
+  @ApiErrorResponses()
+  async uploadDocumentFile(
+    @CurrentUser() user: IRequestUser,
+    @Body() dto: UploadDocumentFileDto,
+    @UploadedFile() file: IUploadedFile | undefined,
+  ): Promise<{ data: HandymanDocument; message: string }> {
+    const data = await this.handymanService.uploadDocumentFile(user.id, dto.type, file);
     return { data, message: SUCCESS_MESSAGES.DOCUMENT_UPLOADED };
   }
 

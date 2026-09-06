@@ -10,6 +10,7 @@ import { winstonConfig } from '@/logs';
 import { DatabaseModule } from '@/database/database.module';
 import { AuditModule } from '@common/services/audit.module';
 import { CacheModule } from '@/cache';
+import { StorageModule } from '@/storage';
 import { AuthModule } from '@/modules/auth/auth.module';
 import { UsersModule } from '@/modules/users/users.module';
 import { HealthModule } from '@/modules/health/health.module';
@@ -57,6 +58,9 @@ import { RolesGuard } from '@/common/guards';
 
     // Caching (pluggable: memory or redis based on CACHE_TYPE env)
     CacheModule,
+
+    // Object storage (pluggable: local filesystem or S3-compatible via STORAGE_DRIVER env)
+    StorageModule,
 
     // Database
     DatabaseModule,

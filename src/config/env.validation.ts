@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const envSchema = z.object({
+const baseEnvSchema = z.object({
   // Application
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(3000),
@@ -47,6 +47,54 @@ export const envSchema = z.object({
   SWAGGER_TITLE: z.string().default('FetchIt API'),
   SWAGGER_DESCRIPTION: z.string().default('FetchIt Backend API Documentation'),
   SWAGGER_VERSION: z.string().default('1.0'),
+
+  // Storage (pluggable object storage: 'local' or any S3-compatible service).
+  // Every entry is optional with a safe default so an existing deployment that
+  // sets none of them still boots on the filesystem driver.
+  STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+  STORAGE_PUBLIC_BASE_URL: z.string().url().optional(),
+  STORAGE_MAX_FILE_SIZE: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5 * 1024 * 1024),
+  STORAGE_LOCAL_ROOT: z.string().default('./storage/uploads'),
+  // S3-compatible settings. Leave STORAGE_S3_ENDPOINT unset for AWS S3; set it
+  // for Cloudflare R2, Supabase Storage or MinIO.
+  STORAGE_S3_ENDPOINT: z.string().url().optional(),
+  STORAGE_S3_REGION: z.string().default('auto'),
+  STORAGE_S3_BUCKET: z.string().optional(),
+  STORAGE_S3_ACCESS_KEY_ID: z.string().optional(),
+  STORAGE_S3_SECRET_ACCESS_KEY: z.string().optional(),
+  STORAGE_S3_FORCE_PATH_STYLE: z
+    .string()
+    .transform((val) => val !== 'false')
+    .default('true'),
+});
+
+/**
+ * Opting into the S3 driver without the settings it needs would fail on the
+ * first upload, long after boot. Fail fast instead — but only when the driver
+ * was explicitly selected, so the default `local` path stays credential-free.
+ */
+export const envSchema = baseEnvSchema.superRefine((env, ctx) => {
+  if (env.STORAGE_DRIVER !== 's3') return;
+
+  const required = [
+    'STORAGE_S3_BUCKET',
+    'STORAGE_S3_ACCESS_KEY_ID',
+    'STORAGE_S3_SECRET_ACCESS_KEY',
+  ] as const;
+
+  for (const key of required) {
+    if (!env[key]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [key],
+        message: `${key} is required when STORAGE_DRIVER is 's3'`,
+      });
+    }
+  }
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
