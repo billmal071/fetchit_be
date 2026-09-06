@@ -34,8 +34,15 @@ jobs:
 
       # On a pull request, run the BASE branch's copy of the scanner against
       # the PR's files, so a pull request cannot weaken the check that guards
-      # it. Falls back to the in-tree copy when the base has no copy yet
-      # (i.e. the PR that introduces the scanner).
+      # it.
+      #
+      # The fallback below runs the PR's own copy, which a malicious PR could
+      # have neutered. That path exists only while the base branch has no
+      # scanner — i.e. for the PR that introduces it, which is reviewed by a
+      # human precisely because of this. Once merged the base always has a
+      # copy, so the fallback is unreachable unless someone lands a deletion;
+      # it therefore emits a loud warning annotation rather than passing
+      # quietly.
       - name: Select scanner revision
         id: scanner
         env:
@@ -52,7 +59,7 @@ jobs:
               chmod +x "$scanner"
               echo "Running the scanner from origin/$BASE_REF (not this PR's copy)."
             else
-              echo "Base branch has no scanner yet - running this PR's copy."
+              echo "::warning::Base branch has no scanner - falling back to this PR's own copy, which the PR itself controls. Expected only for the change that introduces the scanner; review the diff by hand."
             fi
           fi
           echo "path=$scanner" >> "$GITHUB_OUTPUT"
