@@ -223,6 +223,40 @@ only the categories are seeded. Deployed environments therefore have no admin
 until someone runs the seed interactively on the server (or creates the user
 directly).
 
+## Security
+
+CI runs a **blocking** `Malware Scan` job (`scripts/ci/malware-scan.sh`) before
+anything installs or builds. It scans this repo's own tracked source — not its
+dependencies — for the obfuscated-loader malware that was committed to
+`fetchit_fe` as `postcss.config.mjs` in April 2026 and executed at build time:
+
+- the `global['!']` injector marker, in source, config **and** font files;
+- `require` / `module` assigned into a global subscript, the trick used to keep
+  a literal `require(` out of the obfuscated body;
+- long runs of padding whitespace used to push a payload out of view;
+- build/tool config files with an abnormally long line — the canonical shape
+  here, a 20KB `postcss.config.mjs` that looks 94 bytes long.
+
+Neither existing control can see this class of problem: `pnpm audit` (the
+non-blocking `Security Audit` job) only knows about published dependencies, and
+GitGuardian only looks for secrets. That is why this one is blocking and why
+every job that installs or builds depends on it.
+
+Run it locally with `./scripts/ci/malware-scan.sh`; pass file paths to scan
+specific files, or `--self-test` to prove every rule still fires against a
+synthetic fixture (CI runs that before the real scan, so a silently broken rule
+fails the build instead of passing it).
+
+On a pull request the job runs the **base branch's** copy of the scanner
+against the PR's files, so a pull request cannot weaken the check that guards
+it.
+
+The script is byte-identical in `fetchit_be`, `fetchit_fe` and
+`fetchit_wailist`, with `fetchit_be` holding the canonical copy. Change it
+there, bump `SCANNER_VERSION`, then copy it verbatim to the other two. Every CI
+run prints the version and the script's sha256, so drift between the three
+repos shows up in any workflow log.
+
 ## License
 
 MIT
