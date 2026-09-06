@@ -58,7 +58,12 @@ reviews:
   review_status: true
 
   auto_review:
-    enabled: true
+    # Auto review is OFF by deliberate choice. The workflow runs
+    # `coderabbit review --agent -t all` LOCALLY before pushing, which is
+    # unmetered; automatic PR reviews only burn the ~1-per-hour free-tier
+    # budget on diffs already reviewed. Trigger one on demand by commenting
+    # `@coderabbitai review` on a PR. Everything below still applies when it runs.
+    enabled: false
     # Re-review every push so a fix is checked without a manual @coderabbitai.
     auto_incremental_review: true
     # 0 = never auto-pause. The default (5) silently stops reviewing an active
