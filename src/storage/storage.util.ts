@@ -7,16 +7,20 @@
 const SAFE_KEY = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 export function assertSafeStorageKey(key: string): string {
+  const segments = key.split('/');
+
   if (
     !key ||
     key.length > 512 ||
     !SAFE_KEY.test(key) ||
-    key.includes('..') ||
-    key.includes('//') ||
-    key.endsWith('/')
+    key.endsWith('/') ||
+    // Rejects '', '.' and '..' segments, which covers 'a//b', 'a/./b' and
+    // 'a/../b' in one pass.
+    segments.some((segment) => segment === '' || segment === '.' || segment === '..')
   ) {
     throw new Error(`Unsafe storage key: ${JSON.stringify(key)}`);
   }
+
   return key;
 }
 

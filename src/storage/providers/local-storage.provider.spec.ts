@@ -55,6 +55,7 @@ describe('LocalStorageProvider', () => {
     ['/absolute.png', 'absolute path'],
     ['a/../../escape.png', 'traversal mid-key'],
     ['a//b.png', 'empty segment'],
+    ['a/./b.png', 'single-dot segment'],
     ['a/b/', 'trailing slash'],
   ])('refuses to write outside its root: %s (%s)', async (key) => {
     await expect(

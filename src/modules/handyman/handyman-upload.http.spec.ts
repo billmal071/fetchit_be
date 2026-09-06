@@ -10,6 +10,7 @@
 
 // Set before `configuration()` is loaded so the multer limit under test is a
 // small, fast-to-exercise number rather than the 5 MB production default.
+const originalMaxFileSize = process.env.STORAGE_MAX_FILE_SIZE;
 process.env.STORAGE_MAX_FILE_SIZE = '1024';
 
 import { Global, MiddlewareConsumer, Module, NestModule, ValidationPipe } from '@nestjs/common';
@@ -118,7 +119,11 @@ describe('Handyman document upload (HTTP)', () => {
 
   afterAll(async () => {
     await app.close();
-    delete process.env.STORAGE_MAX_FILE_SIZE;
+    if (originalMaxFileSize === undefined) {
+      delete process.env.STORAGE_MAX_FILE_SIZE;
+    } else {
+      process.env.STORAGE_MAX_FILE_SIZE = originalMaxFileSize;
+    }
   });
 
   beforeEach(() => {

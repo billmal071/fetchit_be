@@ -256,6 +256,8 @@ export class HandymanService {
       });
     } catch (error) {
       // Do not leave an orphaned object behind if the row could not be written.
+      // StorageService.delete swallows and logs its own failures, so cleanup
+      // can never mask the database error we are about to rethrow.
       await this.storage.delete(stored.key);
       throw error;
     }
