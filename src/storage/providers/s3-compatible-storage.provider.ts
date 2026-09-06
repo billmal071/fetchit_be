@@ -1,20 +1,24 @@
 import { Logger } from '@nestjs/common';
+// `@aws-sdk/client-s3` is the reference client for the S3 *protocol*, not a tie
+// to AWS. Cloudflare R2, Backblaze B2, Supabase Storage and MinIO all document
+// this exact package as the way to talk to them. No AWS account is involved.
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { IStorageProvider, IStorageUploadInput, IStoredObject } from '../interfaces';
 import { assertSafeStorageKey, joinUrl } from '../storage.util';
 
-export interface IS3StorageOptions {
+export interface IS3CompatibleStorageOptions {
   /**
-   * Custom S3 endpoint. Leave unset for AWS S3; set it for Cloudflare R2
-   * (`https://<account>.r2.cloudflarestorage.com`), Supabase Storage
-   * (`https://<ref>.supabase.co/storage/v1/s3`) or MinIO.
+   * Storage endpoint. Cloudflare R2 (the intended target) uses
+   * `https://<account-id>.r2.cloudflarestorage.com`. Also works with Backblaze
+   * B2, Supabase Storage and MinIO. Leave unset only for AWS S3 itself, which
+   * derives its endpoint from the region.
    */
   endpoint?: string;
   region: string;
   bucket: string;
   accessKeyId: string;
   secretAccessKey: string;
-  /** Required by MinIO and Supabase; harmless on R2. */
+  /** Required by R2, MinIO and Supabase. */
   forcePathStyle: boolean;
   /** Base URL for returned object URLs (e.g. a CDN or R2 public bucket domain). */
   publicBaseUrl?: string;
@@ -23,14 +27,16 @@ export interface IS3StorageOptions {
 }
 
 /**
- * S3-compatible storage driver.
+ * S3-compatible object storage driver.
  *
- * Everything vendor-specific (endpoint, region, bucket, credentials, path
+ * "S3-compatible" is the name of the wire protocol, not a vendor. Everything
+ * that differs between providers (endpoint, region, bucket, credentials, path
  * style) comes from configuration, so the same code runs unchanged against
- * Cloudflare R2, AWS S3, Supabase Storage and MinIO.
+ * Cloudflare R2 — the intended target — as well as Backblaze B2, Supabase
+ * Storage, MinIO and AWS S3.
  */
-export class S3StorageProvider implements IStorageProvider {
-  private readonly logger = new Logger(S3StorageProvider.name);
+export class S3CompatibleStorageProvider implements IStorageProvider {
+  private readonly logger = new Logger(S3CompatibleStorageProvider.name);
   private readonly client: S3Client;
   private readonly bucket: string;
   private readonly publicBaseUrl?: string;
@@ -38,7 +44,7 @@ export class S3StorageProvider implements IStorageProvider {
   private readonly region: string;
   private readonly forcePathStyle: boolean;
 
-  constructor(options: IS3StorageOptions) {
+  constructor(options: IS3CompatibleStorageOptions) {
     this.bucket = options.bucket;
     this.publicBaseUrl = options.publicBaseUrl;
     this.endpoint = options.endpoint;
@@ -58,7 +64,8 @@ export class S3StorageProvider implements IStorageProvider {
       });
 
     this.logger.log(
-      `S3 storage initialized (bucket=${this.bucket}, endpoint=${this.endpoint ?? 'aws'})`,
+      `S3-compatible storage initialized (bucket=${this.bucket}, ` +
+        `endpoint=${this.endpoint ?? 'aws-s3-default'})`,
     );
   }
 
@@ -104,6 +111,6 @@ export class S3StorageProvider implements IStorageProvider {
   }
 
   getProviderName(): string {
-    return 's3';
+    return 's3-compatible';
   }
 }

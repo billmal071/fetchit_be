@@ -18,10 +18,10 @@ describe('storage environment configuration', () => {
     expect(config.STORAGE_S3_FORCE_PATH_STYLE).toBe(true);
   });
 
-  it('accepts a fully configured S3-compatible driver', () => {
+  it('accepts a fully configured S3-compatible driver (Cloudflare R2)', () => {
     const config = validateEnv({
       ...baseEnv,
-      STORAGE_DRIVER: 's3',
+      STORAGE_DRIVER: 's3-compatible',
       STORAGE_S3_ENDPOINT: 'https://acct.r2.cloudflarestorage.com',
       STORAGE_S3_BUCKET: 'fetchit-documents',
       STORAGE_S3_ACCESS_KEY_ID: 'key',
@@ -30,14 +30,20 @@ describe('storage environment configuration', () => {
       STORAGE_MAX_FILE_SIZE: '1048576',
     });
 
-    expect(config.STORAGE_DRIVER).toBe('s3');
+    expect(config.STORAGE_DRIVER).toBe('s3-compatible');
     expect(config.STORAGE_S3_FORCE_PATH_STYLE).toBe(false);
     expect(config.STORAGE_MAX_FILE_SIZE).toBe(1048576);
   });
 
-  it('fails fast when the S3 driver is selected without credentials', () => {
+  it('fails fast when the s3-compatible driver is selected without credentials', () => {
+    expect(() => validateEnv({ ...baseEnv, STORAGE_DRIVER: 's3-compatible' })).toThrow(
+      /STORAGE_S3_BUCKET is required when STORAGE_DRIVER is 's3-compatible'/,
+    );
+  });
+
+  it("rejects the old bare 's3' value so a stale .env fails loudly", () => {
     expect(() => validateEnv({ ...baseEnv, STORAGE_DRIVER: 's3' })).toThrow(
-      /STORAGE_S3_BUCKET is required when STORAGE_DRIVER is 's3'/,
+      /Environment validation failed/,
     );
   });
 

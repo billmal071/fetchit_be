@@ -2,9 +2,10 @@
  * Storage Provider Interface
  *
  * Abstracts object storage so business logic never depends on a specific
- * vendor. The S3 driver speaks the S3 API, which Cloudflare R2, AWS S3,
- * Supabase Storage and MinIO all implement — switching between them is an
- * environment change, not a code change.
+ * vendor. The `s3-compatible` driver speaks the S3 wire protocol, which
+ * Cloudflare R2, Backblaze B2, Supabase Storage, MinIO and AWS S3 all
+ * implement — switching between them is an environment change, not a code
+ * change.
  */
 export interface IStorageProvider {
   /**
@@ -48,7 +49,7 @@ export interface IStoredObject {
   contentType: string;
 }
 
-export type StorageDriver = 'local' | 's3';
+export type StorageDriver = 'local' | 's3-compatible';
 
 export interface IStorageConfig {
   driver: StorageDriver;

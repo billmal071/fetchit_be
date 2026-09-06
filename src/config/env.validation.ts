@@ -48,10 +48,10 @@ const baseEnvSchema = z.object({
   SWAGGER_DESCRIPTION: z.string().default('FetchIt Backend API Documentation'),
   SWAGGER_VERSION: z.string().default('1.0'),
 
-  // Storage (pluggable object storage: 'local' or any S3-compatible service).
+  // Storage (pluggable object storage: 'local' or 's3-compatible').
   // Every entry is optional with a safe default so an existing deployment that
   // sets none of them still boots on the filesystem driver.
-  STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+  STORAGE_DRIVER: z.enum(['local', 's3-compatible']).default('local'),
   STORAGE_PUBLIC_BASE_URL: z.string().url().optional(),
   STORAGE_MAX_FILE_SIZE: z.coerce
     .number()
@@ -59,8 +59,16 @@ const baseEnvSchema = z.object({
     .positive()
     .default(5 * 1024 * 1024),
   STORAGE_LOCAL_ROOT: z.string().default('./storage/uploads'),
-  // S3-compatible settings. Leave STORAGE_S3_ENDPOINT unset for AWS S3; set it
-  // for Cloudflare R2, Supabase Storage or MinIO.
+  // The STORAGE_S3_* variables configure the *S3 wire protocol*, not AWS. "S3"
+  // is what Cloudflare, Backblaze and Supabase each call this API in their own
+  // documentation, which is why the prefix keeps that name. These settings work
+  // against Cloudflare R2 (our target), Backblaze B2, Supabase Storage and
+  // MinIO just as they do against AWS S3, and cost nothing on R2's free tier:
+  // https://developers.cloudflare.com/r2/pricing/
+  //
+  // STORAGE_S3_ENDPOINT is required by every provider except AWS S3 itself,
+  // which derives its endpoint from the region. For Cloudflare R2 it is
+  // https://<account-id>.r2.cloudflarestorage.com
   STORAGE_S3_ENDPOINT: z.string().url().optional(),
   STORAGE_S3_REGION: z.string().default('auto'),
   STORAGE_S3_BUCKET: z.string().optional(),
@@ -73,12 +81,13 @@ const baseEnvSchema = z.object({
 });
 
 /**
- * Opting into the S3 driver without the settings it needs would fail on the
- * first upload, long after boot. Fail fast instead — but only when the driver
- * was explicitly selected, so the default `local` path stays credential-free.
+ * Opting into the s3-compatible driver without the settings it needs would fail
+ * on the first upload, long after boot. Fail fast instead — but only when the
+ * driver was explicitly selected, so the default `local` path stays
+ * credential-free.
  */
 export const envSchema = baseEnvSchema.superRefine((env, ctx) => {
-  if (env.STORAGE_DRIVER !== 's3') return;
+  if (env.STORAGE_DRIVER !== 's3-compatible') return;
 
   const required = [
     'STORAGE_S3_BUCKET',
@@ -91,7 +100,7 @@ export const envSchema = baseEnvSchema.superRefine((env, ctx) => {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: [key],
-        message: `${key} is required when STORAGE_DRIVER is 's3'`,
+        message: `${key} is required when STORAGE_DRIVER is 's3-compatible'`,
       });
     }
   }

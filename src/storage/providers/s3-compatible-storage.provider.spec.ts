@@ -1,14 +1,17 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
-import { S3StorageProvider, IS3StorageOptions } from './s3-storage.provider';
+import {
+  S3CompatibleStorageProvider,
+  IS3CompatibleStorageOptions,
+} from './s3-compatible-storage.provider';
 
-function createProvider(overrides: Partial<IS3StorageOptions> = {}): {
-  provider: S3StorageProvider;
+function createProvider(overrides: Partial<IS3CompatibleStorageOptions> = {}): {
+  provider: S3CompatibleStorageProvider;
   send: jest.Mock;
 } {
   const send = jest.fn().mockResolvedValue({});
   const client = { send } as unknown as S3Client;
 
-  const provider = new S3StorageProvider({
+  const provider = new S3CompatibleStorageProvider({
     region: 'auto',
     bucket: 'fetchit-documents',
     accessKeyId: 'key',
@@ -21,7 +24,7 @@ function createProvider(overrides: Partial<IS3StorageOptions> = {}): {
   return { provider, send };
 }
 
-describe('S3StorageProvider', () => {
+describe('S3CompatibleStorageProvider', () => {
   it('puts the object with the sniffed content type and server-generated key', async () => {
     const { provider, send } = createProvider({
       endpoint: 'https://acct.r2.cloudflarestorage.com',
@@ -81,10 +84,14 @@ describe('S3StorageProvider', () => {
       expect(provider.getUrl('a/b.pdf')).toBe('https://files.fetchit.com.ng/a/b.pdf');
     });
 
-    it('builds a path-style URL for MinIO/Supabase-style endpoints', () => {
-      const { provider } = createProvider({ endpoint: 'http://localhost:9000' });
+    it('builds a path-style URL, as Cloudflare R2 and MinIO require', () => {
+      const { provider } = createProvider({
+        endpoint: 'https://acct.r2.cloudflarestorage.com',
+      });
 
-      expect(provider.getUrl('a/b.pdf')).toBe('http://localhost:9000/fetchit-documents/a/b.pdf');
+      expect(provider.getUrl('a/b.pdf')).toBe(
+        'https://acct.r2.cloudflarestorage.com/fetchit-documents/a/b.pdf',
+      );
     });
 
     it('builds a virtual-host URL when path style is off', () => {
@@ -108,6 +115,6 @@ describe('S3StorageProvider', () => {
   });
 
   it('reports its provider name', () => {
-    expect(createProvider().provider.getProviderName()).toBe('s3');
+    expect(createProvider().provider.getProviderName()).toBe('s3-compatible');
   });
 });

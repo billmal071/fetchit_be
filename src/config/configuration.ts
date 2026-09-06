@@ -106,7 +106,7 @@ export default (): IConfiguration => ({
     fromName: process.env.RESEND_FROM_NAME || '',
   },
   storage: {
-    driver: process.env.STORAGE_DRIVER === 's3' ? 's3' : 'local',
+    driver: process.env.STORAGE_DRIVER === 's3-compatible' ? 's3-compatible' : 'local',
     publicBaseUrl: process.env.STORAGE_PUBLIC_BASE_URL || undefined,
     maxFileSize: parseInt(process.env.STORAGE_MAX_FILE_SIZE || '5242880', 10),
     local: {
