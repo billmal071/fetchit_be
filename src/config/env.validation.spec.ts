@@ -41,6 +41,36 @@ describe('storage environment configuration', () => {
     );
   });
 
+  it('accepts a fully configured Cloudinary driver', () => {
+    const config = validateEnv({
+      ...baseEnv,
+      STORAGE_DRIVER: 'cloudinary',
+      STORAGE_CLOUDINARY_CLOUD_NAME: 'fetchit',
+      STORAGE_CLOUDINARY_API_KEY: 'key',
+      STORAGE_CLOUDINARY_API_SECRET: 'secret',
+    });
+
+    expect(config.STORAGE_DRIVER).toBe('cloudinary');
+  });
+
+  it('fails fast when the cloudinary driver is selected without credentials', () => {
+    expect(() => validateEnv({ ...baseEnv, STORAGE_DRIVER: 'cloudinary' })).toThrow(
+      /STORAGE_CLOUDINARY_CLOUD_NAME is required when STORAGE_DRIVER is 'cloudinary'/,
+    );
+  });
+
+  it('does not demand S3 credentials from the cloudinary driver', () => {
+    expect(() =>
+      validateEnv({
+        ...baseEnv,
+        STORAGE_DRIVER: 'cloudinary',
+        STORAGE_CLOUDINARY_CLOUD_NAME: 'fetchit',
+        STORAGE_CLOUDINARY_API_KEY: 'key',
+        STORAGE_CLOUDINARY_API_SECRET: 'secret',
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects the old bare 's3' value so a stale .env fails loudly", () => {
     expect(() => validateEnv({ ...baseEnv, STORAGE_DRIVER: 's3' })).toThrow(
       /Environment validation failed/,

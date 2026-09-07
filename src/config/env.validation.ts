@@ -51,7 +51,7 @@ const baseEnvSchema = z.object({
   // Storage (pluggable object storage: 'local' or 's3-compatible').
   // Every entry is optional with a safe default so an existing deployment that
   // sets none of them still boots on the filesystem driver.
-  STORAGE_DRIVER: z.enum(['local', 's3-compatible']).default('local'),
+  STORAGE_DRIVER: z.enum(['local', 's3-compatible', 'cloudinary']).default('local'),
   STORAGE_PUBLIC_BASE_URL: z.string().url().optional(),
   STORAGE_MAX_FILE_SIZE: z.coerce
     .number()
@@ -78,29 +78,42 @@ const baseEnvSchema = z.object({
     .string()
     .transform((val) => val !== 'false')
     .default('true'),
+  // Cloudinary is not S3-compatible, so it takes its own credentials rather
+  // than the STORAGE_S3_* set. All three come from the account's dashboard.
+  STORAGE_CLOUDINARY_CLOUD_NAME: z.string().optional(),
+  STORAGE_CLOUDINARY_API_KEY: z.string().optional(),
+  STORAGE_CLOUDINARY_API_SECRET: z.string().optional(),
 });
 
-/**
- * Opting into the s3-compatible driver without the settings it needs would fail
- * on the first upload, long after boot. Fail fast instead — but only when the
- * driver was explicitly selected, so the default `local` path stays
- * credential-free.
- */
-export const envSchema = baseEnvSchema.superRefine((env, ctx) => {
-  if (env.STORAGE_DRIVER !== 's3-compatible') return;
-
-  const required = [
+/** Credentials each non-default driver cannot run without. */
+const REQUIRED_BY_DRIVER = {
+  's3-compatible': [
     'STORAGE_S3_BUCKET',
     'STORAGE_S3_ACCESS_KEY_ID',
     'STORAGE_S3_SECRET_ACCESS_KEY',
-  ] as const;
+  ],
+  cloudinary: [
+    'STORAGE_CLOUDINARY_CLOUD_NAME',
+    'STORAGE_CLOUDINARY_API_KEY',
+    'STORAGE_CLOUDINARY_API_SECRET',
+  ],
+} as const satisfies Record<string, readonly (keyof z.infer<typeof baseEnvSchema>)[]>;
+
+/**
+ * Opting into a cloud driver without the settings it needs would fail on the
+ * first upload, long after boot. Fail fast instead — but only when the driver
+ * was explicitly selected, so the default `local` path stays credential-free.
+ */
+export const envSchema = baseEnvSchema.superRefine((env, ctx) => {
+  const required = REQUIRED_BY_DRIVER[env.STORAGE_DRIVER as keyof typeof REQUIRED_BY_DRIVER];
+  if (!required) return;
 
   for (const key of required) {
     if (!env[key]) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: [key],
-        message: `${key} is required when STORAGE_DRIVER is 's3-compatible'`,
+        message: `${key} is required when STORAGE_DRIVER is '${env.STORAGE_DRIVER}'`,
       });
     }
   }
