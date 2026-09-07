@@ -17,6 +17,7 @@ import { HealthModule } from '@/modules/health/health.module';
 import { WaitlistModule } from '@/modules/waitlist/waitlist.module';
 import { ServiceCategoriesModule } from '@/modules/service-categories/service-categories.module';
 import { HandymanModule } from '@/modules/handyman/handyman.module';
+import { UploadsModule } from '@/modules/uploads/uploads.module';
 import { ServiceRequestsModule } from '@/modules/service-requests/service-requests.module';
 import { AdminModule } from '@/modules/admin/admin.module';
 import { JobsModule } from '@/jobs/jobs.module';
@@ -73,6 +74,7 @@ import { RolesGuard } from '@/common/guards';
     UsersModule,
     HealthModule,
     WaitlistModule,
+    UploadsModule,
 
     // Feature Modules - Handyman Dashboard
     ServiceCategoriesModule,
