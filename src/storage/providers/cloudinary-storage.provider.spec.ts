@@ -226,4 +226,59 @@ describe('CloudinaryStorageProvider', () => {
   it('names itself for health output', () => {
     expect(createProvider().provider.getProviderName()).toBe('cloudinary');
   });
+
+  /**
+   * The tests above assert what we hand the SDK, against a fake client — which
+   * would still pass if our public id / format / resource type mapping were
+   * wrong in a way only the SDK's own URL builder reveals. These drive the
+   * real SDK instead. Signing is a local HMAC over the path and the API
+   * secret, so this needs no account and makes no network call; only upload
+   * and delete would.
+   */
+  describe('against the real Cloudinary SDK', () => {
+    const realProvider = new CloudinaryStorageProvider({
+      cloudName: 'fetchit-test',
+      apiKey: '123456789012345',
+      apiSecret: 'THROWAWAY_TEST_SECRET_NOT_A_REAL_CREDENTIAL',
+    });
+
+    it('builds a signed image URL with the extension restored by format', () => {
+      const url = realProvider.getUrl('avatars/u1/abc.png');
+
+      expect(url).toMatch(
+        /^https:\/\/res\.cloudinary\.com\/fetchit-test\/image\/authenticated\/s--[A-Za-z0-9_-]+--\/v\d+\/avatars\/u1\/abc\.png$/,
+      );
+    });
+
+    it('builds a signed raw URL for a PDF, extension inside the public id', () => {
+      const url = realProvider.getUrl('handyman-documents/p1/government_id/ghi.pdf');
+
+      expect(url).toMatch(
+        /^https:\/\/res\.cloudinary\.com\/fetchit-test\/raw\/authenticated\/s--[A-Za-z0-9_-]+--\/v\d+\/handyman-documents\/p1\/government_id\/ghi\.pdf$/,
+      );
+    });
+
+    it('never emits an unsigned or public-type delivery URL', () => {
+      for (const key of ['avatars/u1/abc.png', 'docs/p1/x.pdf', 'receipts/u1/r.jpg']) {
+        const url = realProvider.getUrl(key);
+
+        expect(url).toContain('/authenticated/');
+        expect(url).not.toContain('/upload/');
+        expect(url).toMatch(/\/s--[A-Za-z0-9_-]+--\//);
+      }
+    });
+
+    it('carries no expiry or analytics query string, so a stored URL keeps working', () => {
+      expect(realProvider.getUrl('avatars/u1/abc.png')).not.toContain('?');
+    });
+
+    it('signs each key differently, so one URL does not authorize another', () => {
+      const a = realProvider.getUrl('avatars/u1/abc.png');
+      const b = realProvider.getUrl('avatars/u2/abc.png');
+      const signature = (url: string): string => /s--([A-Za-z0-9_-]+)--/.exec(url)?.[1] ?? '';
+
+      expect(signature(a)).not.toBe(signature(b));
+      expect(signature(a)).toHaveLength(8);
+    });
+  });
 });
