@@ -137,7 +137,8 @@ export class HandymanController {
     summary: 'Upload a verification document file',
     description:
       'Step 2 of verification: upload the document itself as multipart/form-data and record it in one call. ' +
-      'Accepts PDF, JPEG, PNG and WebP up to 5 MB. The declared filename and content type are ignored — the ' +
+      'Accepts PDF, JPEG, PNG and WebP, up to the size configured by STORAGE_MAX_FILE_SIZE ' +
+      '(default 5 MB). The declared filename and content type are ignored — the ' +
       'type is determined from the file bytes and the storage key is generated server-side.',
   })
   @ApiBody({ type: UploadDocumentFileDto })

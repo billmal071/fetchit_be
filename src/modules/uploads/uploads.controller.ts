@@ -21,7 +21,8 @@ export class UploadsController {
     summary: 'Upload a file to object storage',
     description:
       'Stores a file and returns its URL, for the routes that persist a URL rather than the bytes ' +
-      '(avatars via PATCH /users/me, shopping receipts). Accepts PDF, JPEG, PNG and WebP up to 5 MB. ' +
+      '(avatars via PATCH /users/me, shopping receipts). Accepts PDF, JPEG, PNG and WebP, up to the ' +
+      'size configured by STORAGE_MAX_FILE_SIZE (default 5 MB). ' +
       'The declared filename and content type are ignored — the type is determined from the file bytes ' +
       "and the storage key is generated server-side under the caller's user id. Handyman verification " +
       'documents use POST /handyman/documents/upload instead, which also records the document.',
