@@ -53,3 +53,53 @@ describe('storage environment configuration', () => {
     );
   });
 });
+
+describe('API_VERSION', () => {
+  it('defaults to a bare number, so routes mount at /api/v1', () => {
+    // Nest URI versioning prepends "v" to this value. The default used to be
+    // 'v1', which served every route at /api/vv1.
+    expect(validateEnv({ ...baseEnv }).API_VERSION).toBe('1');
+  });
+
+  it('rejects a "v"-prefixed value rather than serving /api/vv1', () => {
+    expect(() => validateEnv({ ...baseEnv, API_VERSION: 'v1' })).toThrow(/must not start with "v"/);
+    expect(() => validateEnv({ ...baseEnv, API_VERSION: 'V2' })).toThrow(/must not start with "v"/);
+  });
+
+  it('accepts a bare version number', () => {
+    expect(validateEnv({ ...baseEnv, API_VERSION: '2' }).API_VERSION).toBe('2');
+  });
+});
+
+describe('variables read by configuration()', () => {
+  /**
+   * Nest assigns only the validated object back to process.env, and zod strips
+   * unknown keys — so anything missing here is silently dropped when it is set
+   * via .env rather than as a real environment variable. These nine were the
+   * ones that went missing; the app crashed at boot inside the Resend client.
+   */
+  const optionalPassthrough = [
+    'REDIS_URL',
+    'REDIS_TLS',
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_CLIENT_SECRET',
+    'GOOGLE_CALLBACK_URL',
+    'RESEND_API_KEY',
+    'RESEND_FROM',
+    'RESEND_FROM_EMAIL',
+    'RESEND_FROM_NAME',
+  ] as const;
+
+  it.each(optionalPassthrough)('keeps %s instead of stripping it', (key) => {
+    const config = validateEnv({ ...baseEnv, [key]: 'configured-value' }) as Record<
+      string,
+      unknown
+    >;
+
+    expect(config[key]).toBe('configured-value');
+  });
+
+  it('still boots when none of them are set', () => {
+    expect(() => validateEnv({ ...baseEnv })).not.toThrow();
+  });
+});
