@@ -78,11 +78,20 @@ reviews:
       - "dev"
       - "staging"
 
-  # Keep the review budget on real source. These are lockfiles, build output and
+  # Keep the review budget on real source. These are build output and
   # vendored/generated artefacts — reviewing them wastes a pass and adds noise.
+  #
+  # pnpm-lock.yaml is deliberately NOT excluded. CodeRabbit applies path_filters
+  # to its sparse checkout, and osvScanner (enabled below) finds vulnerable
+  # dependencies by scanning the lockfiles present in that checkout. Excluding
+  # the lockfile leaves it with nothing to scan, so dependency review silently
+  # does nothing — and the repo's own `pnpm audit` job is continue-on-error, so
+  # nothing else gates on advisories either. The cost is occasional review noise
+  # on lockfile diffs; that is worth paying for working supply-chain scanning.
+  # package-lock.json and yarn.lock stay excluded: this repo is pnpm-only, so
+  # either one appearing is an accident rather than a dependency input.
   path_filters:
     - "!**/node_modules/**"
-    - "!**/pnpm-lock.yaml"
     - "!**/package-lock.json"
     - "!**/yarn.lock"
     - "!**/*.tsbuildinfo"
