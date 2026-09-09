@@ -1,11 +1,40 @@
 import { z } from 'zod';
 
+/**
+ * EVERY environment variable the app reads must be declared here, even the
+ * optional ones with empty defaults.
+ *
+ * `ConfigModule` is wired with `validate: validateEnv`, and Nest assigns only
+ * the *validated* object back to `process.env`. Zod strips keys it does not
+ * know about, so a variable that is missing from this schema and set only in
+ * `.env` never reaches `process.env` at all — `configuration()` then reads
+ * `undefined` and silently falls back to its default.
+ *
+ * That is not hypothetical: the four RESEND_ and three GOOGLE_ values, plus
+ * REDIS_URL and REDIS_TLS, were all absent, and the app crashed at boot inside
+ * the Resend client for anyone who configured it through `.env` rather than
+ * through real environment variables. It worked on the servers only because
+ * those set them as actual env vars, which Nest never overwrites.
+ *
+ * If you add a `process.env.X` read anywhere, add X here in the same commit.
+ */
 const baseEnvSchema = z.object({
   // Application
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(3000),
   API_PREFIX: z.string().default('api'),
-  API_VERSION: z.string().default('v1'),
+  // Bare version number, WITHOUT a leading "v". Nest's URI versioning prepends
+  // its own "v", so API_VERSION=v1 mounts every route at /api/vv1 and each
+  // /api/v1 request 404s. Rejected explicitly below rather than left to be
+  // discovered against a running server.
+  API_VERSION: z
+    .string()
+    .default('1')
+    .refine((value) => !/^v/i.test(value), {
+      message:
+        'API_VERSION must not start with "v" — Nest URI versioning adds that prefix itself, ' +
+        'so "v1" would serve routes at /api/vv1. Use "1".',
+    }),
 
   // Frontend web app (the URL users open in a browser, NOT the API host).
   // Required and validated so the app fails fast instead of silently falling
@@ -31,6 +60,21 @@ const baseEnvSchema = z.object({
   REDIS_HOST: z.string().default('localhost'),
   REDIS_PORT: z.coerce.number().default(6379),
   REDIS_PASSWORD: z.string().optional().default(''),
+  REDIS_URL: z.string().optional().default(''),
+  REDIS_TLS: z.string().optional().default('false'),
+
+  // Google OAuth. Optional: the app boots without it, and only the Google
+  // sign-in route is unavailable.
+  GOOGLE_CLIENT_ID: z.string().optional().default(''),
+  GOOGLE_CLIENT_SECRET: z.string().optional().default(''),
+  GOOGLE_CALLBACK_URL: z.string().optional().default(''),
+
+  // Email (Resend). Optional: without a key the provider logs what it would
+  // have sent instead of sending it.
+  RESEND_API_KEY: z.string().optional().default(''),
+  RESEND_FROM: z.string().optional().default(''),
+  RESEND_FROM_EMAIL: z.string().optional().default(''),
+  RESEND_FROM_NAME: z.string().optional().default(''),
 
   // Rate Limiting
   THROTTLE_TTL: z.coerce.number().default(60),

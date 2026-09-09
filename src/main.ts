@@ -85,7 +85,9 @@ async function bootstrap(): Promise<void> {
   app.setGlobalPrefix(appConfig?.apiPrefix || 'api');
   app.enableVersioning({
     type: VersioningType.URI,
-    defaultVersion: appConfig?.apiVersion || 'v1',
+    // Nest prepends "v" to this value, so '1' yields /api/v1. A 'v1' here would
+    // serve /api/vv1 — see the API_VERSION note in env.validation.ts.
+    defaultVersion: appConfig?.apiVersion || '1',
   });
 
   // Global Validation Pipe

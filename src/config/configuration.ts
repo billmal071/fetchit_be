@@ -65,7 +65,8 @@ export default (): IConfiguration => ({
     nodeEnv: process.env.NODE_ENV || 'development',
     port: parseInt(process.env.PORT || '3000', 10),
     apiPrefix: process.env.API_PREFIX || 'api',
-    apiVersion: process.env.API_VERSION || 'v1',
+    // No "v" prefix: Nest URI versioning adds one, so 'v1' here serves /api/vv1.
+    apiVersion: process.env.API_VERSION || '1',
     frontendUrl: process.env.FRONTEND_URL || 'http://localhost:4200',
   },
   jwt: {
