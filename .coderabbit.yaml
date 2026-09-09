@@ -1,0 +1,162 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+#
+# CodeRabbit configuration — fetchit_be
+#
+# WHY `profile: assertive` — read this before changing it back to `chill`.
+#
+# CodeRabbit's default profile is `chill`, which deliberately withholds
+# lower-confidence findings on each pass. In practice that meant real problems
+# only surfaced on the second or third review round (e.g. a path-traversal gap
+# and a PR that weakened its own security scanner both landed on round 2).
+# We are on the FREE plan, which allows roughly ONE review per hour, so every
+# finding held back for a later round costs an hour of wall-clock time.
+#
+# `assertive` front-loads the findings: more comments per pass, including more
+# low-severity nits, in exchange for far fewer rounds. That trade is deliberate.
+# The noise is kept in check by `path_filters` (generated/vendored files never
+# reach the reviewer) and by disabling the prose/style linters that produce
+# opinions rather than defects. Do not "fix the noise" by reverting to `chill`
+# — that just moves the same findings into a later, slower round.
+#
+# The shared settings below (profile, workflow, summary options, common tools)
+# are kept IDENTICAL across fetchit_be, fetchit_fe and fetchit_wailist. Only
+# `auto_review.base_branches`, `path_filters` and the stack-specific tools
+# differ. Change one repo, change all three.
+
+language: en-US
+tone_instructions: "Be direct and specific. Prioritise correctness, security and data-integrity issues; state the concrete failure mode rather than restating the diff."
+early_access: false
+enable_free_tier: true
+
+reviews:
+  # See the header: front-load findings instead of trickling them across rounds.
+  profile: assertive
+
+  # Do NOT gate merges on CodeRabbit. Approval-on-resolution would force an
+  # extra review round per fix, and on the free tier each round is ~1 hour.
+  # Consistent with the other advisory gates in CI (pnpm audit is report-only).
+  request_changes_workflow: false
+
+  # Signal, not ceremony. Keep the summary and the changed-files table; drop the
+  # decorative and inference-heavy walkthrough sections, which cost review
+  # budget and tell us nothing we cannot read off the diff.
+  high_level_summary: true
+  changed_files_summary: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  assess_linked_issues: false
+  related_issues: false
+  related_prs: false
+  suggested_labels: false
+  suggested_reviewers: false
+  in_progress_fortune: false
+  poem: false
+
+  # Keep this on: it is the message that revealed reviews were silently
+  # disabled on fetchit_fe's `dev` PRs for months.
+  review_status: true
+
+  auto_review:
+    # Auto review is OFF by deliberate choice. The workflow runs
+    # `coderabbit review --agent -t all` LOCALLY before pushing, which is
+    # unmetered; automatic PR reviews only burn the ~1-per-hour free-tier
+    # budget on diffs already reviewed. Trigger one on demand by commenting
+    # `@coderabbitai review` on a PR. Everything below still applies when it runs.
+    enabled: false
+    # Re-review every push so a fix is checked without a manual @coderabbitai.
+    auto_incremental_review: true
+    # 0 = never auto-pause. The default (5) silently stops reviewing an active
+    # branch mid-flight, which reads as "CodeRabbit found nothing".
+    auto_pause_after_reviewed_commits: 0
+    drafts: false
+    # CodeRabbit only auto-reviews the repository's DEFAULT branch unless other
+    # bases are listed here. Default branch here is `dev`; `staging` is listed so release
+    # PRs are reviewed too. `main` is intentionally absent: there is no
+    # production backend and BE is never promoted to `main`.
+    base_branches:
+      - "dev"
+      - "staging"
+
+  # Keep the review budget on real source. These are build output and
+  # vendored/generated artefacts — reviewing them wastes a pass and adds noise.
+  #
+  # pnpm-lock.yaml is deliberately NOT excluded. CodeRabbit applies path_filters
+  # to its sparse checkout, and osvScanner (enabled below) finds vulnerable
+  # dependencies by scanning the lockfiles present in that checkout. Excluding
+  # the lockfile leaves it with nothing to scan, so dependency review silently
+  # does nothing — and the repo's own `pnpm audit` job is continue-on-error, so
+  # nothing else gates on advisories either. The cost is occasional review noise
+  # on lockfile diffs; that is worth paying for working supply-chain scanning.
+  # package-lock.json and yarn.lock stay excluded: this repo is pnpm-only, so
+  # either one appearing is an accident rather than a dependency input.
+  path_filters:
+    - "!**/node_modules/**"
+    - "!**/package-lock.json"
+    - "!**/yarn.lock"
+    - "!**/*.tsbuildinfo"
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/coverage/**"
+    - "!logs/**"
+    - "!**/*.log"
+
+  tools:
+    # --- Shared across all three repos (keep identical) ---
+    # Security first: this org has already had one malware incident in a repo.
+    semgrep:
+      enabled: true
+    gitleaks:
+      enabled: true
+    trufflehog:
+      enabled: true
+    osvScanner:
+      enabled: true
+    # CI supply chain: workflows are the highest-blast-radius files we have.
+    actionlint:
+      enabled: true
+    zizmor:
+      enabled: true
+    yamllint:
+      enabled: true
+    shellcheck:
+      enabled: true
+    # TypeScript/JS correctness, using each repo's own checked-in ESLint config.
+    eslint:
+      enabled: true
+    ast-grep:
+      essential_rules: true
+    github-checks:
+      enabled: true
+    # Off on purpose: prose/style opinions, not defects. These are the main
+    # source of assertive-profile noise, so they go rather than the profile.
+    languagetool:
+      enabled: false
+    vale:
+      enabled: false
+    markdownlint:
+      enabled: false
+    # Off on purpose: not this stack's linters — they would duplicate or
+    # contradict ESLint.
+    biome:
+      enabled: false
+    oxc:
+      enabled: false
+
+    # --- fetchit_be specific (NestJS / Prisma / Docker) ---
+    prismaLint:
+      enabled: true
+    hadolint:
+      enabled: true
+    checkov:
+      enabled: true
+    # Off: no React UI here (only React Email templates), no stylesheets, and
+    # the only SQL is Prisma-generated migration output.
+    reactDoctor:
+      enabled: false
+    stylelint:
+      enabled: false
+    sqlfluff:
+      enabled: false
+    htmlhint:
+      enabled: false
