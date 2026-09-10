@@ -21,7 +21,8 @@ export class UploadDocumentFileDto {
   @ApiProperty({
     type: 'string',
     format: 'binary',
-    description: 'The document itself (PDF, JPEG, PNG or WebP; 5 MB maximum)',
+    description:
+      'The document itself (PDF, JPEG, PNG or WebP; maximum set by STORAGE_MAX_FILE_SIZE, default 5 MB)',
   })
   file: unknown;
 }

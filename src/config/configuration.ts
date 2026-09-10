@@ -1,4 +1,14 @@
-import type { IStorageConfig } from '@/storage/interfaces';
+import type { IStorageConfig, StorageDriver } from '@/storage/interfaces';
+
+const STORAGE_DRIVERS: readonly StorageDriver[] = ['local', 's3-compatible', 'cloudinary'];
+
+/**
+ * `local` is the fallback for anything unrecognised, so a typo degrades to the
+ * credential-free driver rather than booting with a half-configured cloud one.
+ * `validateEnv` rejects the typo outright; this keeps the type honest.
+ */
+const resolveStorageDriver = (value: string | undefined): StorageDriver =>
+  STORAGE_DRIVERS.find((driver) => driver === value) ?? 'local';
 
 export interface IAppConfig {
   nodeEnv: string;
@@ -107,7 +117,7 @@ export default (): IConfiguration => ({
     fromName: process.env.RESEND_FROM_NAME || '',
   },
   storage: {
-    driver: process.env.STORAGE_DRIVER === 's3-compatible' ? 's3-compatible' : 'local',
+    driver: resolveStorageDriver(process.env.STORAGE_DRIVER),
     publicBaseUrl: process.env.STORAGE_PUBLIC_BASE_URL || undefined,
     maxFileSize: parseInt(process.env.STORAGE_MAX_FILE_SIZE || '5242880', 10),
     local: {
@@ -120,6 +130,11 @@ export default (): IConfiguration => ({
       accessKeyId: process.env.STORAGE_S3_ACCESS_KEY_ID || '',
       secretAccessKey: process.env.STORAGE_S3_SECRET_ACCESS_KEY || '',
       forcePathStyle: process.env.STORAGE_S3_FORCE_PATH_STYLE !== 'false',
+    },
+    cloudinary: {
+      cloudName: process.env.STORAGE_CLOUDINARY_CLOUD_NAME || '',
+      apiKey: process.env.STORAGE_CLOUDINARY_API_KEY || '',
+      apiSecret: process.env.STORAGE_CLOUDINARY_API_SECRET || '',
     },
   },
 });

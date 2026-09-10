@@ -5,7 +5,8 @@
  * vendor. The `s3-compatible` driver speaks the S3 wire protocol, which
  * Cloudflare R2, Backblaze B2, Supabase Storage, MinIO and AWS S3 all
  * implement — switching between them is an environment change, not a code
- * change.
+ * change. The `cloudinary` driver covers Cloudinary, which has its own API
+ * rather than an S3-compatible one.
  */
 export interface IStorageProvider {
   /**
@@ -49,7 +50,7 @@ export interface IStoredObject {
   contentType: string;
 }
 
-export type StorageDriver = 'local' | 's3-compatible';
+export type StorageDriver = 'local' | 's3-compatible' | 'cloudinary';
 
 export interface IStorageConfig {
   driver: StorageDriver;
@@ -67,6 +68,11 @@ export interface IStorageConfig {
     accessKeyId: string;
     secretAccessKey: string;
     forcePathStyle: boolean;
+  };
+  cloudinary: {
+    cloudName: string;
+    apiKey: string;
+    apiSecret: string;
   };
 }
 
