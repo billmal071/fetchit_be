@@ -327,6 +327,30 @@ jobs:
           name: build-artifacts
           path: ./artifacts
 
+      # Migrations run HERE, not on the server. The deploy box cannot open
+      # outbound TCP 5432 (UpCloud trial firewall), and while the app works
+      # around that with Neon's WebSocket driver on 443, `prisma migrate` has
+      # no driver-adapter path and needs real 5432. The runner has it.
+      - name: Run database migrations
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+          PRISMA_VERSION: '5.22.0'
+        run: |
+          set -e
+          DATABASE_URL=$(printf '%s\n' "$ENV_FILE" | grep -m1 '^DATABASE_URL=' | cut -d= -f2-)
+          DATABASE_URL=${DATABASE_URL%\"}
+          DATABASE_URL=${DATABASE_URL#\"}
+          if [ -z "$DATABASE_URL" ]; then
+            echo "No DATABASE_URL in the ENV_FILE secret for this environment." >&2
+            exit 1
+          fi
+          # Keep it out of the log even though it came from a masked secret:
+          # the extracted substring is not masked on its own.
+          echo "::add-mask::$DATABASE_URL"
+          export DATABASE_URL
+          npx --yes "prisma@$PRISMA_VERSION" migrate deploy \
+            --schema ./artifacts/prisma/schema.prisma
+
       - name: Setup SSH key
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -432,11 +456,10 @@ jobs:
             # commands below is a devDependency.
             pnpm install --frozen-lockfile
 
-            # Generate Prisma client
+            # Generate Prisma client. No DB connection needed, unlike
+            # `migrate deploy`, which runs on the runner (see above) because
+            # this box has no outbound 5432.
             pnpm db:generate
-
-            # Run database migrations
-            pnpm db:migrate:deploy
 
             # Reload (zero-downtime) or start the correct PM2 app for this env
             pm2 reload ecosystem.config.js --env "$DEPLOY_ENV" \
