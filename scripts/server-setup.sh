@@ -55,7 +55,7 @@ sudo env PATH="$PATH:$(dirname "$NODE_PATH")" \
   pm2 startup systemd -u "$USER" --hp "$HOME"
 
 # ── Application directory ─────────────────────────────────────────────────────
-APP_DIR="${APP_PATH:-$HOME/fetchit/be}"
+APP_DIR="${APP_PATH:-/opt/fetchit}"
 echo "[6/7] Creating application directory at $APP_DIR..."
 mkdir -p "$APP_DIR/logs"
 
@@ -77,6 +77,6 @@ echo "Next steps:"
 echo "  1. Copy your application files to $APP_DIR"
 echo "  2. Create $APP_DIR/.env (see .env.example)"
 echo "  3. Configure and enable Nginx (see above)"
-echo "  4. Run: cd $APP_DIR && pnpm install --prod && pnpm db:migrate:deploy"
+echo "  4. Run: cd $APP_DIR && pnpm install --frozen-lockfile && pnpm db:migrate:deploy"
 echo "  5. Run: pm2 start ecosystem.config.js --env production && pm2 save"
 echo ""
