@@ -30,9 +30,11 @@ module.exports = {
         NODE_ENV: 'staging',
         PORT: 6101,
       },
+      // Ports are distinct per environment so two environments can run on
+      // the same box without an EADDRINUSE collision. nginx fronts 6100.
       env_production: {
         NODE_ENV: 'production',
-        PORT: 6100,
+        PORT: 6102,
       },
       error_file: './logs/pm2-error.log',
       out_file: './logs/pm2-out.log',

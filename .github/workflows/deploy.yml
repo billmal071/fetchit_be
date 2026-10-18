@@ -358,7 +358,8 @@ jobs:
           rsync -avz --delete \
             --exclude='.env' \
             --exclude='node_modules' \
-            --exclude='logs/*.log' \
+            --exclude='logs/' \
+            --exclude='storage/' \
             -e "ssh -i ~/.ssh/deploy_key -p $SERVER_PORT" \
             ./artifacts/ \
             "$SERVER_USER@$SERVER_HOST:$APP_PATH/"
@@ -386,16 +387,49 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           envs: APP_PATH,DEPLOY_ENV
           script: |
-            source ~/.nvm/nvm.sh
+            # ssh-action runs the script as one blob and takes the LAST
+            # command status as the step status, so without this a failed
+            # install or migration was invisible: the step exited 0 on the
+            # trailing echo and the health check then passed against the
+            # still-running OLD process - a deploy that shipped nothing
+            # reported green. `set -e` rather than the action's script_stop
+            # input, because script_stop injects a per-line exit check that
+            # breaks multi-line constructs (the `if` below, the backslash
+            # continuation further down). Verified on the target box: the
+            # `if` block runs, `|| true` is tolerated, a failure aborts.
+            set -e
+
+            # nvm is optional - this box uses a system-wide Node install and
+            # has no ~/.nvm. Written as `if` rather than `[ -s ... ] && ...`
+            # because the latter yields exit 1 when the file is absent, which
+            # under `set -e` would abort the deploy on its first line.
+            export NVM_DIR="$HOME/.nvm"
+            if [ -s "$NVM_DIR/nvm.sh" ]; then
+              # shellcheck disable=SC1091
+              . "$NVM_DIR/nvm.sh"
+            fi
+
+            # pnpm here is the corepack shim, which resolves the
+            # `packageManager` pin (pnpm@9.15.0) from package.json once we are
+            # inside APP_PATH. Do NOT `corepack enable`: the shim directory is
+            # root-owned and this step is not root, so it fails with EACCES.
+            # The download prompt must be silenced - an SSH deploy has no TTY.
+            export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
             export DEPLOY_ENV="$DEPLOY_ENV"
 
             cd "$APP_PATH"
 
-            # Snapshot current state for rollback
-            npx npx pm2 save --force || true
+            node -v
+            pnpm -v
+            pm2 -v
 
-            # Install production dependencies
+            # Snapshot the current PM2 process list so the failure path has
+            # something current to resurrect.
+            pm2 save --force || true
+
+            # Install dependencies. Not --prod: the Prisma CLI used by the two
+            # commands below is a devDependency.
             pnpm install --frozen-lockfile
 
             # Generate Prisma client
@@ -405,11 +439,11 @@ jobs:
             pnpm db:migrate:deploy
 
             # Reload (zero-downtime) or start the correct PM2 app for this env
-            npx pm2 reload ecosystem.config.js --env "$DEPLOY_ENV" \
-              || npx pm2 start ecosystem.config.js --env "$DEPLOY_ENV"
+            pm2 reload ecosystem.config.js --env "$DEPLOY_ENV" \
+              || pm2 start ecosystem.config.js --env "$DEPLOY_ENV"
 
             # Persist process list
-            npx pm2 save
+            pm2 save
 
             echo "Deployed to $DEPLOY_ENV."
         env:
@@ -423,13 +457,22 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: APP_PORT
+          envs: APP_PORT,DEPLOY_ENV
           script: |
-            echo "Waiting for application to become ready..."
+            # Must match the per-env PORT in ecosystem.config.js; APP_PORT, if
+            # set, wins. A hardcoded 6100 silently probed the wrong port on
+            # staging/production and failed after two minutes.
+            case "$DEPLOY_ENV" in
+              staging)    DEFAULT_PORT=6101 ;;
+              production) DEFAULT_PORT=6102 ;;
+              *)          DEFAULT_PORT=6100 ;;
+            esac
+            PORT="${APP_PORT:-$DEFAULT_PORT}"
+            echo "Waiting for application to become ready on port $PORT..."
             for i in $(seq 1 12); do
               STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
                 --max-time 5 \
-                "http://localhost:${APP_PORT:-6100}/api/v1/health/readiness" || echo "000")
+                "http://localhost:${PORT}/api/v1/health/readiness" || echo "000")
               echo "Attempt $i: HTTP $STATUS"
               if [ "$STATUS" = "200" ]; then
                 echo "Health check passed."
@@ -441,8 +484,9 @@ jobs:
             exit 1
         env:
           APP_PORT: ${{ secrets.APP_PORT }}
+          DEPLOY_ENV: ${{ steps.ctx.outputs.env }}
 
-      - name: Rollback on failure
+      - name: Restore previous PM2 process list on failure
         if: failure()
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -455,9 +499,13 @@ jobs:
             [ -f "$HOME/.profile" ] && source "$HOME/.profile"
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-            echo "Rolling back to previous PM2 snapshot..."
+            # This restores the saved PM2 process list only. It does NOT roll
+            # back code (rsync has already overwritten dist/) or migrations
+            # (prisma migrate deploy is forward-only). A failed deploy needs
+            # manual attention; it is not automatically reverted.
+            echo "Restoring saved PM2 process list..."
             npx pm2 resurrect || true
-            echo "Rollback attempted. Check server logs for details."
+            echo "Check server logs; code and migrations are NOT reverted."
 
       - name: Cleanup sensitive files
         if: always()
