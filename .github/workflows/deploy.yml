@@ -331,15 +331,27 @@ jobs:
       # outbound TCP 5432 (UpCloud trial firewall), and while the app works
       # around that with Neon's WebSocket driver on 443, `prisma migrate` has
       # no driver-adapter path and needs real 5432. The runner has it.
+      #
+      # This runs BEFORE the code ships, so the old process briefly serves
+      # against the new schema: keep migrations additive/backwards-compatible.
+      # It uses the pooled Neon endpoint because that is the only one
+      # reachable — the direct endpoint answers P1002. If a future migration
+      # ever fails on the advisory lock PgBouncer cannot hold across
+      # statements, add a DIRECT_URL secret rather than moving this back.
       - name: Run database migrations
         env:
           ENV_FILE: ${{ secrets.ENV_FILE }}
           PRISMA_VERSION: '5.22.0'
         run: |
           set -e
-          DATABASE_URL=$(printf '%s\n' "$ENV_FILE" | grep -m1 '^DATABASE_URL=' | cut -d= -f2-)
+          # tr -d '\r' first: a secret pasted with CRLF endings otherwise
+          # leaves a trailing \r inside the value, which also defeats the
+          # quote strip and makes Prisma fail on a bogus database name.
+          DATABASE_URL=$(printf '%s\n' "$ENV_FILE" | tr -d '\r' | grep -m1 '^DATABASE_URL=' | cut -d= -f2-)
           DATABASE_URL=${DATABASE_URL%\"}
           DATABASE_URL=${DATABASE_URL#\"}
+          DATABASE_URL=${DATABASE_URL%\'}
+          DATABASE_URL=${DATABASE_URL#\'}
           if [ -z "$DATABASE_URL" ]; then
             echo "No DATABASE_URL in the ENV_FILE secret for this environment." >&2
             exit 1
