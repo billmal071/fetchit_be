@@ -334,20 +334,46 @@ jobs:
       #
       # This runs BEFORE the code ships, so the old process briefly serves
       # against the new schema: keep migrations additive/backwards-compatible.
-      # It uses the pooled Neon endpoint because that is the only one
-      # reachable — the direct endpoint answers P1002. If a future migration
-      # ever fails on the advisory lock PgBouncer cannot hold across
-      # statements, add a DIRECT_URL secret rather than moving this back.
+      #
+      # It uses the POOLED Neon endpoint deliberately: the direct endpoint is
+      # unreachable (verified, P1002), so a `directUrl` would point at nothing.
+      # `migrate deploy` takes a session advisory lock, which transaction
+      # pooling classically cannot hold — but it was verified working through
+      # this pooler (exit 0, lock acquired, "No pending migrations"). If that
+      # ever regresses, the fix is a DIRECT_URL secret once the Neon project
+      # exposes a reachable direct endpoint, not moving this step back onto
+      # the box, which has no 5432 at all.
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Restore node_modules
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            ~/.pnpm-store
+          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Run database migrations
         env:
           ENV_FILE: ${{ secrets.ENV_FILE }}
-          PRISMA_VERSION: '5.22.0'
         run: |
           set -e
           # tr -d '\r' first: a secret pasted with CRLF endings otherwise
           # leaves a trailing \r inside the value, which also defeats the
           # quote strip and makes Prisma fail on a bogus database name.
-          DATABASE_URL=$(printf '%s\n' "$ENV_FILE" | tr -d '\r' | grep -m1 '^DATABASE_URL=' | cut -d= -f2-)
+          # `|| true` so a missing line reaches the explicit check below
+          # instead of aborting the step with no diagnostic under `set -e`.
+          DATABASE_URL=$(printf '%s\n' "$ENV_FILE" | tr -d '\r' | grep -m1 '^DATABASE_URL=' | cut -d= -f2- || true)
           DATABASE_URL=${DATABASE_URL%\"}
           DATABASE_URL=${DATABASE_URL#\"}
           DATABASE_URL=${DATABASE_URL%\'}
@@ -360,8 +386,11 @@ jobs:
           # the extracted substring is not masked on its own.
           echo "::add-mask::$DATABASE_URL"
           export DATABASE_URL
-          npx --yes "prisma@$PRISMA_VERSION" migrate deploy \
-            --schema ./artifacts/prisma/schema.prisma
+          # The lockfile-pinned CLI, so the migration engine always matches the
+          # @prisma/client the build was generated against. Fetching
+          # `prisma@<hardcoded>` from the registry here would sidestep both
+          # --frozen-lockfile integrity and the blocking malware scan.
+          pnpm db:migrate:deploy
 
       - name: Setup SSH key
         env:

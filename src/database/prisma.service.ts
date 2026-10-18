@@ -4,6 +4,9 @@ import { PrismaNeon } from '@prisma/adapter-neon';
 import { Pool, neonConfig } from '@neondatabase/serverless';
 import ws from 'ws';
 
+const CONNECT_TIMEOUT_MS = 10_000;
+const BOOT_PING_TIMEOUT_MS = 15_000;
+
 function logDefinitions(): Prisma.LogDefinition[] {
   return process.env.NODE_ENV === 'production'
     ? [
@@ -25,6 +28,16 @@ export function isNeonUrl(connectionString: string): boolean {
   try {
     return new URL(connectionString).hostname.endsWith('.neon.tech');
   } catch {
+    // A password containing an unencoded '#', '?' or '@' makes the URL
+    // unparseable, and silently falling back to the TCP driver on a box with
+    // no outbound 5432 is a 30s-timeout-per-request failure with no clue in
+    // the logs. Say so loudly.
+    if (connectionString !== '') {
+      new Logger(PrismaService.name).warn(
+        'DATABASE_URL could not be parsed; falling back to the TCP driver. ' +
+          'If this is a Neon URL, percent-encode special characters in the password.',
+      );
+    }
     return false;
   }
 }
@@ -54,7 +67,14 @@ export function buildPrismaClientConfig(
   }
 
   neonConfig.webSocketConstructor = ws;
-  const adapter = new PrismaNeon(new Pool({ connectionString }));
+  // pg's default connectionTimeoutMillis is 0 — wait forever. With that, an
+  // unreachable endpoint or a suspended Neon project makes the boot-time ping
+  // below hang instead of fail, Nest never finishes bootstrapping, nothing
+  // listens on the port, and PM2 reports the app "online" indefinitely
+  // because the process never exits.
+  const adapter = new PrismaNeon(
+    new Pool({ connectionString, connectionTimeoutMillis: CONNECT_TIMEOUT_MS }),
+  );
 
   return { options: { adapter, log }, adapter };
 }
@@ -80,10 +100,36 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     // $connect() is a no-op under a driver adapter: it resolves in
     // milliseconds even when the database is unreachable, so without a real
     // round-trip the app boots "healthy" and then 500s every request. Force
-    // one so a bad URL, wrong credential or Neon outage fails at boot.
-    await this.$queryRaw`SELECT 1`;
+    // one so a bad URL, wrong credential or Neon outage fails at boot — under
+    // its own deadline, so a stalled connection fails rather than hangs.
+    await this.pingWithTimeout();
 
     this.logger.log(`Prisma connected to database via ${this.driver}`);
+  }
+
+  private async pingWithTimeout(): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+
+    try {
+      await Promise.race([
+        this.$queryRaw`SELECT 1`,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `Database did not answer within ${BOOT_PING_TIMEOUT_MS}ms (driver: ${this.driver})`,
+                ),
+              ),
+            BOOT_PING_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
