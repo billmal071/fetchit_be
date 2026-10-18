@@ -1,24 +1,43 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaNeon } from '@prisma/adapter-neon';
+import { Pool, neonConfig } from '@neondatabase/serverless';
+import ws from 'ws';
+
+function prismaClientOptions(): Prisma.PrismaClientOptions {
+  const connectionString = process.env.DATABASE_URL ?? '';
+  const log: Prisma.LogDefinition[] =
+    process.env.NODE_ENV === 'production'
+      ? [
+          { emit: 'event', level: 'error' },
+          { emit: 'event', level: 'warn' },
+        ]
+      : [
+          { emit: 'event', level: 'query' },
+          { emit: 'event', level: 'error' },
+          { emit: 'event', level: 'warn' },
+        ];
+
+  // UpCloud trial firewalls allow outbound 443 and drop 5432, and that
+  // firewall cannot be changed until the account leaves trial. Neon's
+  // serverless driver speaks Postgres over WebSockets on 443.
+  if (!connectionString.includes('.neon.tech')) {
+    return { log };
+  }
+
+  neonConfig.webSocketConstructor = ws;
+  return {
+    adapter: new PrismaNeon(new Pool({ connectionString })),
+    log,
+  };
+}
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name);
 
   constructor() {
-    super({
-      log:
-        process.env.NODE_ENV === 'production'
-          ? [
-              { emit: 'event', level: 'error' },
-              { emit: 'event', level: 'warn' },
-            ]
-          : [
-              { emit: 'event', level: 'query' },
-              { emit: 'event', level: 'error' },
-              { emit: 'event', level: 'warn' },
-            ],
-    });
+    super(prismaClientOptions());
   }
 
   async onModuleInit(): Promise<void> {
