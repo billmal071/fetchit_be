@@ -386,14 +386,25 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           envs: APP_PATH,DEPLOY_ENV
           script: |
-            source ~/.nvm/nvm.sh
+            # nvm is optional: some boxes use a system-wide Node install and
+            # have no ~/.nvm at all. An unconditional `source` of a missing
+            # file exits non-zero and fails the whole deploy step.
+            export NVM_DIR="$HOME/.nvm"
+            # shellcheck disable=SC1091
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
+            # pnpm comes from corepack, which honours the `packageManager`
+            # field in package.json (pnpm@9.15.0) once we are inside APP_PATH.
+            corepack enable pnpm 2>/dev/null || true
+
+            node -v
 
             export DEPLOY_ENV="$DEPLOY_ENV"
 
             cd "$APP_PATH"
 
             # Snapshot current state for rollback
-            npx npx pm2 save --force || true
+            npx pm2 save --force || true
 
             # Install production dependencies
             pnpm install --frozen-lockfile
