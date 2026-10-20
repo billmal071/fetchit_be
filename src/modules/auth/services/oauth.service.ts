@@ -91,8 +91,13 @@ export class OAuthService {
     await this.usersService.updateLastLogin(user.id);
 
     // Build redirect URL with tokens in URL fragment (hash) to keep them out of
-    // server logs, browser history, and Referer headers.
-    const redirectUrl = `${this.frontendUrl}/auth/oauth-callback#accessToken=${tokens.accessToken}&refreshToken=${tokens.refreshToken}`;
+    // server logs, browser history, and Referer headers. isNewUser travels the
+    // same way: the frontend needs it to decide whether to show the role
+    // picker, and `updateLastLogin` just ran above, so `lastLoginAt` alone
+    // can no longer tell a brand-new signup apart from a returning user.
+    const redirectUrl =
+      `${this.frontendUrl}/auth/oauth-callback#accessToken=${tokens.accessToken}` +
+      `&refreshToken=${tokens.refreshToken}&isNewUser=${isNewUser}`;
 
     this.logger.log(`OAuth login successful for: ${user.email}`);
 
