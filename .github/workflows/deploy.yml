@@ -321,12 +321,6 @@ jobs:
             *)       echo "env=development" >> "$GITHUB_OUTPUT" ;;
           esac
 
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: build-artifacts
-          path: ./artifacts
-
       # Migrations run HERE, not on the server. The deploy box cannot open
       # outbound TCP 5432 (UpCloud trial firewall), and while the app works
       # around that with Neon's WebSocket driver on 443, `prisma migrate` has
@@ -362,6 +356,12 @@ jobs:
             node_modules
             ~/.pnpm-store
           key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: ./artifacts
 
       - name: Run database migrations
         env:
