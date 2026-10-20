@@ -1,8 +1,13 @@
 import { PrismaClient, UserRole, UserStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import * as readline from 'readline';
+import { buildPrismaClientConfig } from '../src/database/prisma.service';
 
-const prisma = new PrismaClient();
+// Same driver selection as the app: a Neon URL needs the WebSocket adapter,
+// because the deploy box has no outbound 5432. The seed is interactive, so it
+// is meant to be run from a workstation rather than the server either way.
+const { options } = buildPrismaClientConfig();
+const prisma = new PrismaClient(options);
 
 function prompt(question: string): Promise<string> {
   const rl = readline.createInterface({

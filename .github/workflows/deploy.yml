@@ -327,6 +327,71 @@ jobs:
           name: build-artifacts
           path: ./artifacts
 
+      # Migrations run HERE, not on the server. The deploy box cannot open
+      # outbound TCP 5432 (UpCloud trial firewall), and while the app works
+      # around that with Neon's WebSocket driver on 443, `prisma migrate` has
+      # no driver-adapter path and needs real 5432. The runner has it.
+      #
+      # This runs BEFORE the code ships, so the old process briefly serves
+      # against the new schema: keep migrations additive/backwards-compatible.
+      #
+      # It uses the POOLED Neon endpoint deliberately: the direct endpoint is
+      # unreachable (verified, P1002), so a `directUrl` would point at nothing.
+      # `migrate deploy` takes a session advisory lock, which transaction
+      # pooling classically cannot hold — but it was verified working through
+      # this pooler (exit 0, lock acquired, "No pending migrations"). If that
+      # ever regresses, the fix is a DIRECT_URL secret once the Neon project
+      # exposes a reachable direct endpoint, not moving this step back onto
+      # the box, which has no 5432 at all.
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Restore node_modules
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            ~/.pnpm-store
+          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Run database migrations
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          set -e
+          # tr -d '\r' first: a secret pasted with CRLF endings otherwise
+          # leaves a trailing \r inside the value, which also defeats the
+          # quote strip and makes Prisma fail on a bogus database name.
+          # `|| true` so a missing line reaches the explicit check below
+          # instead of aborting the step with no diagnostic under `set -e`.
+          DATABASE_URL=$(printf '%s\n' "$ENV_FILE" | tr -d '\r' | grep -m1 '^DATABASE_URL=' | cut -d= -f2- || true)
+          DATABASE_URL=${DATABASE_URL%\"}
+          DATABASE_URL=${DATABASE_URL#\"}
+          DATABASE_URL=${DATABASE_URL%\'}
+          DATABASE_URL=${DATABASE_URL#\'}
+          if [ -z "$DATABASE_URL" ]; then
+            echo "No DATABASE_URL in the ENV_FILE secret for this environment." >&2
+            exit 1
+          fi
+          # Keep it out of the log even though it came from a masked secret:
+          # the extracted substring is not masked on its own.
+          echo "::add-mask::$DATABASE_URL"
+          export DATABASE_URL
+          # The lockfile-pinned CLI, so the migration engine always matches the
+          # @prisma/client the build was generated against. Fetching
+          # `prisma@<hardcoded>` from the registry here would sidestep both
+          # --frozen-lockfile integrity and the blocking malware scan.
+          pnpm db:migrate:deploy
+
       - name: Setup SSH key
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -432,11 +497,10 @@ jobs:
             # commands below is a devDependency.
             pnpm install --frozen-lockfile
 
-            # Generate Prisma client
+            # Generate Prisma client. No DB connection needed, unlike
+            # `migrate deploy`, which runs on the runner (see above) because
+            # this box has no outbound 5432.
             pnpm db:generate
-
-            # Run database migrations
-            pnpm db:migrate:deploy
 
             # Reload (zero-downtime) or start the correct PM2 app for this env
             pm2 reload ecosystem.config.js --env "$DEPLOY_ENV" \
