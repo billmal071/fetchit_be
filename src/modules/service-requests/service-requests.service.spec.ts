@@ -11,6 +11,7 @@ import { EVENTS } from '@common/constants';
 import {
   ResourceNotFoundException,
   ServiceRequestNotOpenException,
+  ApplicationNotPendingException,
 } from '@common/exceptions/domain.exception';
 import { ForbiddenException } from '@common/exceptions/base.exception';
 
@@ -82,7 +83,8 @@ describe('ServiceRequestsService', () => {
       serviceRequestApplication: {
         findMany: jest.fn(),
         update: jest.fn(),
-        updateMany: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn(),
       },
       $transaction: jest.fn(),
     };
@@ -303,8 +305,8 @@ describe('ServiceRequestsService', () => {
         where: { id: requestId, status: ServiceRequestStatus.OPEN },
         data: { status: ServiceRequestStatus.ASSIGNED, assignedHandymanId: 'profile-1' },
       });
-      expect(mockPrisma.serviceRequestApplication.update).toHaveBeenCalledWith({
-        where: { id: appId },
+      expect(mockPrisma.serviceRequestApplication.updateMany).toHaveBeenCalledWith({
+        where: { id: appId, status: ApplicationStatus.PENDING },
         data: { status: ApplicationStatus.ACCEPTED },
       });
       expect(mockPrisma.serviceRequestApplication.updateMany).toHaveBeenCalledWith({
@@ -374,6 +376,39 @@ describe('ServiceRequestsService', () => {
         ResourceNotFoundException,
       );
     });
+
+    // Bug #5: nothing checked the application's own status — a WITHDRAWN or
+    // REJECTED application could still be accepted.
+    it('should throw ApplicationNotPendingException when the application is WITHDRAWN', async () => {
+      const withdrawn = { ...mockApplication, status: ApplicationStatus.WITHDRAWN };
+      mockRequestRepo.findById.mockResolvedValue(mockRequest);
+      mockApplicationRepo.findById.mockResolvedValue(withdrawn);
+
+      await expect(service.acceptApplication(requestId, appId, userId)).rejects.toThrow(
+        ApplicationNotPendingException,
+      );
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects the race where this exact application was rejected between the pre-check and the transaction', async () => {
+      // The reachable version of this race, not a hypothetical: reject
+      // application A (the request stays OPEN — rejectApplication doesn't
+      // touch it), then accept A. Pre-fix, acceptApplication's unconditional
+      // `update` happily flipped REJECTED -> ACCEPTED and assigned the
+      // handyman anyway. The request-level guard alone can't catch this,
+      // because the request is still OPEN the whole time — only the
+      // application-level conditional update does.
+      mockRequestRepo.findById.mockResolvedValue(mockRequest);
+      mockApplicationRepo.findById.mockResolvedValue(mockApplication);
+      runTransaction();
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.serviceRequestApplication.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.acceptApplication(requestId, appId, userId)).rejects.toThrow(
+        ApplicationNotPendingException,
+      );
+      expect(mockEventEmitter.emit).not.toHaveBeenCalled();
+    });
   });
 
   describe('rejectApplication', () => {
@@ -381,13 +416,14 @@ describe('ServiceRequestsService', () => {
       const rejected = { ...mockApplication, status: ApplicationStatus.REJECTED };
       mockRequestRepo.findById.mockResolvedValue(mockRequest);
       mockApplicationRepo.findById.mockResolvedValue(mockApplication);
-      mockApplicationRepo.update.mockResolvedValue(rejected);
+      mockPrisma.serviceRequestApplication.findUniqueOrThrow.mockResolvedValue(rejected);
 
       const result = await service.rejectApplication(requestId, appId, userId);
 
       expect(result).toEqual(rejected);
-      expect(mockApplicationRepo.update).toHaveBeenCalledWith(appId, {
-        status: ApplicationStatus.REJECTED,
+      expect(mockPrisma.serviceRequestApplication.updateMany).toHaveBeenCalledWith({
+        where: { id: appId, status: ApplicationStatus.PENDING },
+        data: { status: ApplicationStatus.REJECTED },
       });
     });
 
@@ -405,6 +441,40 @@ describe('ServiceRequestsService', () => {
 
       await expect(service.rejectApplication(requestId, appId, userId)).rejects.toThrow(
         ResourceNotFoundException,
+      );
+    });
+
+    // Bug #6: rejecting used to be unconditional — an already-ACCEPTED
+    // application could be flipped to REJECTED, leaving the request
+    // ASSIGNED to a handyman whose application now says REJECTED.
+    it('should throw ApplicationNotPendingException when the application is already ACCEPTED', async () => {
+      const accepted = { ...mockApplication, status: ApplicationStatus.ACCEPTED };
+      mockRequestRepo.findById.mockResolvedValue(mockRequest);
+      mockApplicationRepo.findById.mockResolvedValue(accepted);
+
+      await expect(service.rejectApplication(requestId, appId, userId)).rejects.toThrow(
+        ApplicationNotPendingException,
+      );
+      expect(mockPrisma.serviceRequestApplication.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('should throw ServiceRequestNotOpenException when the request is no longer OPEN', async () => {
+      const assigned = { ...mockRequest, status: ServiceRequestStatus.ASSIGNED };
+      mockRequestRepo.findById.mockResolvedValue(assigned);
+      mockApplicationRepo.findById.mockResolvedValue(mockApplication);
+
+      await expect(service.rejectApplication(requestId, appId, userId)).rejects.toThrow(
+        ServiceRequestNotOpenException,
+      );
+    });
+
+    it('rejects the race where a concurrent accept already moved the application out of PENDING', async () => {
+      mockRequestRepo.findById.mockResolvedValue(mockRequest);
+      mockApplicationRepo.findById.mockResolvedValue(mockApplication);
+      mockPrisma.serviceRequestApplication.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.rejectApplication(requestId, appId, userId)).rejects.toThrow(
+        ApplicationNotPendingException,
       );
     });
   });
