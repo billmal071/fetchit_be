@@ -133,3 +133,13 @@ export class ServiceRequestNotOpenException extends DomainException {
     );
   }
 }
+
+export class ApplicationNotPendingException extends DomainException {
+  constructor() {
+    super(
+      'This application has already been decided and can no longer be accepted or rejected',
+      'APPLICATION_NOT_PENDING',
+      HttpStatus.CONFLICT,
+    );
+  }
+}

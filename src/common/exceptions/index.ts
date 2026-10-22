@@ -24,4 +24,5 @@ export {
   InvalidVerificationTransitionException,
   DuplicateApplicationException,
   ServiceRequestNotOpenException,
+  ApplicationNotPendingException,
 } from './domain.exception';

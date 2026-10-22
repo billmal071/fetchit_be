@@ -15,6 +15,7 @@ import { createPaginationMeta } from '@common/utils/pagination.util';
 import {
   ResourceNotFoundException,
   ServiceRequestNotOpenException,
+  ApplicationNotPendingException,
 } from '@common/exceptions/domain.exception';
 import { ForbiddenException } from '@common/exceptions/base.exception';
 import {
@@ -241,13 +242,22 @@ export class ServiceRequestsService {
       throw new ResourceNotFoundException('Application', appId);
     }
 
+    // Bug #5: a WITHDRAWN or REJECTED application could be accepted — nothing
+    // checked the application's own status, only the request's.
+    if (application.status !== ApplicationStatus.PENDING) {
+      throw new ApplicationNotPendingException();
+    }
+
     // The checks above read outside the transaction, so two concurrent
     // accepts could both pass them before either writes. The real guard is
-    // this conditional update: `where` includes `status: OPEN`, so only the
-    // request that wins the race matches any row. The loser gets `count: 0`
-    // and the whole transaction rolls back before touching applications —
-    // previously it updated unconditionally and both accepts "succeeded",
-    // leaving two ACCEPTED applications on one request.
+    // these two conditional updates: `where` includes `status: OPEN`/
+    // `PENDING`, so only the caller that wins each race matches any row. A
+    // loser gets `count: 0` and the whole transaction rolls back before
+    // touching anything else — previously the request update was
+    // unconditional (both accepts "succeeded", leaving two ACCEPTED
+    // applications on one request) and the application update never checked
+    // status at all (a withdrawn/rejected application could still flip to
+    // ACCEPTED if it raced a second accept call for the same request).
     const updatedRequest = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.serviceRequest.updateMany({
         where: { id: requestId, status: ServiceRequestStatus.OPEN },
@@ -261,10 +271,14 @@ export class ServiceRequestsService {
         throw new ServiceRequestNotOpenException();
       }
 
-      await tx.serviceRequestApplication.update({
-        where: { id: appId },
+      const { count: appCount } = await tx.serviceRequestApplication.updateMany({
+        where: { id: appId, status: ApplicationStatus.PENDING },
         data: { status: ApplicationStatus.ACCEPTED },
       });
+
+      if (appCount === 0) {
+        throw new ApplicationNotPendingException();
+      }
 
       await tx.serviceRequestApplication.updateMany({
         where: {
@@ -313,9 +327,30 @@ export class ServiceRequestsService {
       throw new ResourceNotFoundException('Application', appId);
     }
 
-    return this.applicationRepo.update(appId, {
-      status: ApplicationStatus.REJECTED,
+    // Bug #6: rejected the application unconditionally — including one
+    // already ACCEPTED, leaving the request ASSIGNED to a handyman whose
+    // application now says REJECTED. Only a PENDING application on a
+    // still-OPEN request may be rejected; the conditional update closes the
+    // same TOCTOU gap as acceptApplication's guards (concurrent accept vs.
+    // reject of the same application).
+    if (request.status !== ServiceRequestStatus.OPEN) {
+      throw new ServiceRequestNotOpenException();
+    }
+
+    if (application.status !== ApplicationStatus.PENDING) {
+      throw new ApplicationNotPendingException();
+    }
+
+    const { count } = await this.prisma.serviceRequestApplication.updateMany({
+      where: { id: appId, status: ApplicationStatus.PENDING },
+      data: { status: ApplicationStatus.REJECTED },
     });
+
+    if (count === 0) {
+      throw new ApplicationNotPendingException();
+    }
+
+    return this.prisma.serviceRequestApplication.findUniqueOrThrow({ where: { id: appId } });
   }
 
   async confirmCompletion(requestId: string, userId: string): Promise<ServiceRequest> {
