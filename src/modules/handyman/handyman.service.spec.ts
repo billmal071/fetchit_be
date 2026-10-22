@@ -3,6 +3,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ServiceRequestStatus, VerificationStatus } from '@prisma/client';
 import { HandymanService } from './handyman.service';
 import { HandymanServiceRequestQueryDto } from './dto';
+import { PaginationDto } from '@common/dto/pagination.dto';
 import {
   HANDYMAN_PROFILE_REPOSITORY,
   HANDYMAN_DOCUMENT_REPOSITORY,
@@ -501,6 +502,26 @@ describe('HandymanService', () => {
       await expect(service.submitDocuments(userId)).rejects.toThrow(
         InvalidVerificationTransitionException,
       );
+    });
+  });
+
+  describe('browseOpenRequests', () => {
+    it("never selects the customer's email or phone", async () => {
+      const verifiedProfile = { ...mockProfile, verificationStatus: VerificationStatus.VERIFIED };
+      mockProfileRepo.findByUserId.mockResolvedValue(verifiedProfile);
+      mockPrisma.serviceRequest.findMany.mockResolvedValue([]);
+      mockPrisma.serviceRequest.count.mockResolvedValue(0);
+
+      await service.browseOpenRequests(userId, new PaginationDto());
+
+      const call = mockPrisma.serviceRequest.findMany.mock.calls[0][0];
+      // Regression for bug #2: this feed is visible to every verified
+      // handyman before any application exists. It previously selected
+      // email and phone, leaking every open request's customer contact
+      // details to the whole handyman pool.
+      expect(call.include.customer.select).toEqual({ id: true, username: true, avatar: true });
+      expect(call.include.customer.select).not.toHaveProperty('email');
+      expect(call.include.customer.select).not.toHaveProperty('phone');
     });
   });
 

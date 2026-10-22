@@ -15,7 +15,13 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { Response } from 'express';
 import { UsersService } from './users.service';
-import { UpdateUserDto, UserResponseDto, OnboardUserDto, ONBOARDABLE_ROLES } from './dto';
+import {
+  UpdateMeDto,
+  AdminUpdateUserDto,
+  UserResponseDto,
+  OnboardUserDto,
+  ONBOARDABLE_ROLES,
+} from './dto';
 import { PaginationDto } from '@/common/dto';
 import { ParseUUIDPipe } from '@/common/pipes';
 import { Roles, CurrentUser, Public } from '@/common/decorators';
@@ -117,7 +123,7 @@ export class UsersController {
   @ApiErrorResponses()
   async updateProfile(
     @CurrentUser() user: IRequestUser,
-    @Body() updateUserDto: UpdateUserDto,
+    @Body() updateUserDto: UpdateMeDto,
   ): Promise<{ data: UserResponseDto; message: string }> {
     const updatedUser = await this.usersService.update(user.id, updateUserDto);
     return { data: updatedUser, message: SUCCESS_MESSAGES.USER_UPDATED };
@@ -134,7 +140,7 @@ export class UsersController {
   @ApiErrorResponses()
   async update(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() updateUserDto: UpdateUserDto,
+    @Body() updateUserDto: AdminUpdateUserDto,
   ): Promise<{ data: UserResponseDto; message: string }> {
     const user = await this.usersService.update(id, updateUserDto);
     return { data: user, message: SUCCESS_MESSAGES.USER_UPDATED };

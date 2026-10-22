@@ -4,7 +4,7 @@ import { Response } from 'express';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { SUCCESS_MESSAGES } from '@/common/constants';
-import { ONBOARDABLE_ROLES, OnboardUserDto, UpdateUserDto } from './dto';
+import { ONBOARDABLE_ROLES, OnboardUserDto, UpdateMeDto, AdminUpdateUserDto } from './dto';
 import { PaginationDto } from '@/common/dto';
 import { IRequestUser } from '@/common/interfaces';
 import { UserRole } from '@/common/enums';
@@ -73,14 +73,14 @@ describe('UsersController', () => {
   });
 
   it('updateProfile should call usersService.update with user id', async () => {
-    const dto = { username: 'new' } as UpdateUserDto;
+    const dto = { username: 'new' } as UpdateMeDto;
     const result = await controller.updateProfile(mockUser, dto);
     expect(usersService.update).toHaveBeenCalledWith('u1', dto);
     expect(result.message).toBe(SUCCESS_MESSAGES.USER_UPDATED);
   });
 
   it('update should call usersService.update with param id', async () => {
-    const dto = { username: 'new' } as UpdateUserDto;
+    const dto = { username: 'new' } as AdminUpdateUserDto;
     const result = await controller.update('u2', dto);
     expect(usersService.update).toHaveBeenCalledWith('u2', dto);
     expect(result.message).toBe(SUCCESS_MESSAGES.USER_UPDATED);
