@@ -63,6 +63,13 @@ export class LocalStorageProvider implements IStorageProvider {
     return joinUrl(this.publicBaseUrl, key);
   }
 
+  // Dev-only driver (see class comment): nothing serves these files over HTTP
+  // at all, signed or not, so there is no real expiry to add. Same address as
+  // getUrl — a human developer resolving it manually, not a browser.
+  async getSignedUrl(key: string): Promise<string> {
+    return this.getUrl(key);
+  }
+
   getProviderName(): string {
     return 'local';
   }

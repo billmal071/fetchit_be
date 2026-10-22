@@ -260,7 +260,12 @@ model HandymanDocument {
   id                String         @id @default(uuid())
   handymanProfileId String         @map("handyman_profile_id")
   type              DocumentType
-  fileUrl           String         @map("file_url") @db.VarChar(500)
+  // Object storage key, never a URL: every read path (GET /handyman/profile,
+  // GET /handyman/documents, the upload response, and the admin review
+  // endpoints) maps this to a short-lived signed URL before it reaches a
+  // client (bug #17 — this used to be a permanent, often-public URL stored
+  // straight in the database).
+  fileKey            String         @map("file_key") @db.VarChar(500)
   fileName          String         @map("file_name") @db.VarChar(255)
   status            DocumentStatus @default(PENDING)
   rejectionReason   String?        @map("rejection_reason") @db.Text

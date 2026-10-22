@@ -41,6 +41,20 @@ const logger = new Logger('StorageModule');
 
         logger.log(`Initializing storage with provider: ${driver}`);
 
+        // Only s3-compatible's getSignedUrl() actually expires (bug #17).
+        // local is dev-only and unserved either way; cloudinary's
+        // authenticated-delivery URLs are already signed but can't carry an
+        // expiry without a paid add-on this account doesn't have (see the
+        // class comment) — so under either, a document's "signed" URL is
+        // valid indefinitely once issued. Loud rather than silent, since
+        // this storage holds KYC documents.
+        if (driver !== 's3-compatible') {
+          logger.warn(
+            `Storage driver "${driver}" has no expiring signed URL — getSignedUrl() ` +
+              'returns a permanent address. Use s3-compatible for anything KYC-sensitive.',
+          );
+        }
+
         if (driver === 'cloudinary' && config) {
           return new CloudinaryStorageProvider({
             cloudName: config.cloudinary.cloudName,

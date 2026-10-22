@@ -1,0 +1,12 @@
+-- Bug #17: HandymanDocument.fileUrl stored a permanent URL, often a public one.
+-- Renaming to fileKey is a signal, not just cosmetic: the column now holds an
+-- object-storage key, and callers must mint a short-lived signed URL to read
+-- the file (GET /handyman/profile, GET /handyman/documents, the upload
+-- response, or an admin review endpoint — each signs it fresh) rather than
+-- persisting a URL.
+--
+-- A plain rename, not a backfill: any existing row's value is a URL, not a
+-- key, and will not resolve through a storage provider until re-uploaded. On
+-- dev (the only environment with data, see environment-policy) that's the
+-- small existing seed/test set, not production, so no backfill migration.
+ALTER TABLE "handyman_documents" RENAME COLUMN "file_url" TO "file_key";

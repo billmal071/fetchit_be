@@ -132,3 +132,22 @@ export interface IUploadedFile {
   mimetype?: string;
   size?: number;
 }
+
+/**
+ * A `HandymanDocument` shaped for an API response: `fileKey` (the object
+ * storage key — never sent to a client) replaced by `fileUrl`, a signed URL
+ * valid only for a few minutes. See bug #17.
+ */
+export interface IDocumentWithSignedUrl {
+  id: string;
+  handymanProfileId: string;
+  type: string;
+  fileUrl: string;
+  fileName: string;
+  status: string;
+  rejectionReason?: string | null;
+  reviewedById?: string | null;
+  reviewedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}

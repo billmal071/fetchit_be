@@ -132,6 +132,9 @@ export const AUDIT_ACTIONS = {
   HANDYMAN_APPROVE: 'HANDYMAN_APPROVE',
   HANDYMAN_REJECT: 'HANDYMAN_REJECT',
   DOCUMENT_REVIEW: 'DOCUMENT_REVIEW',
+  // A signed URL was issued for an identity document (bug #17's doc requires
+  // logging every access to these, not just the review decision).
+  DOCUMENT_ACCESS: 'DOCUMENT_ACCESS',
   USER_ROLE_CHANGE: 'USER_ROLE_CHANGE',
   USER_DELETE: 'USER_DELETE',
   USER_SUSPEND: 'USER_SUSPEND',

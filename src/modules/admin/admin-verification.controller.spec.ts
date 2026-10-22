@@ -37,9 +37,9 @@ describe('AdminVerificationController', () => {
     expect(service.getPendingHandymen).toHaveBeenCalledWith(pagination);
   });
 
-  it('getHandymanForReview calls service with id', async () => {
-    const result = await controller.getHandymanForReview('p1');
-    expect(service.getHandymanForReview).toHaveBeenCalledWith('p1');
+  it("getHandymanForReview calls service with id and the reviewing admin's id", async () => {
+    const result = await controller.getHandymanForReview(admin, 'p1');
+    expect(service.getHandymanForReview).toHaveBeenCalledWith('p1', 'admin1');
     expect(result.data).toEqual(mockProfile);
   });
 

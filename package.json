@@ -31,7 +31,8 @@
     "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1127.0",
+    "@aws-sdk/client-s3": "^3.1156.0",
+    "@aws-sdk/s3-request-presigner": "^3.1156.0",
     "@neondatabase/serverless": "0.10.4",
     "@nestjs/bullmq": "^11.0.4",
     "@nestjs/cache-manager": "^2.2.0",
