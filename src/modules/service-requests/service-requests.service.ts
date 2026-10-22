@@ -113,12 +113,22 @@ export class ServiceRequestsService {
             },
           },
         },
+        // Select, not include, on handymanProfile: `include` with no
+        // `select` returns every scalar — bio/yearsOfExperience are fair to
+        // show on an application, but location/latitude/longitude (precise
+        // home coordinates) and rejectionReason (admin-authored KYC text,
+        // never cleared on a later approval — see
+        // HandymanProfileRepository.updateVerificationStatus) are not,
+        // same reasoning as the email/phone leak this is fixing (bug #7).
         applications: {
           include: {
             handymanProfile: {
-              include: {
+              select: {
+                id: true,
+                bio: true,
+                yearsOfExperience: true,
                 user: {
-                  select: { id: true, username: true, email: true, avatar: true, phone: true },
+                  select: { id: true, username: true, avatar: true },
                 },
               },
             },
@@ -196,13 +206,19 @@ export class ServiceRequestsService {
       throw new ForbiddenException('You can only view applications for your own service requests');
     }
 
+    // Select, not include — see findOne's identical comment on why a bare
+    // `include` on handymanProfile is its own leak (location/rejectionReason
+    // and more, not just email/phone).
     return this.prisma.serviceRequestApplication.findMany({
       where: { serviceRequestId: requestId },
       include: {
         handymanProfile: {
-          include: {
+          select: {
+            id: true,
+            bio: true,
+            yearsOfExperience: true,
             user: {
-              select: { id: true, username: true, email: true, avatar: true, phone: true },
+              select: { id: true, username: true, avatar: true },
             },
           },
         },

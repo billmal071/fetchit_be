@@ -32,6 +32,7 @@ import {
   DuplicateApplicationException,
   ServiceRequestNotOpenException,
   ResourceNotFoundException,
+  CategoryNotServicedException,
 } from '@common/exceptions/domain.exception';
 import { BadRequestException, ForbiddenException } from '@common/exceptions/base.exception';
 import {
@@ -467,6 +468,20 @@ export class HandymanService {
 
     if (request.status !== ServiceRequestStatus.OPEN) {
       throw new ServiceRequestNotOpenException();
+    }
+
+    // Bug #8: nothing stopped a handyman applying outside their own
+    // categories — a plumber could apply for electrical work.
+    const servicesCategory = await this.prisma.handymanProfileCategory.findUnique({
+      where: {
+        handymanProfileId_categoryId: {
+          handymanProfileId: profile.id,
+          categoryId: request.categoryId,
+        },
+      },
+    });
+    if (!servicesCategory) {
+      throw new CategoryNotServicedException();
     }
 
     const existingApplication = await this.applicationRepo.findExisting(requestId, profile.id);

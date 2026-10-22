@@ -20,6 +20,7 @@ import {
   DuplicateApplicationException,
   ServiceRequestNotOpenException,
   ResourceNotFoundException,
+  CategoryNotServicedException,
 } from '@common/exceptions/domain.exception';
 import { BadRequestException, ForbiddenException } from '@common/exceptions/base.exception';
 
@@ -108,6 +109,10 @@ describe('HandymanService', () => {
       user: { findUniqueOrThrow: jest.fn() },
       handymanProfile: { update: jest.fn() },
       serviceRequest: { findMany: jest.fn(), count: jest.fn() },
+      // Defaults to "yes, serviced" so every pre-existing applyToRequest test
+      // (written before bug #8's guard existed) keeps passing unless a test
+      // explicitly overrides it to exercise the guard.
+      handymanProfileCategory: { findUnique: jest.fn().mockResolvedValue({ categoryId: 'cat-1' }) },
     };
 
     mockEventEmitter = { emit: jest.fn() };
@@ -581,6 +586,58 @@ describe('HandymanService', () => {
       await expect(service.applyToRequest(userId, 'req-1', dto)).rejects.toThrow(
         ServiceRequestNotOpenException,
       );
+    });
+
+    // Bug #8: nothing stopped a handyman applying outside their own
+    // categories — a plumber could apply for electrical work.
+    it("should throw CategoryNotServicedException when the request's category isn't one of the handyman's", async () => {
+      const verifiedProfile = { ...mockProfile, verificationStatus: VerificationStatus.VERIFIED };
+      const openRequest = {
+        ...mockServiceRequest,
+        status: ServiceRequestStatus.OPEN,
+        categoryId: 'electrical',
+      };
+
+      mockProfileRepo.findByUserId.mockResolvedValue(verifiedProfile);
+      mockServiceRequestRepo.findById.mockResolvedValue(openRequest);
+      mockPrisma.handymanProfileCategory.findUnique.mockResolvedValue(null);
+
+      await expect(service.applyToRequest(userId, 'req-1', dto)).rejects.toThrow(
+        CategoryNotServicedException,
+      );
+      expect(mockPrisma.handymanProfileCategory.findUnique).toHaveBeenCalledWith({
+        where: {
+          handymanProfileId_categoryId: { handymanProfileId: profileId, categoryId: 'electrical' },
+        },
+      });
+      expect(mockApplicationRepo.create).not.toHaveBeenCalled();
+    });
+
+    it("allows the application when the category is one of the handyman's own", async () => {
+      const verifiedProfile = { ...mockProfile, verificationStatus: VerificationStatus.VERIFIED };
+      const openRequest = {
+        ...mockServiceRequest,
+        status: ServiceRequestStatus.OPEN,
+        categoryId: 'plumbing',
+      };
+      const mockApplication = {
+        id: 'app-1',
+        serviceRequestId: 'req-1',
+        handymanProfileId: profileId,
+      };
+
+      mockProfileRepo.findByUserId.mockResolvedValue(verifiedProfile);
+      mockServiceRequestRepo.findById.mockResolvedValue(openRequest);
+      mockPrisma.handymanProfileCategory.findUnique.mockResolvedValue({
+        handymanProfileId: profileId,
+        categoryId: 'plumbing',
+      });
+      mockApplicationRepo.findExisting.mockResolvedValue(null);
+      mockApplicationRepo.create.mockResolvedValue(mockApplication);
+
+      const result = await service.applyToRequest(userId, 'req-1', dto);
+
+      expect(result).toEqual(mockApplication);
     });
   });
 
