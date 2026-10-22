@@ -29,6 +29,7 @@ import {
   SERVICE_REQUEST_APPLICATION_REPOSITORY,
 } from '@/database/repositories';
 import { StorageService } from '@/storage';
+import { AuditService } from '@common/services/audit.service';
 import { HandymanModule } from './handyman.module';
 
 const PROFILE_ID = 'profile-1';
@@ -47,8 +48,11 @@ const storageStub = {
   }),
   delete: jest.fn(),
   getUrl: jest.fn((key: string) => `https://files.test/${key}`),
+  getSignedUrl: jest.fn(async (key: string) => `https://files.test/${key}?signed=1`),
   getProviderName: jest.fn(() => 'stub'),
 };
+
+const auditStub = { log: jest.fn() };
 
 const profileRepo = { findByUserId: jest.fn(async () => ({ id: PROFILE_ID })) };
 
@@ -65,6 +69,7 @@ const profileRepo = { findByUserId: jest.fn(async () => ({ id: PROFILE_ID })) };
     { provide: SERVICE_REQUEST_APPLICATION_REPOSITORY, useValue: {} },
     { provide: PrismaService, useValue: {} },
     { provide: StorageService, useValue: storageStub },
+    { provide: AuditService, useValue: auditStub },
   ],
   exports: [
     HANDYMAN_PROFILE_REPOSITORY,
@@ -73,6 +78,7 @@ const profileRepo = { findByUserId: jest.fn(async () => ({ id: PROFILE_ID })) };
     SERVICE_REQUEST_APPLICATION_REPOSITORY,
     PrismaService,
     StorageService,
+    AuditService,
   ],
 })
 class StubsModule {}
@@ -134,7 +140,7 @@ describe('Handyman document upload (HTTP)', () => {
       id: 'doc-1',
       handymanProfileId: PROFILE_ID,
       type: 'GOVERNMENT_ID',
-      fileUrl: 'https://files.test/x',
+      fileKey: 'handyman-documents/profile-1/government_id/x.pdf',
       status: 'PENDING',
     });
   });
@@ -210,7 +216,7 @@ describe('Handyman document upload (HTTP)', () => {
 
   describe('validation error field names', () => {
     it('preserves camelCase in details[].field', async () => {
-      const res = await fetch(`${baseUrl}/handyman/documents`, {
+      const res = await fetch(`${baseUrl}/handyman/profile/complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: '{}',
@@ -224,11 +230,15 @@ describe('Handyman document upload (HTTP)', () => {
       expect(body.message).toBe('Validation failed');
 
       const fields = body.details.map((detail) => detail.field);
-      // Regression: these used to arrive as `fileurl` / `filename`, which broke
-      // field-level error mapping on the client.
-      expect(fields).toContain('fileUrl');
-      expect(fields).toContain('fileName');
-      expect(fields).not.toContain('fileurl');
+      // Regression: these used to arrive as `hourlyrate` / `categoryids`,
+      // which broke field-level error mapping on the client. Repointed here
+      // (from the deleted POST /handyman/documents) after bug #16 removed
+      // that endpoint; the same filter-level behaviour is pinned narrowly in
+      // http-exception.filter.spec.ts, but this is the one proof that it is
+      // actually wired up on a real request path.
+      expect(fields).toContain('hourlyRate');
+      expect(fields).toContain('categoryIds');
+      expect(fields).not.toContain('hourlyrate');
     });
   });
 });

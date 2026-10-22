@@ -19,8 +19,8 @@ import {
   IServiceRequestApplicationRepository,
 } from '@/database/repositories';
 import { PrismaService } from '@/database/prisma.service';
-import { EVENTS } from '@common/constants';
-import { IPaginatedResult, IUploadedFile } from '@common/interfaces';
+import { EVENTS, CACHE_TTL } from '@common/constants';
+import { IPaginatedResult, IUploadedFile, IDocumentWithSignedUrl } from '@common/interfaces';
 import { ALLOWED_UPLOAD_MIME_TYPES, sanitizeFileName, sniffFileType } from '@common/utils';
 import { StorageService } from '@/storage';
 import { createPaginationMeta } from '@common/utils/pagination.util';
@@ -42,7 +42,6 @@ import {
 import {
   CompleteProfileDto,
   UpdateProfileDto,
-  UploadDocumentDto,
   ApplyServiceRequestDto,
   HandymanServiceRequestQueryDto,
 } from './dto';
@@ -62,6 +61,27 @@ export class HandymanService {
     private readonly eventEmitter: EventEmitter2,
     private readonly storage: StorageService,
   ) {}
+
+  /**
+   * Replace a stored document's `fileKey` with a signed URL valid for
+   * `CACHE_TTL.FIVE_MINUTES`. See bug #17: the key itself is never sent to a
+   * client.
+   *
+   * No audit log here on purpose: every caller of this helper is the
+   * document's own owner reading their own file (getDocuments,
+   * uploadDocumentFile, getProfile). The sensitive case bug #17 is actually
+   * about — an admin reading someone else's ID — is audited in
+   * AdminVerificationService.getHandymanForReview instead. Logging here too
+   * would write one row per document on every single list call with no
+   * cap on documents-per-profile, and self-access to one's own data isn't
+   * the signal AUDIT_ACTIONS.DOCUMENT_ACCESS exists to capture.
+   */
+  private async toSignedDocument(document: HandymanDocument): Promise<IDocumentWithSignedUrl> {
+    const { fileKey, ...rest } = document;
+    const fileUrl = await this.storage.getSignedUrl(fileKey, CACHE_TTL.FIVE_MINUTES);
+
+    return { ...rest, fileUrl };
+  }
 
   async getDashboard(userId: string): Promise<{
     profile: HandymanProfile;
@@ -93,11 +113,27 @@ export class HandymanService {
     };
   }
 
-  async getProfile(userId: string): Promise<HandymanProfile> {
+  async getProfile(
+    userId: string,
+  ): Promise<HandymanProfile & { documents: IDocumentWithSignedUrl[] }> {
     // An onboarded handyman may not have a profile row yet (it is created on
     // completion). Return a default UNVERIFIED profile in that case so an
     // authenticated handyman never gets a 404 here.
-    return this.profileRepo.ensureByUserIdWithDetails(userId);
+    const profile = await this.profileRepo.ensureByUserIdWithDetails(userId);
+
+    // `ensureByUserIdWithDetails` includes `documents`, which the static
+    // `HandymanProfile` type doesn't declare — same boundary cast as
+    // AdminVerificationService.getHandymanForReview. Bug #17: this embedded
+    // list was the second place a raw fileKey reached a client, missed in
+    // the first pass because getDocuments/uploadDocumentFile were the
+    // obvious document endpoints and this one is reached through the
+    // profile, not through /handyman/documents.
+    const { documents, ...rest } = profile as HandymanProfile & { documents: HandymanDocument[] };
+    const signedDocuments = await Promise.all(
+      documents.map((document) => this.toSignedDocument(document)),
+    );
+
+    return { ...rest, documents: signedDocuments };
   }
 
   async completeProfile(userId: string, dto: CompleteProfileDto): Promise<HandymanProfile> {
@@ -197,20 +233,6 @@ export class HandymanService {
     return this.profileRepo.update(profile.id, updateData);
   }
 
-  async uploadDocument(userId: string, dto: UploadDocumentDto): Promise<HandymanDocument> {
-    const profile = await this.profileRepo.findByUserId(userId);
-    if (!profile) {
-      throw new HandymanProfileNotFoundException();
-    }
-
-    return this.documentRepo.create({
-      handymanProfile: { connect: { id: profile.id } },
-      type: dto.type,
-      fileUrl: dto.fileUrl,
-      fileName: dto.fileName,
-    });
-  }
-
   /**
    * Store an uploaded verification document and record it in one call.
    *
@@ -222,7 +244,7 @@ export class HandymanService {
     userId: string,
     type: DocumentType,
     file: IUploadedFile | undefined,
-  ): Promise<HandymanDocument> {
+  ): Promise<IDocumentWithSignedUrl> {
     if (!file?.buffer?.length) {
       throw new BadRequestException('A file is required under the "file" field');
     }
@@ -247,11 +269,12 @@ export class HandymanService {
       contentType: sniffed.mimeType,
     });
 
+    let document: HandymanDocument;
     try {
-      return await this.documentRepo.create({
+      document = await this.documentRepo.create({
         handymanProfile: { connect: { id: profile.id } },
         type,
-        fileUrl: stored.url,
+        fileKey: stored.key,
         fileName: sanitizeFileName(file.originalname, `${type.toLowerCase()}.${sniffed.extension}`),
       });
     } catch (error) {
@@ -261,14 +284,17 @@ export class HandymanService {
       await this.storage.delete(stored.key);
       throw error;
     }
+
+    return this.toSignedDocument(document);
   }
 
-  async getDocuments(userId: string): Promise<HandymanDocument[]> {
+  async getDocuments(userId: string): Promise<IDocumentWithSignedUrl[]> {
     // Read endpoint: a freshly-onboarded handyman with no profile yet has no
     // documents, so return an empty list rather than 404.
     const profile = await this.profileRepo.ensureByUserId(userId);
+    const documents = await this.documentRepo.findByProfileId(profile.id);
 
-    return this.documentRepo.findByProfileId(profile.id);
+    return Promise.all(documents.map((document) => this.toSignedDocument(document)));
   }
 
   // Fix #9: Prevent deletion when documents are under review

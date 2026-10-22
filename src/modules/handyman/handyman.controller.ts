@@ -20,17 +20,12 @@ import {
   ApiConsumes,
 } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
-import type {
-  HandymanProfile,
-  HandymanDocument,
-  ServiceRequest,
-  ServiceRequestApplication,
-} from '@prisma/client';
+import type { HandymanProfile, ServiceRequest, ServiceRequestApplication } from '@prisma/client';
+import type { IDocumentWithSignedUrl } from '@common/interfaces';
 import { HandymanService } from './handyman.service';
 import {
   CompleteProfileDto,
   UpdateProfileDto,
-  UploadDocumentDto,
   UploadDocumentFileDto,
   ApplyServiceRequestDto,
   HandymanServiceRequestQueryDto,
@@ -78,7 +73,9 @@ export class HandymanController {
   })
   @ApiSuccessResponse(HandymanProfileResponseDto)
   @ApiErrorResponses()
-  async getProfile(@CurrentUser() user: IRequestUser): Promise<{ data: HandymanProfile }> {
+  async getProfile(
+    @CurrentUser() user: IRequestUser,
+  ): Promise<{ data: HandymanProfile & { documents: IDocumentWithSignedUrl[] } }> {
     const data = await this.handymanService.getProfile(user.id);
     return { data };
   }
@@ -115,20 +112,12 @@ export class HandymanController {
     return { data, message: SUCCESS_MESSAGES.PROFILE_UPDATED };
   }
 
-  @Post('documents')
-  @ApiOperation({
-    summary: 'Upload a verification document',
-    description: 'Upload a verification document (government ID, selfie, or proof of address).',
-  })
-  @ApiCreatedSuccessResponse(HandymanDocumentResponseDto)
-  @ApiErrorResponses()
-  async uploadDocument(
-    @CurrentUser() user: IRequestUser,
-    @Body() dto: UploadDocumentDto,
-  ): Promise<{ data: HandymanDocument; message: string }> {
-    const data = await this.handymanService.uploadDocument(user.id, dto);
-    return { data, message: SUCCESS_MESSAGES.DOCUMENT_UPLOADED };
-  }
+  // Bug #16: a POST /handyman/documents endpoint used to accept any
+  // client-supplied `fileUrl` and record it as a verification document with
+  // no upload, no bytes to validate — a handyman could submit someone
+  // else's ID, or a link to a malicious page an admin would later open
+  // during review. Removed; POST /handyman/documents/upload below is the
+  // only way to record a document, and it always has real file bytes.
 
   @Post('documents/upload')
   @UseInterceptors(FileInterceptor('file'))
@@ -148,7 +137,7 @@ export class HandymanController {
     @CurrentUser() user: IRequestUser,
     @Body() dto: UploadDocumentFileDto,
     @UploadedFile() file: IUploadedFile | undefined,
-  ): Promise<{ data: HandymanDocument; message: string }> {
+  ): Promise<{ data: IDocumentWithSignedUrl; message: string }> {
     const data = await this.handymanService.uploadDocumentFile(user.id, dto.type, file);
     return { data, message: SUCCESS_MESSAGES.DOCUMENT_UPLOADED };
   }
@@ -160,7 +149,9 @@ export class HandymanController {
   })
   @ApiSuccessResponse(HandymanDocumentResponseDto, true)
   @ApiErrorResponses()
-  async getDocuments(@CurrentUser() user: IRequestUser): Promise<{ data: HandymanDocument[] }> {
+  async getDocuments(
+    @CurrentUser() user: IRequestUser,
+  ): Promise<{ data: IDocumentWithSignedUrl[] }> {
     const data = await this.handymanService.getDocuments(user.id);
     return { data };
   }

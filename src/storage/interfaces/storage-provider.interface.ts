@@ -25,8 +25,27 @@ export interface IStorageProvider {
 
   /**
    * Public (or base-URL-derived) address for a stored key.
+   *
+   * Historically also what `HandymanDocument.fileKey` and friends stored
+   * (bug #17: a permanent URL in the database — often a genuinely public one
+   * for the s3-compatible and local drivers, since neither signs it). Nothing
+   * should persist this for anything access-sensitive any more; it exists for
+   * drivers/callers that are fine with a stable, unauthenticated address.
    */
   getUrl(key: string): string;
+
+  /**
+   * Short-lived address for a stored key, for anything sensitive (KYC
+   * documents): a caller who has this URL can fetch the object only until
+   * `expiresInSeconds` elapses, so leaking one (a log line, a browser
+   * history entry, a cached response) is not a permanent compromise the way
+   * a stored `getUrl()` address is.
+   *
+   * Only honoured by `s3-compatible`. `local` and `cloudinary` return a
+   * non-expiring address instead (see their class comments for why) —
+   * `StorageModule` logs a warning on boot when either is selected.
+   */
+  getSignedUrl(key: string, expiresInSeconds: number): Promise<string>;
 
   /**
    * Provider name for logging/health output.

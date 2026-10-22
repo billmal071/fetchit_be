@@ -54,7 +54,7 @@ describe('HandymanService', () => {
     id: 'doc-1',
     handymanProfileId: profileId,
     type: 'GOVERNMENT_ID',
-    fileUrl: 'https://example.com/doc.pdf',
+    fileKey: 'handyman-documents/profile-1/government_id/doc.pdf',
     fileName: 'id-card.pdf',
     status: 'PENDING',
     createdAt: new Date(),
@@ -121,6 +121,7 @@ describe('HandymanService', () => {
       })),
       delete: jest.fn().mockResolvedValue(undefined),
       getUrl: jest.fn((key: string) => `https://files.test/${key}`),
+      getSignedUrl: jest.fn(async (key: string) => `https://files.test/${key}?signed=1`),
       getProviderName: jest.fn(() => 'stub'),
     };
 
@@ -174,23 +175,35 @@ describe('HandymanService', () => {
   });
 
   describe('getProfile', () => {
-    it('should return the existing profile with details', async () => {
-      mockProfileRepo.ensureByUserIdWithDetails.mockResolvedValue(mockProfile);
+    it("signs every embedded document's URL and never returns the raw key", async () => {
+      // Regression: this embedded list was the second place a raw fileKey
+      // reached a client (bug #17) — missed in the first pass because it's
+      // reached through GET /handyman/profile, not /handyman/documents.
+      const profileWithDocs = { ...mockProfile, documents: [mockDocument] };
+      mockProfileRepo.ensureByUserIdWithDetails.mockResolvedValue(profileWithDocs);
 
       const result = await service.getProfile(userId);
 
-      expect(result).toEqual(mockProfile);
       expect(mockProfileRepo.ensureByUserIdWithDetails).toHaveBeenCalledWith(userId);
+      expect(result.documents).toHaveLength(1);
+      expect(result.documents[0]).not.toHaveProperty('fileKey');
+      expect(result.documents[0].fileUrl).toBe(
+        `https://files.test/${mockDocument.fileKey}?signed=1`,
+      );
     });
 
-    it('should return a lazily-created default profile when none exists (no 404)', async () => {
-      const defaultProfile = { ...mockProfile, verificationStatus: VerificationStatus.UNVERIFIED };
+    it('should return a lazily-created default profile with no documents when none exists (no 404)', async () => {
+      const defaultProfile = {
+        ...mockProfile,
+        verificationStatus: VerificationStatus.UNVERIFIED,
+        documents: [],
+      };
       mockProfileRepo.ensureByUserIdWithDetails.mockResolvedValue(defaultProfile);
 
       const result = await service.getProfile(userId);
 
       expect(mockProfileRepo.ensureByUserIdWithDetails).toHaveBeenCalledWith(userId);
-      expect(result).toEqual(defaultProfile);
+      expect(result.documents).toEqual([]);
     });
   });
 
@@ -294,37 +307,6 @@ describe('HandymanService', () => {
     });
   });
 
-  describe('uploadDocument', () => {
-    const dto = {
-      type: 'GOVERNMENT_ID' as const,
-      fileUrl: 'https://example.com/doc.pdf',
-      fileName: 'id-card.pdf',
-    };
-
-    it('should create document when profile exists', async () => {
-      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
-      mockDocumentRepo.create.mockResolvedValue(mockDocument);
-
-      const result = await service.uploadDocument(userId, dto);
-
-      expect(result).toEqual(mockDocument);
-      expect(mockDocumentRepo.create).toHaveBeenCalledWith({
-        handymanProfile: { connect: { id: profileId } },
-        type: dto.type,
-        fileUrl: dto.fileUrl,
-        fileName: dto.fileName,
-      });
-    });
-
-    it('should throw when profile not found', async () => {
-      mockProfileRepo.findByUserId.mockResolvedValue(null);
-
-      await expect(service.uploadDocument(userId, dto)).rejects.toThrow(
-        HandymanProfileNotFoundException,
-      );
-    });
-  });
-
   describe('uploadDocumentFile', () => {
     const pdf = Buffer.concat([Buffer.from('%PDF-1.7'), Buffer.alloc(16)]);
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
@@ -339,8 +321,6 @@ describe('HandymanService', () => {
         mimetype: 'application/octet-stream',
       });
 
-      expect(result).toEqual(mockDocument);
-
       const uploaded = mockStorage.upload.mock.calls[0][0];
       expect(uploaded.contentType).toBe('application/pdf');
       expect(uploaded.key).toMatch(
@@ -350,9 +330,14 @@ describe('HandymanService', () => {
       expect(mockDocumentRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'GOVERNMENT_ID',
-          fileUrl: `https://files.test/${uploaded.key}`,
+          fileKey: uploaded.key,
         }),
       );
+
+      // Bug #17: the raw key never reaches the response, a signed URL does —
+      // and it's minted fresh, not read back from whatever storage returned.
+      expect(result).not.toHaveProperty('fileKey');
+      expect(result.fileUrl).toBe(`https://files.test/${mockDocument.fileKey}?signed=1`);
     });
 
     it('never lets a client filename reach the storage key', async () => {

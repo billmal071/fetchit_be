@@ -118,3 +118,44 @@ describe('S3CompatibleStorageProvider', () => {
     expect(createProvider().provider.getProviderName()).toBe('s3-compatible');
   });
 });
+
+describe('S3CompatibleStorageProvider.getSignedUrl', () => {
+  // Presigning is pure local computation (HMAC over the request + a real
+  // S3Client's config/region/endpoint resolution) — no network call happens,
+  // so a real client with static credentials is fast and safe to construct
+  // here. The lightweight `{ send: jest.fn() }` stub used above can't stand
+  // in for it: there is no `send()` to intercept.
+  it('returns a presigned GET URL for the key, expiring after expiresInSeconds', async () => {
+    const provider = new S3CompatibleStorageProvider({
+      endpoint: 'https://acct.r2.cloudflarestorage.com',
+      region: 'auto',
+      bucket: 'fetchit-documents',
+      accessKeyId: 'AKIAEXAMPLE',
+      secretAccessKey: 'secret',
+      forcePathStyle: true,
+    });
+
+    const url = await provider.getSignedUrl('handyman-documents/p1/selfie/abc.pdf', 300);
+    const parsed = new URL(url);
+
+    // Path-style (forcePathStyle: true): bucket is a path segment, not a subdomain.
+    expect(parsed.href).toContain('/fetchit-documents/handyman-documents/p1/selfie/abc.pdf');
+    expect(parsed.searchParams.get('X-Amz-Expires')).toBe('300');
+    // Presence of a signature is what makes this a *signed* URL rather than
+    // the same permanent address getUrl() returns for the same key.
+    expect(parsed.searchParams.get('X-Amz-Signature')).toBeTruthy();
+    expect(parsed.searchParams.get('X-Amz-Credential')).toContain('AKIAEXAMPLE');
+  });
+
+  it('rejects a path-traversal key the same way upload/delete do', async () => {
+    const provider = new S3CompatibleStorageProvider({
+      region: 'auto',
+      bucket: 'fetchit-documents',
+      accessKeyId: 'key',
+      secretAccessKey: 'secret',
+      forcePathStyle: true,
+    });
+
+    await expect(provider.getSignedUrl('../../etc/passwd', 300)).rejects.toThrow();
+  });
+});

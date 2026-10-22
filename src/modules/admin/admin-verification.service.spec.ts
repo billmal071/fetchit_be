@@ -5,6 +5,7 @@ import { AdminVerificationService } from './admin-verification.service';
 import { HANDYMAN_PROFILE_REPOSITORY, HANDYMAN_DOCUMENT_REPOSITORY } from '@/database/repositories';
 import { PrismaService } from '@/database/prisma.service';
 import { AuditService } from '@common/services/audit.service';
+import { StorageService } from '@/storage';
 import { EVENTS } from '@common/constants';
 import {
   ResourceNotFoundException,
@@ -18,6 +19,7 @@ describe('AdminVerificationService', () => {
   let mockPrisma: Record<string, Record<string, jest.Mock>>;
   let mockEventEmitter: { emit: jest.Mock };
   let mockAuditService: { log: jest.Mock };
+  let mockStorage: { getSignedUrl: jest.Mock };
 
   const adminUserId = 'admin-1';
   const profileId = 'profile-1';
@@ -37,7 +39,7 @@ describe('AdminVerificationService', () => {
     id: 'doc-1',
     handymanProfileId: profileId,
     type: 'GOVERNMENT_ID',
-    fileUrl: 'https://example.com/doc.pdf',
+    fileKey: 'handyman-documents/profile-1/government_id/doc.pdf',
     fileName: 'id-card.pdf',
     status: 'PENDING',
     createdAt: new Date(),
@@ -69,6 +71,9 @@ describe('AdminVerificationService', () => {
 
     mockEventEmitter = { emit: jest.fn() };
     mockAuditService = { log: jest.fn() };
+    mockStorage = {
+      getSignedUrl: jest.fn(async (key: string) => `https://files.test/${key}?signed=1`),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -78,6 +83,7 @@ describe('AdminVerificationService', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: EventEmitter2, useValue: mockEventEmitter },
         { provide: AuditService, useValue: mockAuditService },
+        { provide: StorageService, useValue: mockStorage },
       ],
     }).compile();
 
@@ -85,20 +91,45 @@ describe('AdminVerificationService', () => {
   });
 
   describe('getHandymanForReview', () => {
-    it('should return profile with documents', async () => {
+    it('returns the profile with each document mapped to a signed URL, and audits the access', async () => {
       const profileWithDocs = { ...mockProfile, documents: [mockDocument] };
       mockProfileRepo.findWithDocuments.mockResolvedValue(profileWithDocs);
 
-      const result = await service.getHandymanForReview(profileId);
+      const result = await service.getHandymanForReview(profileId, adminUserId);
 
-      expect(result).toEqual(profileWithDocs);
       expect(mockProfileRepo.findWithDocuments).toHaveBeenCalledWith(profileId);
+      // Bug #17: the raw key never leaves the service, a fresh signed URL does.
+      expect(result.documents).toHaveLength(1);
+      expect(result.documents[0]).not.toHaveProperty('fileKey');
+      expect(result.documents[0].fileUrl).toBe(
+        `https://files.test/${mockDocument.fileKey}?signed=1`,
+      );
+      expect(mockAuditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: adminUserId,
+          action: 'DOCUMENT_ACCESS',
+          entity: 'HandymanDocument',
+          entityId: mockDocument.id,
+        }),
+      );
+    });
+
+    it('still returns the signed document when the audit insert fails — a read must not 500 on a logging failure', async () => {
+      const profileWithDocs = { ...mockProfile, documents: [mockDocument] };
+      mockProfileRepo.findWithDocuments.mockResolvedValue(profileWithDocs);
+      mockAuditService.log.mockRejectedValueOnce(new Error('db unavailable'));
+
+      const result = await service.getHandymanForReview(profileId, adminUserId);
+
+      expect(result.documents[0].fileUrl).toBe(
+        `https://files.test/${mockDocument.fileKey}?signed=1`,
+      );
     });
 
     it('should throw ResourceNotFoundException when not found', async () => {
       mockProfileRepo.findWithDocuments.mockResolvedValue(null);
 
-      await expect(service.getHandymanForReview('nonexistent')).rejects.toThrow(
+      await expect(service.getHandymanForReview('nonexistent', adminUserId)).rejects.toThrow(
         ResourceNotFoundException,
       );
     });
@@ -242,13 +273,40 @@ describe('AdminVerificationService', () => {
 
       const result = await service.reviewDocument(profileId, 'doc-1', adminUserId, dto);
 
-      expect(result).toEqual(updatedDoc);
+      expect(result).not.toHaveProperty('fileKey');
+      expect(result.fileUrl).toBe(`https://files.test/${updatedDoc.fileKey}?signed=1`);
       expect(mockDocumentRepo.update).toHaveBeenCalledWith('doc-1', {
         status: 'APPROVED',
         rejectionReason: null,
         reviewedBy: { connect: { id: adminUserId } },
         reviewedAt: expect.any(Date),
       });
+      // Both the decision and the resulting document access are logged —
+      // separately, so a query by action type finds either (finding from
+      // review).
+      expect(mockAuditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'DOCUMENT_REVIEW', entityId: 'doc-1' }),
+      );
+      expect(mockAuditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'DOCUMENT_ACCESS', entityId: 'doc-1' }),
+      );
+    });
+
+    it('still returns the signed document when the access-audit insert fails', async () => {
+      const dto = { status: 'APPROVED' as const };
+      const updatedDoc = { ...mockDocument, status: 'APPROVED', reviewedAt: new Date() };
+
+      mockDocumentRepo.findById.mockResolvedValue(mockDocument);
+      mockDocumentRepo.update.mockResolvedValue(updatedDoc);
+      mockAuditService.log.mockImplementation((entry: { action: string }) =>
+        entry.action === 'DOCUMENT_ACCESS'
+          ? Promise.reject(new Error('db unavailable'))
+          : Promise.resolve(undefined),
+      );
+
+      const result = await service.reviewDocument(profileId, 'doc-1', adminUserId, dto);
+
+      expect(result.fileUrl).toBe(`https://files.test/${updatedDoc.fileKey}?signed=1`);
     });
 
     it('should update document status to REJECTED with reason', async () => {
@@ -265,7 +323,8 @@ describe('AdminVerificationService', () => {
 
       const result = await service.reviewDocument(profileId, 'doc-1', adminUserId, dto);
 
-      expect(result).toEqual(updatedDoc);
+      expect(result).not.toHaveProperty('fileKey');
+      expect(result.fileUrl).toBe(`https://files.test/${updatedDoc.fileKey}?signed=1`);
       expect(mockDocumentRepo.update).toHaveBeenCalledWith('doc-1', {
         status: 'REJECTED',
         rejectionReason: 'Blurry image',

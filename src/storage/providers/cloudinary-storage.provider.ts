@@ -167,6 +167,18 @@ export class CloudinaryStorageProvider implements IStorageProvider {
     });
   }
 
+  // Not a real expiring signature: this account's plan has no token-based
+  // auth add-on, which is what Cloudinary needs to put an expiry on an
+  // `authenticated`-delivery asset. getUrl() already returns a signed,
+  // unguessable URL (see the class comment) — just one that is valid for as
+  // long as the asset exists, same limitation as before this method existed.
+  // Treat switching to this driver for anything KYC-sensitive as blocked on
+  // that add-on; s3-compatible (the chosen driver, see
+  // storage-provider-decision) has a real expiry.
+  async getSignedUrl(key: string): Promise<string> {
+    return this.getUrl(key);
+  }
+
   getProviderName(): string {
     return 'cloudinary';
   }

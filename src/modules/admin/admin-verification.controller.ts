@@ -1,7 +1,7 @@
 import { Controller, Get, Patch, Param, Body, Query } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiParam } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
-import type { HandymanProfile, HandymanDocument } from '@prisma/client';
+import type { HandymanProfile } from '@prisma/client';
 import { AdminVerificationService } from './admin-verification.service';
 import { RejectHandymanDto, ReviewDocumentDto } from './dto';
 import { Roles } from '@common/decorators/roles.decorator';
@@ -10,7 +10,7 @@ import { ApiSuccessResponse, ApiPaginatedResponse, ApiErrorResponses } from '@/c
 import { HandymanProfileResponseDto, HandymanDocumentResponseDto } from '@modules/handyman/dto';
 import { PaginationDto } from '@common/dto/pagination.dto';
 import { IRequestUser } from '@common/interfaces';
-import type { IMeta } from '@common/interfaces';
+import type { IMeta, IDocumentWithSignedUrl } from '@common/interfaces';
 import { SUCCESS_MESSAGES } from '@common/constants';
 
 @ApiTags('Admin - Handyman Verification')
@@ -41,8 +41,11 @@ export class AdminVerificationController {
   @ApiParam({ name: 'id', description: 'Handyman profile UUID' })
   @ApiSuccessResponse(HandymanProfileResponseDto)
   @ApiErrorResponses()
-  async getHandymanForReview(@Param('id') id: string): Promise<{ data: HandymanProfile }> {
-    const data = await this.adminVerificationService.getHandymanForReview(id);
+  async getHandymanForReview(
+    @CurrentUser() user: IRequestUser,
+    @Param('id') id: string,
+  ): Promise<{ data: HandymanProfile }> {
+    const data = await this.adminVerificationService.getHandymanForReview(id, user.id);
     return { data };
   }
 
@@ -94,7 +97,7 @@ export class AdminVerificationController {
     @Param('docId') docId: string,
     @Body() dto: ReviewDocumentDto,
     @CurrentUser() user: IRequestUser,
-  ): Promise<{ data: HandymanDocument; message: string }> {
+  ): Promise<{ data: IDocumentWithSignedUrl; message: string }> {
     const data = await this.adminVerificationService.reviewDocument(id, docId, user.id, dto);
     return { data, message: 'Document reviewed successfully' };
   }

@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { VerificationStatus } from '@prisma/client';
 import type { HandymanProfile, HandymanDocument } from '@prisma/client';
@@ -12,7 +12,9 @@ import { PrismaService } from '@/database/prisma.service';
 import { AuditService } from '@common/services/audit.service';
 import { PaginationDto } from '@common/dto/pagination.dto';
 import { createPaginationMeta } from '@common/utils/pagination.util';
-import { EVENTS, AUDIT_ACTIONS } from '@common/constants';
+import { EVENTS, AUDIT_ACTIONS, CACHE_TTL } from '@common/constants';
+import { IDocumentWithSignedUrl } from '@common/interfaces';
+import { StorageService } from '@/storage';
 import {
   ResourceNotFoundException,
   InvalidVerificationTransitionException,
@@ -23,6 +25,8 @@ import { RejectHandymanDto, ReviewDocumentDto } from './dto';
 
 @Injectable()
 export class AdminVerificationService {
+  private readonly logger = new Logger(AdminVerificationService.name);
+
   constructor(
     @Inject(HANDYMAN_PROFILE_REPOSITORY)
     private readonly profileRepo: IHandymanProfileRepository,
@@ -31,6 +35,7 @@ export class AdminVerificationService {
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
     private readonly auditService: AuditService,
+    private readonly storage: StorageService,
   ) {}
 
   async getPendingHandymen(pagination: PaginationDto): Promise<IPaginatedResult<HandymanProfile>> {
@@ -61,14 +66,37 @@ export class AdminVerificationService {
     };
   }
 
-  async getHandymanForReview(profileId: string): Promise<HandymanProfile> {
+  async getHandymanForReview(
+    profileId: string,
+    adminUserId: string,
+  ): Promise<HandymanProfile & { documents: IDocumentWithSignedUrl[] }> {
     const profile = await this.profileRepo.findWithDocuments(profileId);
 
     if (!profile) {
       throw new ResourceNotFoundException('HandymanProfile', profileId);
     }
 
-    return profile;
+    // `findWithDocuments` includes `documents`, which the static
+    // `HandymanProfile` type doesn't declare — cast once at this boundary
+    // rather than widening the repository interface's return type.
+    const { documents, ...rest } = profile as HandymanProfile & { documents: HandymanDocument[] };
+
+    const signedDocuments = await Promise.all(
+      documents.map(async ({ fileKey, ...doc }) => {
+        const fileUrl = await this.storage.getSignedUrl(fileKey, CACHE_TTL.FIVE_MINUTES);
+
+        // Bug #17 requires logging every access to an identity document. This
+        // is specifically the sensitive case: an admin viewing another user's
+        // government ID / selfie / address proof. Best-effort: this is a read
+        // path, so a failed audit insert must not turn a successful review
+        // load into a 500.
+        await this.logDocumentAccess(adminUserId, doc.id);
+
+        return { ...doc, fileUrl };
+      }),
+    );
+
+    return { ...rest, documents: signedDocuments };
   }
 
   async approveHandyman(profileId: string, adminUserId: string): Promise<HandymanProfile> {
@@ -162,7 +190,7 @@ export class AdminVerificationService {
     docId: string,
     adminUserId: string,
     dto: ReviewDocumentDto,
-  ): Promise<HandymanDocument> {
+  ): Promise<IDocumentWithSignedUrl> {
     const document = await this.documentRepo.findById(docId);
 
     if (!document || document.handymanProfileId !== profileId) {
@@ -184,6 +212,28 @@ export class AdminVerificationService {
       details: { status: dto.status },
     });
 
-    return updated;
+    // Also a DOCUMENT_ACCESS entry, distinct from DOCUMENT_REVIEW above: an
+    // auditor filtering "every time a signed URL was issued for this
+    // document" by action type would otherwise miss this one. Best-effort,
+    // same reasoning as logDocumentAccess below.
+    await this.logDocumentAccess(adminUserId, docId);
+
+    const { fileKey, ...rest } = updated;
+    const fileUrl = await this.storage.getSignedUrl(fileKey, CACHE_TTL.FIVE_MINUTES);
+
+    return { ...rest, fileUrl };
+  }
+
+  private async logDocumentAccess(adminUserId: string, documentId: string): Promise<void> {
+    try {
+      await this.auditService.log({
+        userId: adminUserId,
+        action: AUDIT_ACTIONS.DOCUMENT_ACCESS,
+        entity: 'HandymanDocument',
+        entityId: documentId,
+      });
+    } catch (error) {
+      this.logger.warn(`Failed to record DOCUMENT_ACCESS for ${documentId}: ${error}`);
+    }
   }
 }

@@ -40,6 +40,10 @@ export class StorageService {
     return this.provider.getUrl(key);
   }
 
+  getSignedUrl(key: string, expiresInSeconds: number): Promise<string> {
+    return this.provider.getSignedUrl(key, expiresInSeconds);
+  }
+
   getProviderName(): string {
     return this.provider.getProviderName();
   }

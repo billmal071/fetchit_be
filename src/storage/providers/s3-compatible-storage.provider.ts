@@ -2,7 +2,13 @@ import { Logger } from '@nestjs/common';
 // `@aws-sdk/client-s3` is the reference client for the S3 *protocol*, not a tie
 // to AWS. Cloudflare R2, Backblaze B2, Supabase Storage and MinIO all document
 // this exact package as the way to talk to them. No AWS account is involved.
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+} from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { IStorageProvider, IStorageUploadInput, IStoredObject } from '../interfaces';
 import { assertSafeStorageKey, joinUrl } from '../storage.util';
 
@@ -108,6 +114,14 @@ export class S3CompatibleStorageProvider implements IStorageProvider {
     }
 
     return `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
+  }
+
+  async getSignedUrl(key: string, expiresInSeconds: number): Promise<string> {
+    assertSafeStorageKey(key);
+
+    return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key: key }), {
+      expiresIn: expiresInSeconds,
+    });
   }
 
   getProviderName(): string {

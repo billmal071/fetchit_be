@@ -7,7 +7,6 @@ import { IRequestUser } from '@common/interfaces';
 import {
   CompleteProfileDto,
   UpdateProfileDto,
-  UploadDocumentDto,
   ApplyServiceRequestDto,
   HandymanServiceRequestQueryDto,
 } from './dto';
@@ -25,7 +24,7 @@ describe('HandymanController', () => {
       getProfile: jest.fn().mockResolvedValue(mockData),
       completeProfile: jest.fn().mockResolvedValue(mockData),
       updateProfile: jest.fn().mockResolvedValue(mockData),
-      uploadDocument: jest.fn().mockResolvedValue(mockData),
+      uploadDocumentFile: jest.fn().mockResolvedValue(mockData),
       getDocuments: jest.fn().mockResolvedValue([mockData]),
       deleteDocument: jest.fn(),
       submitDocuments: jest.fn().mockResolvedValue(mockData),
@@ -69,10 +68,14 @@ describe('HandymanController', () => {
     expect(result.message).toBe(SUCCESS_MESSAGES.PROFILE_UPDATED);
   });
 
-  it('uploadDocument calls service', async () => {
-    const dto = { type: 'GOVERNMENT_ID', fileUrl: 'url' } as UploadDocumentDto;
-    const result = await controller.uploadDocument(user, dto);
-    expect(service.uploadDocument).toHaveBeenCalledWith('u1', dto);
+  it('uploadDocumentFile calls service with the sniffed type and file', async () => {
+    const file = { buffer: Buffer.from('x') };
+    const result = await controller.uploadDocumentFile(
+      user,
+      { type: 'GOVERNMENT_ID', file: undefined },
+      file,
+    );
+    expect(service.uploadDocumentFile).toHaveBeenCalledWith('u1', 'GOVERNMENT_ID', file);
     expect(result.message).toBe(SUCCESS_MESSAGES.DOCUMENT_UPLOADED);
   });
 
