@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { MESSAGE_METADATA } from '@nestjs/websockets/constants';
 import { EventsGateway } from './events.gateway';
 
 /**
@@ -57,10 +58,17 @@ describe('EventsGateway', () => {
     expect(client.disconnect).not.toHaveBeenCalled();
   });
 
-  it('has no handler that lets a client join an arbitrary room', () => {
-    // The vulnerable surface, named explicitly so re-adding a free-form
-    // join-room handler fails this test rather than slipping back in.
-    expect((gateway as unknown as Record<string, unknown>).handleJoinRoom).toBeUndefined();
-    expect((gateway as unknown as Record<string, unknown>).handleLeaveRoom).toBeUndefined();
+  it('has no handler registered for join-room or leave-room', () => {
+    // Check the actual Nest registration (@SubscribeMessage's MESSAGE_METADATA
+    // on the method), not a method name — a handler renamed to anything else
+    // would still register the vulnerable event and pass a name-based check.
+    const registeredMessages = Object.getOwnPropertyNames(EventsGateway.prototype)
+      .map((key) => (gateway as unknown as Record<string, () => unknown>)[key])
+      .filter((value): value is (...args: unknown[]) => unknown => typeof value === 'function')
+      .map((fn) => Reflect.getMetadata(MESSAGE_METADATA, fn))
+      .filter((message): message is string => message !== undefined);
+
+    expect(registeredMessages).not.toContain('join-room');
+    expect(registeredMessages).not.toContain('leave-room');
   });
 });
