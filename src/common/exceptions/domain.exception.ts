@@ -143,3 +143,13 @@ export class ApplicationNotPendingException extends DomainException {
     );
   }
 }
+
+export class CategoryNotServicedException extends DomainException {
+  constructor() {
+    super(
+      "You can only apply to requests in your profile's service categories",
+      'CATEGORY_NOT_SERVICED',
+      HttpStatus.FORBIDDEN,
+    );
+  }
+}

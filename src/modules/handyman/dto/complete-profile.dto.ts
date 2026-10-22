@@ -6,6 +6,7 @@ import {
   Min,
   Max,
   IsArray,
+  ArrayNotEmpty,
   IsUUID,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -62,6 +63,11 @@ export class CompleteProfileDto {
     type: [String],
   })
   @IsArray()
+  // Bug #8's apply-to-request guard rejects on zero categories (correctly —
+  // nothing to match against) with no self-service way back in, since
+  // updateProfile only rewrites categories when the array is non-empty. An
+  // empty array here would otherwise be a silent, permanent dead end.
+  @ArrayNotEmpty()
   @IsUUID('4', { each: true })
   categoryIds: string[];
 }

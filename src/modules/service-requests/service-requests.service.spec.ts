@@ -157,6 +157,34 @@ describe('ServiceRequestsService', () => {
       expect(result).toEqual(requestWithIncludes);
     });
 
+    // Bug #7: every applicant's email/phone was embedded here, visible to the
+    // customer before they chose anyone.
+    it("never selects an applicant's email or phone", async () => {
+      mockPrisma.serviceRequest.findUnique.mockResolvedValue({
+        ...mockRequest,
+        customer: { id: userId },
+        assignedHandyman: null,
+        applications: [],
+      });
+
+      await service.findOne(requestId, userId, 'USER');
+
+      const call = mockPrisma.serviceRequest.findUnique.mock.calls[0][0];
+      const profileSelect = call.include.applications.include.handymanProfile.select;
+      // A bare `include` with no `select` returns every HandymanProfile
+      // scalar — location/latitude/longitude and rejectionReason leak just
+      // as badly as email/phone, so the fix must be a `select`, not merely a
+      // narrower nested one.
+      expect(call.include.applications.include.handymanProfile.include).toBeUndefined();
+      expect(profileSelect).not.toHaveProperty('location');
+      expect(profileSelect).not.toHaveProperty('latitude');
+      expect(profileSelect).not.toHaveProperty('longitude');
+      expect(profileSelect).not.toHaveProperty('rejectionReason');
+      expect(profileSelect.user.select).toEqual({ id: true, username: true, avatar: true });
+      expect(profileSelect.user.select).not.toHaveProperty('email');
+      expect(profileSelect.user.select).not.toHaveProperty('phone');
+    });
+
     it('should throw ResourceNotFoundException when not found', async () => {
       mockPrisma.serviceRequest.findUnique.mockResolvedValue(null);
 
@@ -270,6 +298,46 @@ describe('ServiceRequestsService', () => {
       mockRequestRepo.findById.mockResolvedValue(mockRequest);
 
       await expect(service.cancel(requestId, otherUserId)).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('getApplications', () => {
+    it('should return the applications for the owning customer', async () => {
+      mockRequestRepo.findById.mockResolvedValue(mockRequest);
+      mockPrisma.serviceRequestApplication.findMany.mockResolvedValue([mockApplication]);
+
+      const result = await service.getApplications(requestId, userId);
+
+      expect(result).toEqual([mockApplication]);
+    });
+
+    it('should throw ForbiddenException when not the owner', async () => {
+      mockRequestRepo.findById.mockResolvedValue(mockRequest);
+
+      await expect(service.getApplications(requestId, otherUserId)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    // Bug #7: every applicant's email/phone — and, via a bare `include`,
+    // every other HandymanProfile scalar (location/rejectionReason) — was
+    // visible here, to the customer, before they chose anyone.
+    it("never selects an applicant's contact details or sensitive profile fields", async () => {
+      mockRequestRepo.findById.mockResolvedValue(mockRequest);
+      mockPrisma.serviceRequestApplication.findMany.mockResolvedValue([]);
+
+      await service.getApplications(requestId, userId);
+
+      const call = mockPrisma.serviceRequestApplication.findMany.mock.calls[0][0];
+      const profileSelect = call.include.handymanProfile.select;
+      expect(call.include.handymanProfile.include).toBeUndefined();
+      expect(profileSelect).not.toHaveProperty('location');
+      expect(profileSelect).not.toHaveProperty('latitude');
+      expect(profileSelect).not.toHaveProperty('longitude');
+      expect(profileSelect).not.toHaveProperty('rejectionReason');
+      expect(profileSelect.user.select).toEqual({ id: true, username: true, avatar: true });
+      expect(profileSelect.user.select).not.toHaveProperty('email');
+      expect(profileSelect.user.select).not.toHaveProperty('phone');
     });
   });
 
