@@ -210,7 +210,6 @@ export class ServiceRequestsService {
     });
   }
 
-  // Fix #1: Wrap in Prisma transaction to prevent race conditions
   async acceptApplication(
     requestId: string,
     appId: string,
@@ -242,31 +241,42 @@ export class ServiceRequestsService {
       throw new ResourceNotFoundException('Application', appId);
     }
 
-    // Atomic transaction: accept app, assign handyman, reject others
-    const [, updatedRequest] = await this.prisma.$transaction([
-      // Accept the application
-      this.prisma.serviceRequestApplication.update({
-        where: { id: appId },
-        data: { status: ApplicationStatus.ACCEPTED },
-      }),
-      // Assign handyman and update request status
-      this.prisma.serviceRequest.update({
-        where: { id: requestId },
+    // The checks above read outside the transaction, so two concurrent
+    // accepts could both pass them before either writes. The real guard is
+    // this conditional update: `where` includes `status: OPEN`, so only the
+    // request that wins the race matches any row. The loser gets `count: 0`
+    // and the whole transaction rolls back before touching applications —
+    // previously it updated unconditionally and both accepts "succeeded",
+    // leaving two ACCEPTED applications on one request.
+    const updatedRequest = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.serviceRequest.updateMany({
+        where: { id: requestId, status: ServiceRequestStatus.OPEN },
         data: {
           status: ServiceRequestStatus.ASSIGNED,
           assignedHandymanId: application.handymanProfileId,
         },
-      }),
-      // Reject all other pending applications
-      this.prisma.serviceRequestApplication.updateMany({
+      });
+
+      if (count === 0) {
+        throw new ServiceRequestNotOpenException();
+      }
+
+      await tx.serviceRequestApplication.update({
+        where: { id: appId },
+        data: { status: ApplicationStatus.ACCEPTED },
+      });
+
+      await tx.serviceRequestApplication.updateMany({
         where: {
           serviceRequestId: requestId,
           status: ApplicationStatus.PENDING,
           id: { not: appId },
         },
         data: { status: ApplicationStatus.REJECTED },
-      }),
-    ]);
+      });
+
+      return tx.serviceRequest.findUniqueOrThrow({ where: { id: requestId } });
+    });
 
     this.eventEmitter.emit(
       EVENTS.SERVICE_REQUEST_ASSIGNED,

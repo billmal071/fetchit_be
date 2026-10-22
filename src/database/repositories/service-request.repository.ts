@@ -70,8 +70,11 @@ export class ServiceRequestRepository implements IServiceRequestRepository {
       orderBy: options?.orderBy ?? { createdAt: 'desc' },
       include: {
         category: true,
+        // Same leak as handyman.service.ts browseOpenRequests (bug #2): this
+        // method has no caller today, but it is the identical open-feed
+        // pattern, so it must not regain email/phone on the customer.
         customer: {
-          select: { id: true, username: true, email: true, avatar: true, phone: true },
+          select: { id: true, username: true, avatar: true },
         },
         _count: { select: { applications: true } },
       },

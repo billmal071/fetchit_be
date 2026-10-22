@@ -400,8 +400,13 @@ export class HandymanService {
         orderBy: { createdAt: 'desc' as const },
         include: {
           category: true,
+          // No email/phone here: this feed is visible to every verified
+          // handyman before any application exists, so it was leaking every
+          // customer's contact details to the whole handyman pool. Phone is
+          // revealed only after an application is accepted (see
+          // service-requests.service.ts).
           customer: {
-            select: { id: true, username: true, email: true, avatar: true, phone: true },
+            select: { id: true, username: true, avatar: true },
           },
           _count: { select: { applications: true } },
         },

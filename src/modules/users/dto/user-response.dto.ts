@@ -47,4 +47,15 @@ export class UserResponseDto {
   @Expose()
   @ApiPropertyOptional({ example: '2024-01-15T10:30:00.000Z' })
   lastLoginAt?: Date;
+
+  /**
+   * Set by `POST /users/onboard`. `undefined`/`null` means the account has
+   * never been through onboarding — the frontend's role-picker gate
+   * (`src/lib/onboarding.ts`) uses this when present and is definitive; it
+   * only falls back to guessing from `lastLoginAt` when it's missing, which
+   * is how new accounts were skipping the role picker.
+   */
+  @Expose()
+  @ApiPropertyOptional({ example: '2024-01-15T10:30:00.000Z' })
+  onboardedAt?: Date;
 }

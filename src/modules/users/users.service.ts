@@ -1,7 +1,7 @@
 import { Injectable, Logger, Inject } from '@nestjs/common';
 import { User, UserStatus, AuthProvider, UserRole } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
-import { CreateUserDto, UpdateUserDto, UserResponseDto } from './dto';
+import { CreateUserDto, UpdateMeDto, UserResponseDto } from './dto';
 import { OnboardableRole } from './dto';
 import {
   EmailAlreadyExistsException,
@@ -121,7 +121,7 @@ export class UsersService {
     return this.userRepository.findById(id);
   }
 
-  async update(id: string, updateUserDto: UpdateUserDto): Promise<UserResponseDto> {
+  async update(id: string, updateUserDto: UpdateMeDto): Promise<UserResponseDto> {
     const user = await this.userRepository.findById(id);
     if (!user) {
       throw new NotFoundException('User');

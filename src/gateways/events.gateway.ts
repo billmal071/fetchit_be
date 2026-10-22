@@ -5,7 +5,6 @@ import {
   OnGatewayInit,
   OnGatewayConnection,
   OnGatewayDisconnect,
-  MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
@@ -46,22 +45,27 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     try {
       const token = this.extractTokenFromHandshake(client);
 
-      if (token) {
-        const jwtConfig = this.configService.get<IJwtConfig>('jwt');
-        const payload = await this.jwtService.verifyAsync(token, {
-          secret: jwtConfig?.secret,
-        });
-
-        client.userId = payload.sub;
-        client.email = payload.email;
-
-        this.connectedClients.set(client.id, client);
-        client.join(`user:${payload.sub}`);
-
-        this.logger.log(`Client connected: ${client.id} (User: ${payload.email})`);
-      } else {
-        this.logger.log(`Anonymous client connected: ${client.id}`);
+      // No anonymous connections: every socket joins exactly its own
+      // `user:<id>` room below, so an unauthenticated client has nothing
+      // legitimate to do here and previously sat connected indefinitely.
+      if (!token) {
+        this.logger.warn(`Client ${client.id} rejected: no auth token`);
+        client.disconnect();
+        return;
       }
+
+      const jwtConfig = this.configService.get<IJwtConfig>('jwt');
+      const payload = await this.jwtService.verifyAsync(token, {
+        secret: jwtConfig?.secret,
+      });
+
+      client.userId = payload.sub;
+      client.email = payload.email;
+
+      this.connectedClients.set(client.id, client);
+      client.join(`user:${payload.sub}`);
+
+      this.logger.log(`Client connected: ${client.id} (User: ${payload.email})`);
     } catch (error) {
       this.logger.warn(`Client connection failed: ${client.id} - Invalid token`);
       client.disconnect();
@@ -78,31 +82,13 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     return { event: 'pong', data: 'pong' };
   }
 
-  @SubscribeMessage('join-room')
-  handleJoinRoom(
-    @MessageBody() room: string,
-    @ConnectedSocket() client: IAuthenticatedSocket,
-  ): { event: string; data: { room: string; joined: boolean } } {
-    if (!client.userId) {
-      return { event: 'error', data: { room, joined: false } };
-    }
-
-    client.join(room);
-    this.logger.log(`Client ${client.id} joined room: ${room}`);
-
-    return { event: 'room-joined', data: { room, joined: true } };
-  }
-
-  @SubscribeMessage('leave-room')
-  handleLeaveRoom(
-    @MessageBody() room: string,
-    @ConnectedSocket() client: Socket,
-  ): { event: string; data: { room: string; left: boolean } } {
-    client.leave(room);
-    this.logger.log(`Client ${client.id} left room: ${room}`);
-
-    return { event: 'room-left', data: { room, left: true } };
-  }
+  // `join-room`/`leave-room` were removed: any authenticated client could
+  // join ANY room name, including another user's `user:<id>` room, and from
+  // then on silently receive that user's private events. Nothing in the app
+  // calls emitToRoom yet (plumbing only), so there is no legitimate room to
+  // self-serve into today. If a feature needs shared rooms, add a handler
+  // that checks the caller is actually a participant (e.g. of that service
+  // request) before joining — never trust a client-supplied room name.
 
   emitToUser(userId: string, event: string, data: unknown): void {
     this.server.to(`user:${userId}`).emit(event, data);

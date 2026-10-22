@@ -76,6 +76,8 @@ describe('ServiceRequestsService', () => {
         findMany: jest.fn(),
         count: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
       },
       serviceRequestApplication: {
         findMany: jest.fn(),
@@ -270,7 +272,15 @@ describe('ServiceRequestsService', () => {
   });
 
   describe('acceptApplication', () => {
-    it('should use transaction, reject other apps, and emit event', async () => {
+    // $transaction now takes a callback (interactive transaction), not an
+    // array — simulate Prisma by invoking the callback with a `tx` that
+    // shares the same jest mocks, so assertions on mockPrisma.serviceRequest.*
+    // still see the calls made through `tx`.
+    const runTransaction = (): void => {
+      mockPrisma.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(mockPrisma));
+    };
+
+    it('accepts the application, assigns the handyman, rejects other apps, and emits the event', async () => {
       const updatedRequest = {
         ...mockRequest,
         status: ServiceRequestStatus.ASSIGNED,
@@ -279,16 +289,32 @@ describe('ServiceRequestsService', () => {
 
       mockRequestRepo.findById.mockResolvedValue(mockRequest);
       mockApplicationRepo.findById.mockResolvedValue(mockApplication);
-      mockPrisma.$transaction.mockResolvedValue([
-        { ...mockApplication, status: ApplicationStatus.ACCEPTED },
-        updatedRequest,
-        { count: 2 },
-      ]);
+      runTransaction();
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.serviceRequest.findUniqueOrThrow.mockResolvedValue(updatedRequest);
 
       const result = await service.acceptApplication(requestId, appId, userId);
 
       expect(result).toEqual(updatedRequest);
-      expect(mockPrisma.$transaction).toHaveBeenCalled();
+      // The guard: a conditional update scoped to the still-OPEN row, not an
+      // unconditional one — this is what makes a concurrent second accept
+      // see count: 0 instead of silently succeeding.
+      expect(mockPrisma.serviceRequest.updateMany).toHaveBeenCalledWith({
+        where: { id: requestId, status: ServiceRequestStatus.OPEN },
+        data: { status: ServiceRequestStatus.ASSIGNED, assignedHandymanId: 'profile-1' },
+      });
+      expect(mockPrisma.serviceRequestApplication.update).toHaveBeenCalledWith({
+        where: { id: appId },
+        data: { status: ApplicationStatus.ACCEPTED },
+      });
+      expect(mockPrisma.serviceRequestApplication.updateMany).toHaveBeenCalledWith({
+        where: {
+          serviceRequestId: requestId,
+          status: ApplicationStatus.PENDING,
+          id: { not: appId },
+        },
+        data: { status: ApplicationStatus.REJECTED },
+      });
       expect(mockEventEmitter.emit).toHaveBeenCalledWith(
         EVENTS.SERVICE_REQUEST_ASSIGNED,
         expect.objectContaining({
@@ -296,6 +322,31 @@ describe('ServiceRequestsService', () => {
           handymanProfileId: 'profile-1',
         }),
       );
+      // Proves the interactive-transaction form specifically: an array
+      // argument (the old, non-atomic form) is not a function, so inlining
+      // the four statements directly on `this.prisma` instead of `tx` would
+      // fail this assertion even though the three accept/reject tests above
+      // would still pass on their own.
+      expect(mockPrisma.$transaction).toHaveBeenCalledWith(expect.any(Function));
+    });
+
+    it('rejects the whole transaction when a concurrent accept already won the race', async () => {
+      // Regression for the fixed bug: both callers pass the pre-transaction
+      // `request.status === OPEN` read, but only one can win the conditional
+      // update. The loser must see 0 rows matched and throw, not proceed to
+      // mark applications or emit the event.
+      mockRequestRepo.findById.mockResolvedValue(mockRequest);
+      mockApplicationRepo.findById.mockResolvedValue(mockApplication);
+      runTransaction();
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.acceptApplication(requestId, appId, userId)).rejects.toThrow(
+        ServiceRequestNotOpenException,
+      );
+
+      expect(mockPrisma.serviceRequestApplication.update).not.toHaveBeenCalled();
+      expect(mockPrisma.serviceRequestApplication.updateMany).not.toHaveBeenCalled();
+      expect(mockEventEmitter.emit).not.toHaveBeenCalled();
     });
 
     it('should throw ForbiddenException when not the owner', async () => {
