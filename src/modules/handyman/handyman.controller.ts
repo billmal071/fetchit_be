@@ -246,6 +246,22 @@ export class HandymanController {
     return { data };
   }
 
+  @Delete('applications/:id')
+  @ApiOperation({
+    summary: 'Withdraw a pending application',
+    description: 'Withdraw your own application to a service request while it is still pending.',
+  })
+  @ApiParam({ name: 'id', description: 'Application UUID' })
+  @ApiSuccessResponse(ApplicationResponseDto)
+  @ApiErrorResponses()
+  async withdrawApplication(
+    @CurrentUser() user: IRequestUser,
+    @Param('id') id: string,
+  ): Promise<{ data: ServiceRequestApplication; message: string }> {
+    const data = await this.handymanService.withdrawApplication(user.id, id);
+    return { data, message: SUCCESS_MESSAGES.APPLICATION_WITHDRAWN };
+  }
+
   @Patch('service-requests/:id/start')
   @ApiOperation({
     summary: 'Start an assigned service request',
@@ -260,6 +276,24 @@ export class HandymanController {
   ): Promise<{ data: ServiceRequest; message: string }> {
     const data = await this.handymanService.startRequest(user.id, id);
     return { data, message: SUCCESS_MESSAGES.SERVICE_REQUEST_UPDATED };
+  }
+
+  @Patch('service-requests/:id/cancel')
+  @ApiOperation({
+    summary: 'Cancel an assigned service request',
+    description:
+      'Back out of a service request while it is still ASSIGNED (not yet started). The ' +
+      'request returns to OPEN for another handyman to pick up.',
+  })
+  @ApiParam({ name: 'id', description: 'Service request UUID' })
+  @ApiSuccessResponse(ServiceRequestResponseDto)
+  @ApiErrorResponses()
+  async cancelAssignedRequest(
+    @CurrentUser() user: IRequestUser,
+    @Param('id') id: string,
+  ): Promise<{ data: ServiceRequest; message: string }> {
+    const data = await this.handymanService.cancelAssignedRequest(user.id, id);
+    return { data, message: SUCCESS_MESSAGES.SERVICE_REQUEST_UNASSIGNED };
   }
 
   @Patch('service-requests/:id/complete')
