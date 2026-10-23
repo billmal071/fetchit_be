@@ -1,7 +1,12 @@
 import { randomUUID } from 'crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { DocumentType, ServiceRequestStatus, VerificationStatus } from '@prisma/client';
+import {
+  ApplicationStatus,
+  DocumentType,
+  ServiceRequestStatus,
+  VerificationStatus,
+} from '@prisma/client';
 import type {
   HandymanProfile,
   HandymanDocument,
@@ -33,12 +38,15 @@ import {
   ServiceRequestNotOpenException,
   ResourceNotFoundException,
   CategoryNotServicedException,
+  ApplicationNotWithdrawableException,
+  ServiceRequestStatusChangedException,
 } from '@common/exceptions/domain.exception';
 import { BadRequestException, ForbiddenException } from '@common/exceptions/base.exception';
 import {
   HandymanProfileCompletedEvent,
   HandymanDocumentsSubmittedEvent,
   ServiceRequestCompletionSubmittedEvent,
+  ServiceRequestUnassignedEvent,
 } from '@common/events';
 import {
   CompleteProfileDto,
@@ -489,8 +497,19 @@ export class HandymanService {
       throw new CategoryNotServicedException();
     }
 
+    // (serviceRequestId, handymanProfileId) is unique, so a row surviving
+    // from an earlier WITHDRAWN or REJECTED application is not a duplicate —
+    // bug #11 added the only way to reach WITHDRAWN, and without resurrecting
+    // that row here, withdrawing (or being auto-rejected because someone
+    // else got accepted, then the request reopening via
+    // cancelAssignedRequest) would be a one-way trapdoor: re-applying would
+    // 409 forever with no row to undo it.
     const existingApplication = await this.applicationRepo.findExisting(requestId, profile.id);
-    if (existingApplication) {
+    if (
+      existingApplication &&
+      existingApplication.status !== ApplicationStatus.WITHDRAWN &&
+      existingApplication.status !== ApplicationStatus.REJECTED
+    ) {
       throw new DuplicateApplicationException();
     }
 
@@ -500,14 +519,43 @@ export class HandymanService {
     // #9's fix added an application cleanup step on cancel, which can only
     // see rows that exist by the time it runs) leaves a PENDING application
     // on a CANCELLED request — permanently stuck, since rejectApplication
-    // requires the request to still be OPEN and there is no withdraw
-    // endpoint. This does not eliminate the race (that needs a row lock /
-    // SERIALIZABLE), but shrinks the window from "however long the earlier
-    // checks take" to one query.
+    // requires the request to still be OPEN. This does not eliminate the
+    // race (that needs a row lock / SERIALIZABLE), but shrinks the window
+    // from "however long the earlier checks take" to one query.
     return this.prisma.$transaction(async (tx) => {
       const current = await tx.serviceRequest.findUnique({ where: { id: requestId } });
       if (current?.status !== ServiceRequestStatus.OPEN) {
         throw new ServiceRequestNotOpenException();
+      }
+
+      if (existingApplication) {
+        const { count } = await tx.serviceRequestApplication.updateMany({
+          where: {
+            id: existingApplication.id,
+            status: { in: [ApplicationStatus.WITHDRAWN, ApplicationStatus.REJECTED] },
+          },
+          data: {
+            status: ApplicationStatus.PENDING,
+            // `dto.coverMessage`/`proposedRate` are optional — undefined
+            // means "leave unchanged" to Prisma, which on a resurrected row
+            // would silently carry over whatever was submitted the first
+            // time around rather than what this re-application actually
+            // says, so coerce to null explicitly instead of passing undefined.
+            coverMessage: dto.coverMessage ?? null,
+            proposedRate: dto.proposedRate ?? null,
+          },
+        });
+
+        // Lost race: someone accepted/withdrew this exact row between the
+        // read above and here. Same "duplicate" outcome a fresh applicant
+        // would see from the unique constraint.
+        if (count === 0) {
+          throw new DuplicateApplicationException();
+        }
+
+        return tx.serviceRequestApplication.findUniqueOrThrow({
+          where: { id: existingApplication.id },
+        });
       }
 
       return tx.serviceRequestApplication.create({
@@ -527,6 +575,39 @@ export class HandymanService {
     const profile = await this.profileRepo.ensureByUserId(userId);
 
     return this.applicationRepo.findByHandymanProfileId(profile.id);
+  }
+
+  // Bug #11: ApplicationStatus.WITHDRAWN existed but nothing could ever set
+  // it — a handyman who changed their mind had no way to pull a pending
+  // application back.
+  async withdrawApplication(userId: string, appId: string): Promise<ServiceRequestApplication> {
+    const profile = await this.profileRepo.findByUserId(userId);
+    if (!profile) {
+      throw new HandymanProfileNotFoundException();
+    }
+
+    const application = await this.applicationRepo.findById(appId);
+    if (!application) {
+      throw new ResourceNotFoundException('ServiceRequestApplication', appId);
+    }
+
+    if (application.handymanProfileId !== profile.id) {
+      throw new ResourceNotFoundException('ServiceRequestApplication', appId);
+    }
+
+    // Conditional update: the customer could accept/reject this exact
+    // application between the read above and here (same class of race the
+    // other transitions in this module already guard against).
+    const { count } = await this.prisma.serviceRequestApplication.updateMany({
+      where: { id: appId, status: ApplicationStatus.PENDING },
+      data: { status: ApplicationStatus.WITHDRAWN },
+    });
+
+    if (count === 0) {
+      throw new ApplicationNotWithdrawableException();
+    }
+
+    return this.prisma.serviceRequestApplication.findUniqueOrThrow({ where: { id: appId } });
   }
 
   async startRequest(userId: string, requestId: string): Promise<ServiceRequest> {
@@ -572,6 +653,66 @@ export class HandymanService {
     }
 
     return this.prisma.serviceRequest.findUniqueOrThrow({ where: { id: requestId } });
+  }
+
+  // Bug #11: there was no way for a handyman to back out of a job they'd
+  // been assigned — only the customer could cancel, and only while OPEN or
+  // ASSIGNED (bug #9). The request returns to OPEN so another handyman can
+  // pick it up; the application that won the assignment is WITHDRAWN so it
+  // doesn't sit around as a stale ACCEPTED record (same dangling-application
+  // gap bug #9 closed for customer-initiated cancellation).
+  async cancelAssignedRequest(userId: string, requestId: string): Promise<ServiceRequest> {
+    const profile = await this.profileRepo.findByUserId(userId);
+    if (!profile) {
+      throw new HandymanProfileNotFoundException();
+    }
+
+    const request = await this.serviceRequestRepo.findById(requestId);
+    if (!request) {
+      throw new ResourceNotFoundException('ServiceRequest', requestId);
+    }
+
+    if (request.assignedHandymanId !== profile.id) {
+      throw new ResourceNotFoundException('ServiceRequest', requestId);
+    }
+
+    if (request.status !== ServiceRequestStatus.ASSIGNED) {
+      throw new InvalidVerificationTransitionException(request.status, ServiceRequestStatus.OPEN);
+    }
+
+    const updatedRequest = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.serviceRequest.updateMany({
+        where: { id: requestId, status: ServiceRequestStatus.ASSIGNED },
+        data: { status: ServiceRequestStatus.OPEN, assignedHandymanId: null },
+      });
+
+      // Lost race: the request moved on (completed, cancelled, started)
+      // between the read above and here. Not a bad request — the same
+      // "someone else already acted on this" signal cancel() uses.
+      if (count === 0) {
+        throw new ServiceRequestStatusChangedException();
+      }
+
+      await tx.serviceRequestApplication.updateMany({
+        where: {
+          serviceRequestId: requestId,
+          handymanProfileId: profile.id,
+          status: ApplicationStatus.ACCEPTED,
+        },
+        data: { status: ApplicationStatus.WITHDRAWN },
+      });
+
+      return tx.serviceRequest.findUniqueOrThrow({ where: { id: requestId } });
+    });
+
+    // Deliberately not SERVICE_REQUEST_CANCELLED: the request is OPEN, not
+    // CANCELLED (terminal) — see ServiceRequestUnassignedEvent's doc comment.
+    this.eventEmitter.emit(
+      EVENTS.SERVICE_REQUEST_UNASSIGNED,
+      new ServiceRequestUnassignedEvent(requestId, request.customerId, profile.id),
+    );
+
+    return updatedRequest;
   }
 
   // Fix #11: Emit SERVICE_REQUEST_COMPLETED event when handyman marks complete

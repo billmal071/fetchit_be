@@ -25,6 +25,7 @@ export {
   DuplicateApplicationException,
   ServiceRequestNotOpenException,
   ApplicationNotPendingException,
+  ApplicationNotWithdrawableException,
   CategoryNotServicedException,
   ServiceRequestStatusChangedException,
 } from './domain.exception';

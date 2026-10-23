@@ -7,6 +7,7 @@ import {
   ServiceRequestCompletionSubmittedEvent,
   ServiceRequestCompletedEvent,
   ServiceRequestCancelledEvent,
+  ServiceRequestUnassignedEvent,
 } from '@/common/events';
 
 @Injectable()
@@ -80,6 +81,21 @@ export class ServiceRequestEventsListener {
     } catch (error) {
       this.logger.error(
         `Failed to handle service request cancelled event:`,
+        error instanceof Error ? error.stack : error,
+      );
+    }
+  }
+
+  @OnEvent(EVENTS.SERVICE_REQUEST_UNASSIGNED)
+  async handleServiceRequestUnassigned(event: ServiceRequestUnassignedEvent): Promise<void> {
+    try {
+      this.logger.log(
+        `Handyman ${event.handymanProfileId} backed out of service request ` +
+          `${event.serviceRequestId} — back to OPEN, notifying customer ${event.customerId}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to handle service request unassigned event:`,
         error instanceof Error ? error.stack : error,
       );
     }

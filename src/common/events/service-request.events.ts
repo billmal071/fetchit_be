@@ -39,3 +39,17 @@ export class ServiceRequestCancelledEvent {
     public readonly handymanProfileId: string | null,
   ) {}
 }
+
+/**
+ * The handyman backed out of an ASSIGNED job — distinct from
+ * ServiceRequestCancelledEvent, which means the request is CANCELLED
+ * (terminal). Here the request is back to OPEN and still live; a listener
+ * that assumed "cancelled" meant terminal would be wrong to reuse that event.
+ */
+export class ServiceRequestUnassignedEvent {
+  constructor(
+    public readonly serviceRequestId: string,
+    public readonly customerId: string,
+    public readonly handymanProfileId: string,
+  ) {}
+}

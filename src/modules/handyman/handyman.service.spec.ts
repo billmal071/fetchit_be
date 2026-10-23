@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { ServiceRequestStatus, VerificationStatus } from '@prisma/client';
+import { ApplicationStatus, ServiceRequestStatus, VerificationStatus } from '@prisma/client';
 import { HandymanService } from './handyman.service';
 import { HandymanServiceRequestQueryDto } from './dto';
 import { PaginationDto } from '@common/dto/pagination.dto';
@@ -21,6 +21,8 @@ import {
   ServiceRequestNotOpenException,
   ResourceNotFoundException,
   CategoryNotServicedException,
+  ApplicationNotWithdrawableException,
+  ServiceRequestStatusChangedException,
 } from '@common/exceptions/domain.exception';
 import { BadRequestException, ForbiddenException } from '@common/exceptions/base.exception';
 
@@ -120,7 +122,11 @@ describe('HandymanService', () => {
       // (written before bug #8's guard existed) keeps passing unless a test
       // explicitly overrides it to exercise the guard.
       handymanProfileCategory: { findUnique: jest.fn().mockResolvedValue({ categoryId: 'cat-1' }) },
-      serviceRequestApplication: { create: jest.fn() },
+      serviceRequestApplication: {
+        create: jest.fn(),
+        updateMany: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
+      },
       // applyToRequest's re-check-then-create runs inside a transaction;
       // default to invoking the callback with `tx === mockPrisma` so every
       // pre-existing test (written before that re-check existed) keeps
@@ -616,7 +622,112 @@ describe('HandymanService', () => {
 
       mockProfileRepo.findByUserId.mockResolvedValue(verifiedProfile);
       mockServiceRequestRepo.findById.mockResolvedValue(openRequest);
-      mockApplicationRepo.findExisting.mockResolvedValue({ id: 'existing-app' });
+      mockApplicationRepo.findExisting.mockResolvedValue({
+        id: 'existing-app',
+        status: ApplicationStatus.PENDING,
+      });
+
+      await expect(service.applyToRequest(userId, 'req-1', dto)).rejects.toThrow(
+        DuplicateApplicationException,
+      );
+    });
+
+    // Bug #11: withdrawing (or being auto-rejected because the request went
+    // to someone else, or reopened via cancelAssignedRequest) must not be a
+    // one-way trapdoor — the unique (serviceRequestId, handymanProfileId)
+    // constraint means a fresh `create` would 409 forever otherwise.
+    it.each([ApplicationStatus.WITHDRAWN, ApplicationStatus.REJECTED])(
+      'resurrects a %s application back to PENDING instead of rejecting as a duplicate',
+      async (status) => {
+        const verifiedProfile = { ...mockProfile, verificationStatus: VerificationStatus.VERIFIED };
+        const openRequest = { ...mockServiceRequest, status: ServiceRequestStatus.OPEN };
+        const existingApplication = {
+          id: 'existing-app',
+          serviceRequestId: 'req-1',
+          handymanProfileId: profileId,
+          status,
+        };
+        const resurrected = { ...existingApplication, status: ApplicationStatus.PENDING };
+
+        mockProfileRepo.findByUserId.mockResolvedValue(verifiedProfile);
+        mockServiceRequestRepo.findById.mockResolvedValue(openRequest);
+        mockApplicationRepo.findExisting.mockResolvedValue(existingApplication);
+        mockPrisma.serviceRequest.findUnique.mockResolvedValue(openRequest);
+        mockPrisma.serviceRequestApplication.updateMany.mockResolvedValue({ count: 1 });
+        mockPrisma.serviceRequestApplication.findUniqueOrThrow.mockResolvedValue(resurrected);
+
+        const result = await service.applyToRequest(userId, 'req-1', dto);
+
+        expect(result).toEqual(resurrected);
+        expect(mockPrisma.serviceRequestApplication.updateMany).toHaveBeenCalledWith({
+          where: {
+            id: 'existing-app',
+            status: { in: [ApplicationStatus.WITHDRAWN, ApplicationStatus.REJECTED] },
+          },
+          data: {
+            status: ApplicationStatus.PENDING,
+            coverMessage: dto.coverMessage,
+            proposedRate: dto.proposedRate,
+          },
+        });
+        expect(mockPrisma.serviceRequestApplication.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it('clears the prior cover message/rate on resurrect when the re-application omits them', async () => {
+      const verifiedProfile = { ...mockProfile, verificationStatus: VerificationStatus.VERIFIED };
+      const openRequest = { ...mockServiceRequest, status: ServiceRequestStatus.OPEN };
+      const existingApplication = {
+        id: 'existing-app',
+        serviceRequestId: 'req-1',
+        handymanProfileId: profileId,
+        status: ApplicationStatus.WITHDRAWN,
+        coverMessage: 'stale message',
+        proposedRate: 9999,
+      };
+
+      mockProfileRepo.findByUserId.mockResolvedValue(verifiedProfile);
+      mockServiceRequestRepo.findById.mockResolvedValue(openRequest);
+      mockApplicationRepo.findExisting.mockResolvedValue(existingApplication);
+      mockPrisma.serviceRequest.findUnique.mockResolvedValue(openRequest);
+      mockPrisma.serviceRequestApplication.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.serviceRequestApplication.findUniqueOrThrow.mockResolvedValue({
+        ...existingApplication,
+        status: ApplicationStatus.PENDING,
+        coverMessage: null,
+        proposedRate: null,
+      });
+
+      await service.applyToRequest(userId, 'req-1', {});
+
+      expect(mockPrisma.serviceRequestApplication.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 'existing-app',
+          status: { in: [ApplicationStatus.WITHDRAWN, ApplicationStatus.REJECTED] },
+        },
+        data: {
+          status: ApplicationStatus.PENDING,
+          coverMessage: null,
+          proposedRate: null,
+        },
+      });
+    });
+
+    it('throws DuplicateApplicationException when the resurrect race is lost', async () => {
+      const verifiedProfile = { ...mockProfile, verificationStatus: VerificationStatus.VERIFIED };
+      const openRequest = { ...mockServiceRequest, status: ServiceRequestStatus.OPEN };
+      const existingApplication = {
+        id: 'existing-app',
+        serviceRequestId: 'req-1',
+        handymanProfileId: profileId,
+        status: ApplicationStatus.WITHDRAWN,
+      };
+
+      mockProfileRepo.findByUserId.mockResolvedValue(verifiedProfile);
+      mockServiceRequestRepo.findById.mockResolvedValue(openRequest);
+      mockApplicationRepo.findExisting.mockResolvedValue(existingApplication);
+      mockPrisma.serviceRequest.findUnique.mockResolvedValue(openRequest);
+      mockPrisma.serviceRequestApplication.updateMany.mockResolvedValue({ count: 0 });
 
       await expect(service.applyToRequest(userId, 'req-1', dto)).rejects.toThrow(
         DuplicateApplicationException,
@@ -692,6 +803,166 @@ describe('HandymanService', () => {
       const result = await service.applyToRequest(userId, 'req-1', dto);
 
       expect(result).toEqual(mockApplication);
+    });
+  });
+
+  describe('withdrawApplication', () => {
+    const appId = 'app-1';
+
+    it('should withdraw a pending application', async () => {
+      const pendingApplication = {
+        id: appId,
+        handymanProfileId: profileId,
+        status: ApplicationStatus.PENDING,
+      };
+      const withdrawnApplication = {
+        ...pendingApplication,
+        status: ApplicationStatus.WITHDRAWN,
+      };
+
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockApplicationRepo.findById.mockResolvedValue(pendingApplication);
+      mockPrisma.serviceRequestApplication.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.serviceRequestApplication.findUniqueOrThrow.mockResolvedValue(
+        withdrawnApplication,
+      );
+
+      const result = await service.withdrawApplication(userId, appId);
+
+      expect(result).toEqual(withdrawnApplication);
+      expect(mockPrisma.serviceRequestApplication.updateMany).toHaveBeenCalledWith({
+        where: { id: appId, status: ApplicationStatus.PENDING },
+        data: { status: ApplicationStatus.WITHDRAWN },
+      });
+    });
+
+    it('should throw when the application belongs to another handyman', async () => {
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockApplicationRepo.findById.mockResolvedValue({
+        id: appId,
+        handymanProfileId: 'other-profile',
+        status: ApplicationStatus.PENDING,
+      });
+
+      await expect(service.withdrawApplication(userId, appId)).rejects.toThrow(
+        ResourceNotFoundException,
+      );
+    });
+
+    it('should throw when the application is no longer pending', async () => {
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockApplicationRepo.findById.mockResolvedValue({
+        id: appId,
+        handymanProfileId: profileId,
+        status: ApplicationStatus.ACCEPTED,
+      });
+      mockPrisma.serviceRequestApplication.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.withdrawApplication(userId, appId)).rejects.toThrow(
+        ApplicationNotWithdrawableException,
+      );
+    });
+
+    it('should throw when the application does not exist', async () => {
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockApplicationRepo.findById.mockResolvedValue(null);
+
+      await expect(service.withdrawApplication(userId, 'nonexistent')).rejects.toThrow(
+        ResourceNotFoundException,
+      );
+    });
+  });
+
+  describe('cancelAssignedRequest', () => {
+    it('should return the request to OPEN and withdraw the accepted application', async () => {
+      const assignedRequest = {
+        ...mockServiceRequest,
+        status: ServiceRequestStatus.ASSIGNED,
+        assignedHandymanId: profileId,
+        customerId: 'customer-1',
+      };
+      const openRequest = {
+        ...assignedRequest,
+        status: ServiceRequestStatus.OPEN,
+        assignedHandymanId: null,
+      };
+
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockServiceRequestRepo.findById.mockResolvedValue(assignedRequest);
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.serviceRequestApplication.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.serviceRequest.findUniqueOrThrow.mockResolvedValue(openRequest);
+
+      const result = await service.cancelAssignedRequest(userId, 'req-1');
+
+      expect(result).toEqual(openRequest);
+      expect(mockPrisma.serviceRequest.updateMany).toHaveBeenCalledWith({
+        where: { id: 'req-1', status: ServiceRequestStatus.ASSIGNED },
+        data: { status: ServiceRequestStatus.OPEN, assignedHandymanId: null },
+      });
+      expect(mockPrisma.serviceRequestApplication.updateMany).toHaveBeenCalledWith({
+        where: {
+          serviceRequestId: 'req-1',
+          handymanProfileId: profileId,
+          status: ApplicationStatus.ACCEPTED,
+        },
+        data: { status: ApplicationStatus.WITHDRAWN },
+      });
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+        EVENTS.SERVICE_REQUEST_UNASSIGNED,
+        expect.objectContaining({
+          serviceRequestId: 'req-1',
+          customerId: 'customer-1',
+          handymanProfileId: profileId,
+        }),
+      );
+    });
+
+    it('should throw when not assigned to this handyman', async () => {
+      const request = {
+        ...mockServiceRequest,
+        assignedHandymanId: 'other-profile',
+        status: ServiceRequestStatus.ASSIGNED,
+      };
+
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockServiceRequestRepo.findById.mockResolvedValue(request);
+
+      await expect(service.cancelAssignedRequest(userId, 'req-1')).rejects.toThrow(
+        ResourceNotFoundException,
+      );
+    });
+
+    it('should throw when the request is no longer ASSIGNED', async () => {
+      const request = {
+        ...mockServiceRequest,
+        status: ServiceRequestStatus.IN_PROGRESS,
+        assignedHandymanId: profileId,
+      };
+
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockServiceRequestRepo.findById.mockResolvedValue(request);
+
+      await expect(service.cancelAssignedRequest(userId, 'req-1')).rejects.toThrow(
+        InvalidVerificationTransitionException,
+      );
+    });
+
+    it('should throw when a concurrent change already moved the request out of ASSIGNED', async () => {
+      const assignedRequest = {
+        ...mockServiceRequest,
+        status: ServiceRequestStatus.ASSIGNED,
+        assignedHandymanId: profileId,
+      };
+
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockServiceRequestRepo.findById.mockResolvedValue(assignedRequest);
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.cancelAssignedRequest(userId, 'req-1')).rejects.toThrow(
+        ServiceRequestStatusChangedException,
+      );
+      expect(mockEventEmitter.emit).not.toHaveBeenCalled();
     });
   });
 

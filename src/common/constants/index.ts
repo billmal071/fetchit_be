@@ -67,9 +67,11 @@ export const SUCCESS_MESSAGES = {
   APPLICATION_SUBMITTED: 'Application submitted successfully',
   APPLICATION_ACCEPTED: 'Application accepted successfully',
   APPLICATION_REJECTED: 'Application rejected',
+  APPLICATION_WITHDRAWN: 'Application withdrawn',
   SERVICE_REQUEST_CREATED: 'Service request created successfully',
   SERVICE_REQUEST_UPDATED: 'Service request updated successfully',
   SERVICE_REQUEST_CANCELLED: 'Service request cancelled',
+  SERVICE_REQUEST_UNASSIGNED: 'Service request cancelled — back to OPEN for other handymen',
   SERVICE_REQUEST_COMPLETION_SUBMITTED: 'Marked complete — awaiting customer confirmation',
   HANDYMAN_APPROVED: 'Handyman approved successfully',
   HANDYMAN_REJECTED: 'Handyman rejected',
@@ -131,6 +133,10 @@ export const EVENTS = {
   SERVICE_REQUEST_COMPLETION_SUBMITTED: 'service-request.completion.submitted',
   SERVICE_REQUEST_COMPLETED: 'service-request.completed',
   SERVICE_REQUEST_CANCELLED: 'service-request.cancelled',
+  // Bug #11: the handyman backed out of an ASSIGNED job — the request
+  // returns to OPEN, not CANCELLED, so this is deliberately a different
+  // event from SERVICE_REQUEST_CANCELLED above.
+  SERVICE_REQUEST_UNASSIGNED: 'service-request.unassigned',
 } as const;
 
 export const AUDIT_ACTIONS = {

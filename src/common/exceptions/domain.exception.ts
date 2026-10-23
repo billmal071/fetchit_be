@@ -144,6 +144,16 @@ export class ApplicationNotPendingException extends DomainException {
   }
 }
 
+export class ApplicationNotWithdrawableException extends DomainException {
+  constructor() {
+    super(
+      'Only a pending application can be withdrawn',
+      'APPLICATION_NOT_WITHDRAWABLE',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 export class CategoryNotServicedException extends DomainException {
   constructor() {
     super(

@@ -32,7 +32,9 @@ describe('HandymanController', () => {
       browseOpenRequests: jest.fn().mockResolvedValue({ data: [], meta: {} }),
       applyToRequest: jest.fn().mockResolvedValue(mockData),
       getApplications: jest.fn().mockResolvedValue([mockData]),
+      withdrawApplication: jest.fn().mockResolvedValue(mockData),
       startRequest: jest.fn().mockResolvedValue(mockData),
+      cancelAssignedRequest: jest.fn().mockResolvedValue(mockData),
       completeRequest: jest.fn().mockResolvedValue(mockData),
     };
 
@@ -124,10 +126,22 @@ describe('HandymanController', () => {
     expect(result.data).toHaveLength(1);
   });
 
+  it('withdrawApplication calls service', async () => {
+    const result = await controller.withdrawApplication(user, 'app1');
+    expect(service.withdrawApplication).toHaveBeenCalledWith('u1', 'app1');
+    expect(result.message).toBe(SUCCESS_MESSAGES.APPLICATION_WITHDRAWN);
+  });
+
   it('startRequest calls service', async () => {
     const result = await controller.startRequest(user, 'sr1');
     expect(service.startRequest).toHaveBeenCalledWith('u1', 'sr1');
     expect(result.message).toBe(SUCCESS_MESSAGES.SERVICE_REQUEST_UPDATED);
+  });
+
+  it('cancelAssignedRequest calls service', async () => {
+    const result = await controller.cancelAssignedRequest(user, 'sr1');
+    expect(service.cancelAssignedRequest).toHaveBeenCalledWith('u1', 'sr1');
+    expect(result.message).toBe(SUCCESS_MESSAGES.SERVICE_REQUEST_UNASSIGNED);
   });
 
   it('completeRequest calls service', async () => {
