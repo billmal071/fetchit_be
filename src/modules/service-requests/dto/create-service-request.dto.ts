@@ -5,6 +5,7 @@ import {
   IsOptional,
   IsNumber,
   Min,
+  Max,
   IsUUID,
   ValidateIf,
   Validate,
@@ -57,17 +58,22 @@ export class CreateServiceRequestDto {
   @MaxLength(255)
   location: string;
 
-  @ApiPropertyOptional({ description: 'Location latitude', example: 6.6018 })
+  // Bug #14: these were optional and unchecked, so a request could be
+  // created with no coordinates at all (or garbage ones), making location
+  // matching (§A1) impossible to build reliably. Required + range-checked.
+  @ApiProperty({ description: 'Location latitude', example: 6.6018 })
   @IsNumber()
-  @IsOptional()
+  @Min(-90)
+  @Max(90)
   @Type(() => Number)
-  latitude?: number;
+  latitude: number;
 
-  @ApiPropertyOptional({ description: 'Location longitude', example: 3.3515 })
+  @ApiProperty({ description: 'Location longitude', example: 3.3515 })
   @IsNumber()
-  @IsOptional()
+  @Min(-180)
+  @Max(180)
   @Type(() => Number)
-  longitude?: number;
+  longitude: number;
 
   @ApiPropertyOptional({ description: 'Minimum budget in NGN', example: 5000 })
   @IsNumber()
