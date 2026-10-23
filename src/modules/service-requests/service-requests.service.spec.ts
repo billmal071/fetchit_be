@@ -12,6 +12,7 @@ import {
   ResourceNotFoundException,
   ServiceRequestNotOpenException,
   ApplicationNotPendingException,
+  ServiceRequestStatusChangedException,
 } from '@common/exceptions/domain.exception';
 import { ForbiddenException } from '@common/exceptions/base.exception';
 
@@ -262,22 +263,114 @@ describe('ServiceRequestsService', () => {
   });
 
   describe('cancel', () => {
+    const runTransaction = (): void => {
+      mockPrisma.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(mockPrisma));
+    };
+
     it('should cancel with timestamp when OPEN', async () => {
       const cancelled = {
         ...mockRequest,
         status: ServiceRequestStatus.CANCELLED,
-        cancelledAt: expect.any(Date),
+        cancelledAt: new Date(),
       };
       mockRequestRepo.findById.mockResolvedValue(mockRequest);
-      mockRequestRepo.update.mockResolvedValue(cancelled);
+      runTransaction();
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.serviceRequest.findUniqueOrThrow.mockResolvedValue(cancelled);
 
       const result = await service.cancel(requestId, userId);
 
       expect(result).toEqual(cancelled);
-      expect(mockRequestRepo.update).toHaveBeenCalledWith(requestId, {
-        status: ServiceRequestStatus.CANCELLED,
-        cancelledAt: expect.any(Date),
+      expect(mockPrisma.serviceRequest.updateMany).toHaveBeenCalledWith({
+        where: { id: requestId, status: ServiceRequestStatus.OPEN },
+        data: { status: ServiceRequestStatus.CANCELLED, cancelledAt: expect.any(Date) },
       });
+      // Proves the interactive-transaction form specifically: inlining these
+      // statements directly on `this.prisma` (dropping atomicity) would
+      // still pass every assertion above.
+      expect(mockPrisma.$transaction).toHaveBeenCalledWith(expect.any(Function));
+    });
+
+    it('should cancel an ASSIGNED request', async () => {
+      const assigned = { ...mockRequest, status: ServiceRequestStatus.ASSIGNED };
+      const cancelled = {
+        ...assigned,
+        status: ServiceRequestStatus.CANCELLED,
+        cancelledAt: new Date(),
+      };
+      mockRequestRepo.findById.mockResolvedValue(assigned);
+      runTransaction();
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.serviceRequest.findUniqueOrThrow.mockResolvedValue(cancelled);
+
+      const result = await service.cancel(requestId, userId);
+
+      expect(result).toEqual(cancelled);
+    });
+
+    // Bug #9: an ACCEPTED (or still-PENDING) application used to stay exactly
+    // that forever on a cancelled request — invisible to the handyman's own
+    // "my applications" view as anything but still-active, and after bug #6's
+    // fix, no longer even rejectable (rejectApplication now requires the
+    // request to still be OPEN).
+    it('rejects every PENDING/ACCEPTED application on the request', async () => {
+      const assigned = { ...mockRequest, status: ServiceRequestStatus.ASSIGNED };
+      mockRequestRepo.findById.mockResolvedValue(assigned);
+      runTransaction();
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.serviceRequest.findUniqueOrThrow.mockResolvedValue({
+        ...assigned,
+        status: ServiceRequestStatus.CANCELLED,
+      });
+
+      await service.cancel(requestId, userId);
+
+      expect(mockPrisma.serviceRequestApplication.updateMany).toHaveBeenCalledWith({
+        where: {
+          serviceRequestId: requestId,
+          status: { in: [ApplicationStatus.PENDING, ApplicationStatus.ACCEPTED] },
+        },
+        data: { status: ApplicationStatus.REJECTED },
+      });
+    });
+
+    // Bug #9: emits nothing today, so the assigned handyman is never told
+    // their job vanished out from under them.
+    it('emits SERVICE_REQUEST_CANCELLED with the assigned handyman, if any', async () => {
+      const assigned = {
+        ...mockRequest,
+        status: ServiceRequestStatus.ASSIGNED,
+        assignedHandymanId: 'profile-1',
+      };
+      mockRequestRepo.findById.mockResolvedValue(assigned);
+      runTransaction();
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.serviceRequest.findUniqueOrThrow.mockResolvedValue({
+        ...assigned,
+        status: ServiceRequestStatus.CANCELLED,
+      });
+
+      await service.cancel(requestId, userId);
+
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+        EVENTS.SERVICE_REQUEST_CANCELLED,
+        expect.objectContaining({
+          serviceRequestId: requestId,
+          customerId: userId,
+          handymanProfileId: 'profile-1',
+        }),
+      );
+    });
+
+    // Bug #9: cancelling an IN_PROGRESS job used to be allowed — work has
+    // actually started by then, which is a dispute/refund situation, not a
+    // simple customer-initiated cancel.
+    it('should throw ForbiddenException on IN_PROGRESS request', async () => {
+      const inProgress = { ...mockRequest, status: ServiceRequestStatus.IN_PROGRESS };
+      mockRequestRepo.findById.mockResolvedValue(inProgress);
+
+      await expect(service.cancel(requestId, userId)).rejects.toThrow(ForbiddenException);
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
     });
 
     it('should throw ForbiddenException on COMPLETED request', async () => {
@@ -298,6 +391,32 @@ describe('ServiceRequestsService', () => {
       mockRequestRepo.findById.mockResolvedValue(mockRequest);
 
       await expect(service.cancel(requestId, otherUserId)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('rejects the race where the request already left its expected status', async () => {
+      mockRequestRepo.findById.mockResolvedValue(mockRequest);
+      runTransaction();
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.cancel(requestId, userId)).rejects.toThrow(
+        ServiceRequestStatusChangedException,
+      );
+      expect(mockPrisma.serviceRequestApplication.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects the same race starting from ASSIGNED, scoped to that status', async () => {
+      const assigned = { ...mockRequest, status: ServiceRequestStatus.ASSIGNED };
+      mockRequestRepo.findById.mockResolvedValue(assigned);
+      runTransaction();
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.cancel(requestId, userId)).rejects.toThrow(
+        ServiceRequestStatusChangedException,
+      );
+      expect(mockPrisma.serviceRequest.updateMany).toHaveBeenCalledWith({
+        where: { id: requestId, status: ServiceRequestStatus.ASSIGNED },
+        data: { status: ServiceRequestStatus.CANCELLED, cancelledAt: expect.any(Date) },
+      });
     });
   });
 

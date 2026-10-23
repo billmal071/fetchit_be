@@ -30,7 +30,8 @@ describe('HandymanService', () => {
   let mockDocumentRepo: Record<string, jest.Mock>;
   let mockServiceRequestRepo: Record<string, jest.Mock>;
   let mockApplicationRepo: Record<string, jest.Mock>;
-  let mockPrisma: Record<string, Record<string, jest.Mock>>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let mockPrisma: any;
   let mockEventEmitter: { emit: jest.Mock };
   let mockStorage: Record<string, jest.Mock>;
 
@@ -108,11 +109,23 @@ describe('HandymanService', () => {
     mockPrisma = {
       user: { findUniqueOrThrow: jest.fn() },
       handymanProfile: { update: jest.fn() },
-      serviceRequest: { findMany: jest.fn(), count: jest.fn() },
+      serviceRequest: {
+        findMany: jest.fn(),
+        count: jest.fn(),
+        updateMany: jest.fn(),
+        findUniqueOrThrow: jest.fn(),
+        findUnique: jest.fn(),
+      },
       // Defaults to "yes, serviced" so every pre-existing applyToRequest test
       // (written before bug #8's guard existed) keeps passing unless a test
       // explicitly overrides it to exercise the guard.
       handymanProfileCategory: { findUnique: jest.fn().mockResolvedValue({ categoryId: 'cat-1' }) },
+      serviceRequestApplication: { create: jest.fn() },
+      // applyToRequest's re-check-then-create runs inside a transaction;
+      // default to invoking the callback with `tx === mockPrisma` so every
+      // pre-existing test (written before that re-check existed) keeps
+      // passing unless a test overrides this to exercise the race.
+      $transaction: jest.fn((fn: (tx: unknown) => unknown) => fn(mockPrisma)),
     };
 
     mockEventEmitter = { emit: jest.fn() };
@@ -536,11 +549,37 @@ describe('HandymanService', () => {
       mockProfileRepo.findByUserId.mockResolvedValue(verifiedProfile);
       mockServiceRequestRepo.findById.mockResolvedValue(openRequest);
       mockApplicationRepo.findExisting.mockResolvedValue(null);
-      mockApplicationRepo.create.mockResolvedValue(mockApplication);
+      mockPrisma.serviceRequest.findUnique.mockResolvedValue(openRequest);
+      mockPrisma.serviceRequestApplication.create.mockResolvedValue(mockApplication);
 
       const result = await service.applyToRequest(userId, 'req-1', dto);
 
       expect(result).toEqual(mockApplication);
+    });
+
+    // Bug #9's cancel fix added an application-cleanup step on cancel. The
+    // insert here now re-checks status inside a transaction immediately
+    // before writing, instead of trusting the read made several checks
+    // earlier — closing most of the window where a cancel lands in between
+    // and leaves a PENDING application on a CANCELLED request with no way
+    // to ever remove it (no withdraw endpoint, and rejectApplication
+    // requires the request to still be OPEN).
+    it('rejects the race where the request was cancelled between the pre-checks and the write', async () => {
+      const verifiedProfile = { ...mockProfile, verificationStatus: VerificationStatus.VERIFIED };
+      const openRequest = { ...mockServiceRequest, status: ServiceRequestStatus.OPEN };
+
+      mockProfileRepo.findByUserId.mockResolvedValue(verifiedProfile);
+      mockServiceRequestRepo.findById.mockResolvedValue(openRequest);
+      mockApplicationRepo.findExisting.mockResolvedValue(null);
+      mockPrisma.serviceRequest.findUnique.mockResolvedValue({
+        ...openRequest,
+        status: ServiceRequestStatus.CANCELLED,
+      });
+
+      await expect(service.applyToRequest(userId, 'req-1', dto)).rejects.toThrow(
+        ServiceRequestNotOpenException,
+      );
+      expect(mockPrisma.serviceRequestApplication.create).not.toHaveBeenCalled();
     });
 
     it('should throw HandymanNotVerifiedException when not verified', async () => {
@@ -610,7 +649,7 @@ describe('HandymanService', () => {
           handymanProfileId_categoryId: { handymanProfileId: profileId, categoryId: 'electrical' },
         },
       });
-      expect(mockApplicationRepo.create).not.toHaveBeenCalled();
+      expect(mockPrisma.serviceRequestApplication.create).not.toHaveBeenCalled();
     });
 
     it("allows the application when the category is one of the handyman's own", async () => {
@@ -633,7 +672,8 @@ describe('HandymanService', () => {
         categoryId: 'plumbing',
       });
       mockApplicationRepo.findExisting.mockResolvedValue(null);
-      mockApplicationRepo.create.mockResolvedValue(mockApplication);
+      mockPrisma.serviceRequest.findUnique.mockResolvedValue(openRequest);
+      mockPrisma.serviceRequestApplication.create.mockResolvedValue(mockApplication);
 
       const result = await service.applyToRequest(userId, 'req-1', dto);
 
@@ -655,14 +695,35 @@ describe('HandymanService', () => {
 
       mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
       mockServiceRequestRepo.findById.mockResolvedValue(assignedRequest);
-      mockServiceRequestRepo.update.mockResolvedValue(inProgressRequest);
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.serviceRequest.findUniqueOrThrow.mockResolvedValue(inProgressRequest);
 
       const result = await service.startRequest(userId, 'req-1');
 
       expect(result).toEqual(inProgressRequest);
-      expect(mockServiceRequestRepo.update).toHaveBeenCalledWith('req-1', {
-        status: ServiceRequestStatus.IN_PROGRESS,
+      expect(mockPrisma.serviceRequest.updateMany).toHaveBeenCalledWith({
+        where: { id: 'req-1', status: ServiceRequestStatus.ASSIGNED },
+        data: { status: ServiceRequestStatus.IN_PROGRESS },
       });
+    });
+
+    // Bug #9's cancel fix made ASSIGNED a state a customer can cancel out
+    // from under a handyman. Without this guard, a cancel landing between
+    // the pre-check read and the write here would resurrect a request the
+    // system had already told everyone was cancelled.
+    it('rejects the race where the request was cancelled between the read and the write', async () => {
+      const assignedRequest = {
+        ...mockServiceRequest,
+        status: ServiceRequestStatus.ASSIGNED,
+        assignedHandymanId: profileId,
+      };
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockServiceRequestRepo.findById.mockResolvedValue(assignedRequest);
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.startRequest(userId, 'req-1')).rejects.toThrow(
+        InvalidVerificationTransitionException,
+      );
     });
 
     it('should throw when not assigned to this handyman', async () => {

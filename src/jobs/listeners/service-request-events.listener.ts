@@ -5,6 +5,7 @@ import {
   ServiceRequestCreatedEvent,
   ServiceRequestAssignedEvent,
   ServiceRequestCompletedEvent,
+  ServiceRequestCancelledEvent,
 } from '@/common/events';
 
 @Injectable()
@@ -44,6 +45,23 @@ export class ServiceRequestEventsListener {
     } catch (error) {
       this.logger.error(
         `Failed to handle service request completed event:`,
+        error instanceof Error ? error.stack : error,
+      );
+    }
+  }
+
+  @OnEvent(EVENTS.SERVICE_REQUEST_CANCELLED)
+  async handleServiceRequestCancelled(event: ServiceRequestCancelledEvent): Promise<void> {
+    try {
+      this.logger.log(
+        `Service request ${event.serviceRequestId} cancelled` +
+          (event.handymanProfileId
+            ? ` — notifying assigned handyman ${event.handymanProfileId}`
+            : ' (no handyman was assigned yet)'),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to handle service request cancelled event:`,
         error instanceof Error ? error.stack : error,
       );
     }

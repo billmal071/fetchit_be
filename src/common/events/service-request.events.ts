@@ -22,3 +22,12 @@ export class ServiceRequestCompletedEvent {
     public readonly customerId: string,
   ) {}
 }
+
+export class ServiceRequestCancelledEvent {
+  constructor(
+    public readonly serviceRequestId: string,
+    public readonly customerId: string,
+    /** Null when cancelled before anyone was assigned. */
+    public readonly handymanProfileId: string | null,
+  ) {}
+}

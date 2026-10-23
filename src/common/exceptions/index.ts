@@ -26,4 +26,5 @@ export {
   ServiceRequestNotOpenException,
   ApplicationNotPendingException,
   CategoryNotServicedException,
+  ServiceRequestStatusChangedException,
 } from './domain.exception';
