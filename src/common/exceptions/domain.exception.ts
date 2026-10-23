@@ -153,3 +153,13 @@ export class CategoryNotServicedException extends DomainException {
     );
   }
 }
+
+export class ServiceRequestStatusChangedException extends DomainException {
+  constructor() {
+    super(
+      'This service request changed status and can no longer be cancelled',
+      'SERVICE_REQUEST_STATUS_CHANGED',
+      HttpStatus.CONFLICT,
+    );
+  }
+}

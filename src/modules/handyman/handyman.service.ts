@@ -489,11 +489,30 @@ export class HandymanService {
       throw new DuplicateApplicationException();
     }
 
-    return this.applicationRepo.create({
-      serviceRequest: { connect: { id: requestId } },
-      handymanProfile: { connect: { id: profile.id } },
-      coverMessage: dto.coverMessage,
-      proposedRate: dto.proposedRate,
+    // Re-check status inside the transaction, immediately before the write,
+    // rather than trusting the read above. Without this, a customer
+    // cancelling this exact request between that read and the insert (bug
+    // #9's fix added an application cleanup step on cancel, which can only
+    // see rows that exist by the time it runs) leaves a PENDING application
+    // on a CANCELLED request — permanently stuck, since rejectApplication
+    // requires the request to still be OPEN and there is no withdraw
+    // endpoint. This does not eliminate the race (that needs a row lock /
+    // SERIALIZABLE), but shrinks the window from "however long the earlier
+    // checks take" to one query.
+    return this.prisma.$transaction(async (tx) => {
+      const current = await tx.serviceRequest.findUnique({ where: { id: requestId } });
+      if (current?.status !== ServiceRequestStatus.OPEN) {
+        throw new ServiceRequestNotOpenException();
+      }
+
+      return tx.serviceRequestApplication.create({
+        data: {
+          serviceRequest: { connect: { id: requestId } },
+          handymanProfile: { connect: { id: profile.id } },
+          coverMessage: dto.coverMessage,
+          proposedRate: dto.proposedRate,
+        },
+      });
     });
   }
 
@@ -527,9 +546,27 @@ export class HandymanService {
       );
     }
 
-    return this.serviceRequestRepo.update(requestId, {
-      status: ServiceRequestStatus.IN_PROGRESS,
+    // Conditional update, not the plain write this used to be: a customer
+    // cancelling this exact request lands between the read above and here
+    // (bug #9's fix made that reachable — cancel now requires ASSIGNED, the
+    // same status this method just confirmed). Without this guard, starting
+    // the job would resurrect a request the system had already told the
+    // handyman was cancelled — its applications already REJECTED, its
+    // cancelledAt already set — and because cancel now refuses IN_PROGRESS,
+    // the customer could never cancel it again.
+    const { count } = await this.prisma.serviceRequest.updateMany({
+      where: { id: requestId, status: ServiceRequestStatus.ASSIGNED },
+      data: { status: ServiceRequestStatus.IN_PROGRESS },
     });
+
+    if (count === 0) {
+      throw new InvalidVerificationTransitionException(
+        ServiceRequestStatus.CANCELLED,
+        ServiceRequestStatus.IN_PROGRESS,
+      );
+    }
+
+    return this.prisma.serviceRequest.findUniqueOrThrow({ where: { id: requestId } });
   }
 
   // Fix #11: Emit SERVICE_REQUEST_COMPLETED event when handyman marks complete

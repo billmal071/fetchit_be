@@ -16,12 +16,14 @@ import {
   ResourceNotFoundException,
   ServiceRequestNotOpenException,
   ApplicationNotPendingException,
+  ServiceRequestStatusChangedException,
 } from '@common/exceptions/domain.exception';
 import { ForbiddenException } from '@common/exceptions/base.exception';
 import {
   ServiceRequestCreatedEvent,
   ServiceRequestAssignedEvent,
   ServiceRequestCompletedEvent,
+  ServiceRequestCancelledEvent,
 } from '@common/events';
 import { CreateServiceRequestDto, UpdateServiceRequestDto, ServiceRequestQueryDto } from './dto';
 
@@ -171,6 +173,12 @@ export class ServiceRequestsService {
     return this.requestRepo.update(id, dto);
   }
 
+  // Bug #9: this used to allow cancelling an IN_PROGRESS job, never touched
+  // the request's applications (an ACCEPTED one stayed ACCEPTED forever,
+  // and — after bug #6's fix — could no longer even be rejected, since
+  // rejectApplication now requires the request to still be OPEN), and
+  // emitted nothing, so the assigned handyman was never told their job had
+  // vanished out from under them.
   async cancel(id: string, userId: string): Promise<ServiceRequest> {
     const request = await this.requestRepo.findById(id);
 
@@ -182,17 +190,46 @@ export class ServiceRequestsService {
       throw new ForbiddenException('You can only cancel your own service requests');
     }
 
+    // Once work has actually started there's a handyman mid-job — cancelling
+    // out from under them is a dispute/refund situation, not a simple
+    // customer-initiated cancel. OPEN and ASSIGNED are the only states this
+    // applies to.
     if (
-      request.status === ServiceRequestStatus.COMPLETED ||
-      request.status === ServiceRequestStatus.CANCELLED
+      request.status !== ServiceRequestStatus.OPEN &&
+      request.status !== ServiceRequestStatus.ASSIGNED
     ) {
       throw new ForbiddenException('This service request cannot be cancelled');
     }
 
-    return this.requestRepo.update(id, {
-      status: ServiceRequestStatus.CANCELLED,
-      cancelledAt: new Date(),
+    const cancelledRequest = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.serviceRequest.updateMany({
+        where: { id, status: request.status },
+        data: { status: ServiceRequestStatus.CANCELLED, cancelledAt: new Date() },
+      });
+
+      if (count === 0) {
+        throw new ServiceRequestStatusChangedException();
+      }
+
+      // Nothing is left PENDING or ACCEPTED on a cancelled request — the
+      // dangling-application gap this bug exists to close.
+      await tx.serviceRequestApplication.updateMany({
+        where: {
+          serviceRequestId: id,
+          status: { in: [ApplicationStatus.PENDING, ApplicationStatus.ACCEPTED] },
+        },
+        data: { status: ApplicationStatus.REJECTED },
+      });
+
+      return tx.serviceRequest.findUniqueOrThrow({ where: { id } });
     });
+
+    this.eventEmitter.emit(
+      EVENTS.SERVICE_REQUEST_CANCELLED,
+      new ServiceRequestCancelledEvent(id, userId, cancelledRequest.assignedHandymanId),
+    );
+
+    return cancelledRequest;
   }
 
   async getApplications(requestId: string, userId: string): Promise<ServiceRequestApplication[]> {

@@ -99,7 +99,10 @@ export class ServiceRequestsController {
   @Roles(UserRole.CUSTOMER)
   @ApiOperation({
     summary: 'Cancel a service request',
-    description: 'Cancel a service request. Cannot cancel completed or already cancelled requests.',
+    description:
+      'Cancel a service request. Allowed while OPEN or ASSIGNED only — not once work has ' +
+      'started (IN_PROGRESS), completed, or already cancelled. Rejects any pending or ' +
+      'accepted applications on the request.',
   })
   @ApiParam({ name: 'id', description: 'Service request UUID' })
   @ApiSuccessResponse(ServiceRequestResponseDto)
