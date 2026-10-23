@@ -162,26 +162,40 @@ describe('HandymanService', () => {
   describe('getDashboard', () => {
     it('should return profile and stats', async () => {
       mockProfileRepo.ensureByUserId.mockResolvedValue(mockProfile);
-      // Call order: ASSIGNED (1st), COMPLETED (2nd via Promise.all), IN_PROGRESS (3rd inside .then)
+      // Call order: ASSIGNED, IN_PROGRESS, AWAITING_CONFIRMATION (parallel ongoing-status counts), COMPLETED
       mockServiceRequestRepo.countByHandymanAndStatus
         .mockResolvedValueOnce(2) // ASSIGNED
-        .mockResolvedValueOnce(5) // COMPLETED
-        .mockResolvedValueOnce(1); // IN_PROGRESS (inside .then chained on ASSIGNED)
+        .mockResolvedValueOnce(1) // IN_PROGRESS
+        .mockResolvedValueOnce(4) // AWAITING_CONFIRMATION
+        .mockResolvedValueOnce(5); // COMPLETED
 
       const result = await service.getDashboard(userId);
 
       expect(result.profile).toEqual(mockProfile);
-      expect(result.stats.ongoingCount).toBe(3); // assigned + in_progress
+      expect(result.stats.ongoingCount).toBe(7); // assigned + in_progress + awaiting_confirmation
       expect(result.stats.completedCount).toBe(5);
+      expect(mockServiceRequestRepo.countByHandymanAndStatus).toHaveBeenCalledWith(
+        profileId,
+        ServiceRequestStatus.ASSIGNED,
+      );
+      expect(mockServiceRequestRepo.countByHandymanAndStatus).toHaveBeenCalledWith(
+        profileId,
+        ServiceRequestStatus.IN_PROGRESS,
+      );
+      expect(mockServiceRequestRepo.countByHandymanAndStatus).toHaveBeenCalledWith(
+        profileId,
+        ServiceRequestStatus.AWAITING_CONFIRMATION,
+      );
+      expect(mockServiceRequestRepo.countByHandymanAndStatus).toHaveBeenCalledWith(
+        profileId,
+        ServiceRequestStatus.COMPLETED,
+      );
     });
 
     it('should lazily create a default profile when none exists', async () => {
       const defaultProfile = { ...mockProfile, verificationStatus: VerificationStatus.UNVERIFIED };
       mockProfileRepo.ensureByUserId.mockResolvedValue(defaultProfile);
-      mockServiceRequestRepo.countByHandymanAndStatus
-        .mockResolvedValueOnce(0) // ASSIGNED
-        .mockResolvedValueOnce(0) // COMPLETED
-        .mockResolvedValueOnce(0); // IN_PROGRESS
+      mockServiceRequestRepo.countByHandymanAndStatus.mockResolvedValue(0);
 
       const result = await service.getDashboard(userId);
 
@@ -758,32 +772,32 @@ describe('HandymanService', () => {
   });
 
   describe('completeRequest', () => {
-    it('should transition to COMPLETED and emit event', async () => {
+    it('should transition to AWAITING_CONFIRMATION and emit event', async () => {
       const inProgressRequest = {
         ...mockServiceRequest,
         status: ServiceRequestStatus.IN_PROGRESS,
         assignedHandymanId: profileId,
         customerId: 'customer-1',
       };
-      const completedRequest = {
+      const awaitingConfirmationRequest = {
         ...inProgressRequest,
-        status: ServiceRequestStatus.COMPLETED,
-        completedAt: expect.any(Date),
+        status: ServiceRequestStatus.AWAITING_CONFIRMATION,
       };
 
       mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
       mockServiceRequestRepo.findById.mockResolvedValue(inProgressRequest);
-      mockServiceRequestRepo.update.mockResolvedValue(completedRequest);
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.serviceRequest.findUniqueOrThrow.mockResolvedValue(awaitingConfirmationRequest);
 
       const result = await service.completeRequest(userId, 'req-1');
 
-      expect(result).toEqual(completedRequest);
-      expect(mockServiceRequestRepo.update).toHaveBeenCalledWith('req-1', {
-        status: ServiceRequestStatus.COMPLETED,
-        completedAt: expect.any(Date),
+      expect(result).toEqual(awaitingConfirmationRequest);
+      expect(mockPrisma.serviceRequest.updateMany).toHaveBeenCalledWith({
+        where: { id: 'req-1', status: ServiceRequestStatus.IN_PROGRESS },
+        data: { status: ServiceRequestStatus.AWAITING_CONFIRMATION },
       });
       expect(mockEventEmitter.emit).toHaveBeenCalledWith(
-        EVENTS.SERVICE_REQUEST_COMPLETED,
+        EVENTS.SERVICE_REQUEST_COMPLETION_SUBMITTED,
         expect.objectContaining({
           serviceRequestId: 'req-1',
           handymanProfileId: profileId,
@@ -820,6 +834,23 @@ describe('HandymanService', () => {
       await expect(service.completeRequest(userId, 'req-1')).rejects.toThrow(
         InvalidVerificationTransitionException,
       );
+    });
+
+    it('should throw when a concurrent completion already changed the status', async () => {
+      const inProgressRequest = {
+        ...mockServiceRequest,
+        status: ServiceRequestStatus.IN_PROGRESS,
+        assignedHandymanId: profileId,
+      };
+
+      mockProfileRepo.findByUserId.mockResolvedValue(mockProfile);
+      mockServiceRequestRepo.findById.mockResolvedValue(inProgressRequest);
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.completeRequest(userId, 'req-1')).rejects.toThrow(
+        InvalidVerificationTransitionException,
+      );
+      expect(mockEventEmitter.emit).not.toHaveBeenCalled();
     });
   });
 });

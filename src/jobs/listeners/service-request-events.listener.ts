@@ -4,6 +4,7 @@ import { EVENTS } from '@/common/constants';
 import {
   ServiceRequestCreatedEvent,
   ServiceRequestAssignedEvent,
+  ServiceRequestCompletionSubmittedEvent,
   ServiceRequestCompletedEvent,
   ServiceRequestCancelledEvent,
 } from '@/common/events';
@@ -33,6 +34,23 @@ export class ServiceRequestEventsListener {
     } catch (error) {
       this.logger.error(
         `Failed to handle service request assigned event:`,
+        error instanceof Error ? error.stack : error,
+      );
+    }
+  }
+
+  @OnEvent(EVENTS.SERVICE_REQUEST_COMPLETION_SUBMITTED)
+  async handleServiceRequestCompletionSubmitted(
+    event: ServiceRequestCompletionSubmittedEvent,
+  ): Promise<void> {
+    try {
+      this.logger.log(
+        `Service request ${event.serviceRequestId} marked complete by handyman ` +
+          `${event.handymanProfileId} — awaiting confirmation from customer ${event.customerId}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to handle service request completion submitted event:`,
         error instanceof Error ? error.stack : error,
       );
     }

@@ -264,8 +264,10 @@ export class HandymanController {
 
   @Patch('service-requests/:id/complete')
   @ApiOperation({
-    summary: 'Mark a service request as completed',
-    description: 'Mark an in-progress service request as completed.',
+    summary: 'Mark a service request as complete, pending customer confirmation',
+    description:
+      'Move an in-progress service request to AWAITING_CONFIRMATION. The customer must ' +
+      'confirm before it is marked COMPLETED.',
   })
   @ApiParam({ name: 'id', description: 'Service request UUID' })
   @ApiSuccessResponse(ServiceRequestResponseDto)
@@ -275,6 +277,6 @@ export class HandymanController {
     @Param('id') id: string,
   ): Promise<{ data: ServiceRequest; message: string }> {
     const data = await this.handymanService.completeRequest(user.id, id);
-    return { data, message: SUCCESS_MESSAGES.SERVICE_REQUEST_UPDATED };
+    return { data, message: SUCCESS_MESSAGES.SERVICE_REQUEST_COMPLETION_SUBMITTED };
   }
 }

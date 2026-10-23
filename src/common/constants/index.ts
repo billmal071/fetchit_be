@@ -70,6 +70,7 @@ export const SUCCESS_MESSAGES = {
   SERVICE_REQUEST_CREATED: 'Service request created successfully',
   SERVICE_REQUEST_UPDATED: 'Service request updated successfully',
   SERVICE_REQUEST_CANCELLED: 'Service request cancelled',
+  SERVICE_REQUEST_COMPLETION_SUBMITTED: 'Marked complete — awaiting customer confirmation',
   HANDYMAN_APPROVED: 'Handyman approved successfully',
   HANDYMAN_REJECTED: 'Handyman rejected',
   CATEGORY_CREATED: 'Category created successfully',
@@ -124,6 +125,10 @@ export const EVENTS = {
   SERVICE_REQUEST_CREATED: 'service-request.created',
   SERVICE_REQUEST_APPLICATION_RECEIVED: 'service-request.application.received',
   SERVICE_REQUEST_ASSIGNED: 'service-request.assigned',
+  // Handyman marked it done; AWAITING_CONFIRMATION until the customer
+  // confirms (bug #10 — this used to not exist, so marking complete and
+  // being confirmed complete were the same, unilateral, step).
+  SERVICE_REQUEST_COMPLETION_SUBMITTED: 'service-request.completion.submitted',
   SERVICE_REQUEST_COMPLETED: 'service-request.completed',
   SERVICE_REQUEST_CANCELLED: 'service-request.cancelled',
 } as const;

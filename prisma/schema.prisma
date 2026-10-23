@@ -189,6 +189,12 @@ enum ServiceRequestStatus {
   OPEN
   ASSIGNED
   IN_PROGRESS
+  // Bug #10: the handyman marking a job complete and the customer confirming
+  // it were the same transition (both went straight to COMPLETED from
+  // IN_PROGRESS), so either side could unilaterally close the job and the
+  // other's "confirmation" never actually happened. This splits the step:
+  // the handyman moves here, the customer confirms from here to COMPLETED.
+  AWAITING_CONFIRMATION
   COMPLETED
   CANCELLED
 }
