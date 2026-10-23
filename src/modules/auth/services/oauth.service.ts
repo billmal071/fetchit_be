@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { AuthProvider, User } from '@prisma/client';
+import { AuthProvider, User, UserStatus } from '@prisma/client';
 import { UsersService } from '@/modules/users/users.service';
 import { PrismaService } from '@/database/prisma.service';
 import { IAppConfig, IJwtConfig } from '@/config';
@@ -88,6 +88,12 @@ export class OAuthService {
       throw new BadRequestException('Failed to create or find user');
     }
 
+    // Bug #13: same check as AuthService.login — a suspended/deactivated
+    // account shouldn't come out of OAuth with working tokens either.
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new BadRequestException('This account is not active');
+    }
+
     // Generate tokens
     const tokens = await this.generateTokens(user.id, user.email, user.role);
     const payload = this.jwtService.decode<IJwtPayload>(tokens.refreshToken);
@@ -132,6 +138,17 @@ export class OAuthService {
         googleId,
         avatar: avatar || undefined,
         emailVerified: true, // Google verifies email
+        // Bug #13: without this, a user who registered by email, never
+        // verified, then signs in with Google ends up emailVerified=true
+        // but still PENDING (the schema default — regular registration
+        // never sets status, only EmailVerificationRepository's own
+        // verify flow does). That used to just mean confusing 401s later;
+        // now that login/refresh/OAuth all reject non-ACTIVE accounts,
+        // it would be a permanent "your account is suspended" lockout
+        // with no way out (resend-verification short-circuits on
+        // emailVerified already being true, so the normal unlock path
+        // never fires either).
+        status: UserStatus.ACTIVE,
       },
     });
   }
@@ -177,6 +194,9 @@ export class OAuthService {
     const lower = error.toLowerCase();
     if (lower.includes('already linked') || lower.includes('account exists')) {
       return 'account_exists';
+    }
+    if (lower.includes('not active')) {
+      return 'account_suspended';
     }
     return 'oauth_failed';
   }

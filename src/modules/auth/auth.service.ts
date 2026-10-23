@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { UserStatus } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { UsersService } from '@/modules/users/users.service';
 import { UserResponseDto, CreateUserDto } from '@/modules/users/dto';
@@ -14,6 +15,7 @@ import {
   EmailNotVerifiedException,
   InvalidCredentialsException,
   InvalidTokenException,
+  AccountSuspendedException,
 } from '@/common/exceptions/domain.exception';
 import { REFRESH_SESSION_REPOSITORY, IRefreshSessionRepository } from '@/database/repositories';
 
@@ -88,6 +90,17 @@ export class AuthService {
       throw new EmailNotVerifiedException();
     }
 
+    // Bug #13: email verification is the only thing that currently sets
+    // status to ACTIVE (see EmailVerificationRepository.verifyAndActivateUser),
+    // so reaching this point with a non-ACTIVE status means an admin
+    // suspended/deactivated the account after verification — reject here
+    // with a clear reason instead of issuing tokens the user can't actually
+    // use (JwtStrategy would 401 "account is not active" on the very next
+    // authenticated request).
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new AccountSuspendedException();
+    }
+
     const tokens = await this.generateTokens(user.id, user.email, user.role);
     await this.createSession(user.id, tokens.refreshToken);
     await this.usersService.updateLastLogin(user.id);
@@ -123,6 +136,16 @@ export class AuthService {
     const user = await this.usersService.findById(userId);
     if (!user) {
       throw new InvalidTokenException('refresh token');
+    }
+
+    // Bug #13: a session created while the account was ACTIVE is still
+    // valid-looking after an admin suspends it — the token itself doesn't
+    // expire just because status changed. Re-check here, not just at
+    // login, so a suspended user's existing sessions stop minting fresh
+    // access tokens immediately instead of trickling out an "account is
+    // not active" 401 from JwtStrategy on whatever request happens next.
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new AccountSuspendedException();
     }
 
     // Looked up by the token's own hash (deterministic SHA-256, see
