@@ -100,13 +100,23 @@ jobs:
       - name: Generate Prisma client
         run: pnpm db:generate
 
+      # Cache key must bust on prisma/schema.prisma, not just the lockfile: a
+      # schema-only PR (no dependency change) leaves the lockfile hash
+      # identical, so this save is a no-op against an older cache already
+      # sitting under that key on a long-lived branch like dev (cache writes
+      # are immutable per key) — every downstream job then silently restores
+      # node_modules/.prisma/client generated from the OLD schema. That's
+      # exactly what broke the dev Test job after merging the
+      # AWAITING_CONFIRMATION enum addition in PR #63: it passed on the PR's
+      # own branch (fresh key, no prior cache to collide with) and only
+      # failed once merged into dev (stale key already cached there).
       - name: Cache node_modules
         uses: actions/cache/save@v4
         with:
           path: |
             node_modules
             ~/.pnpm-store
-          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'prisma/schema.prisma') }}
 
   # ─── Lint & Format(parallel with test) ─────────────────────────────────────────────
   lint:
@@ -132,7 +142,7 @@ jobs:
           path: |
             node_modules
             ~/.pnpm-store
-          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'prisma/schema.prisma') }}
 
       - name: Run linter
         run: pnpm lint
@@ -201,7 +211,7 @@ jobs:
           path: |
             node_modules
             ~/.pnpm-store
-          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'prisma/schema.prisma') }}
 
       - name: Run database migrations
         run: pnpm db:migrate:deploy
@@ -237,7 +247,7 @@ jobs:
           path: |
             node_modules
             ~/.pnpm-store
-          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'prisma/schema.prisma') }}
 
       - name: Audit dependencies
         continue-on-error: true
@@ -267,7 +277,7 @@ jobs:
           path: |
             node_modules
             ~/.pnpm-store
-          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'prisma/schema.prisma') }}
 
       - name: Generate Prisma client
         run: pnpm db:generate
@@ -355,7 +365,7 @@ jobs:
           path: |
             node_modules
             ~/.pnpm-store
-          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: node-modules-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'prisma/schema.prisma') }}
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
