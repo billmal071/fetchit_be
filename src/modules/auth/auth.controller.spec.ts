@@ -61,9 +61,18 @@ describe('AuthController', () => {
     expect(result.message).toBe(SUCCESS_MESSAGES.LOGIN_SUCCESS);
   });
 
-  it('logout should call authService.logout with user id', async () => {
-    const result = await controller.logout({ id: 'u1', email: 'a@b.com', role: 'CUSTOMER' });
-    expect(authService.logout).toHaveBeenCalledWith('u1');
+  it('logout should call authService.logout with user id and the session refresh token', async () => {
+    const result = await controller.logout(
+      { id: 'u1', email: 'a@b.com', role: 'CUSTOMER' },
+      { refreshToken: 'rt' },
+    );
+    expect(authService.logout).toHaveBeenCalledWith('u1', 'rt');
+    expect(result.message).toBe(SUCCESS_MESSAGES.LOGOUT_SUCCESS);
+  });
+
+  it('logout should call authService.logout with no token when the body omits it (logout everywhere)', async () => {
+    const result = await controller.logout({ id: 'u1', email: 'a@b.com', role: 'CUSTOMER' }, {});
+    expect(authService.logout).toHaveBeenCalledWith('u1', undefined);
     expect(result.message).toBe(SUCCESS_MESSAGES.LOGOUT_SUCCESS);
   });
 

@@ -172,10 +172,6 @@ export class UsersService {
     return plainToInstance(UserResponseDto, updatedUser);
   }
 
-  async updateRefreshToken(id: string, refreshToken: string | null): Promise<void> {
-    await this.userRepository.updateRefreshToken(id, refreshToken);
-  }
-
   async updateLastLogin(id: string): Promise<void> {
     await this.userRepository.updateLastLogin(id);
   }

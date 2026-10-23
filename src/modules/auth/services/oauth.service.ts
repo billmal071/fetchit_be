@@ -1,13 +1,15 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { AuthProvider, User } from '@prisma/client';
 import { UsersService } from '@/modules/users/users.service';
 import { PrismaService } from '@/database/prisma.service';
 import { IAppConfig, IJwtConfig } from '@/config';
-import { ITokens } from '@/common/interfaces';
+import { IJwtPayload, ITokens } from '@/common/interfaces';
 import { BadRequestException } from '@/common/exceptions';
 import { hashToken } from '@/common/utils';
+import { REFRESH_SESSION_REPOSITORY, IRefreshSessionRepository } from '@/database/repositories';
 
 export interface IGoogleUser {
   googleId: string;
@@ -34,6 +36,8 @@ export class OAuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    @Inject(REFRESH_SESSION_REPOSITORY)
+    private readonly refreshSessionRepo: IRefreshSessionRepository,
   ) {
     this.jwtConfig = this.configService.get<IJwtConfig>('jwt') as IJwtConfig;
     const appConfig = this.configService.get<IAppConfig>('app');
@@ -86,8 +90,21 @@ export class OAuthService {
 
     // Generate tokens
     const tokens = await this.generateTokens(user.id, user.email, user.role);
-    const hashedRefreshToken = await hashToken(tokens.refreshToken);
-    await this.usersService.updateRefreshToken(user.id, hashedRefreshToken);
+    const payload = this.jwtService.decode<IJwtPayload>(tokens.refreshToken);
+    if (!payload?.exp) {
+      // Can't happen in practice — this decodes the token signed two lines
+      // above — but failing closed here matters: the alternative is
+      // silently writing expiresAt as the Unix epoch, which would create a
+      // RefreshSession that is dead on arrival with no error surfaced
+      // anywhere (see AuthService.decodeExpiry, which throws for the
+      // same reason).
+      throw new BadRequestException('Failed to generate session for OAuth login');
+    }
+    await this.refreshSessionRepo.create({
+      userId: user.id,
+      tokenHash: hashToken(tokens.refreshToken),
+      expiresAt: new Date(payload.exp * 1000),
+    });
     await this.usersService.updateLastLogin(user.id);
 
     // Build redirect URL with tokens in URL fragment (hash) to keep them out of
@@ -128,6 +145,10 @@ export class OAuthService {
 
   private async generateTokens(userId: string, email: string, role: string): Promise<ITokens> {
     const payload = { sub: userId, email, role };
+    // See IJwtPayload.jti: without a nonce, two logins in the same second
+    // sign byte-identical refresh tokens and collide on RefreshSession's
+    // unique tokenHash constraint.
+    const refreshPayload = { ...payload, jti: randomUUID() };
 
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(payload, {
@@ -135,7 +156,7 @@ export class OAuthService {
         expiresIn: this.jwtConfig.expiresIn,
         algorithm: 'HS256',
       }),
-      this.jwtService.signAsync(payload, {
+      this.jwtService.signAsync(refreshPayload, {
         secret: this.jwtConfig.refreshSecret,
         expiresIn: this.jwtConfig.refreshExpiresIn,
         algorithm: 'HS256',

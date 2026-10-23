@@ -49,7 +49,6 @@ describe('UsersService', () => {
       update: jest.fn(),
       delete: jest.fn(),
       softDelete: jest.fn(),
-      updateRefreshToken: jest.fn(),
       updateLastLogin: jest.fn(),
       updatePassword: jest.fn(),
       updateEmailVerified: jest.fn(),

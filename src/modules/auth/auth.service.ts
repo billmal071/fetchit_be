@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { plainToInstance } from 'class-transformer';
@@ -6,7 +7,7 @@ import { UsersService } from '@/modules/users/users.service';
 import { UserResponseDto, CreateUserDto } from '@/modules/users/dto';
 import { LoginDto, AuthResponseDto } from './dto';
 import { EmailVerificationService } from './services';
-import { comparePassword, hashToken, compareToken } from '@/common/utils';
+import { comparePassword, hashToken } from '@/common/utils';
 import { IJwtPayload, ITokens } from '@/common/interfaces';
 import { EnvConfig, IJwtConfig } from '@/config';
 import {
@@ -14,6 +15,7 @@ import {
   InvalidCredentialsException,
   InvalidTokenException,
 } from '@/common/exceptions/domain.exception';
+import { REFRESH_SESSION_REPOSITORY, IRefreshSessionRepository } from '@/database/repositories';
 
 @Injectable()
 export class AuthService {
@@ -25,6 +27,8 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService<EnvConfig, true>,
     private readonly emailVerificationService: EmailVerificationService,
+    @Inject(REFRESH_SESSION_REPOSITORY)
+    private readonly refreshSessionRepo: IRefreshSessionRepository,
   ) {
     const config: IJwtConfig = {
       secret: this.configService.get('JWT_SECRET'),
@@ -41,7 +45,7 @@ export class AuthService {
     let tokens: ITokens;
     try {
       tokens = await this.generateTokens(user.id, user.email, user.role);
-      await this.updateRefreshToken(user.id, tokens.refreshToken);
+      await this.createSession(user.id, tokens.refreshToken);
     } catch (error) {
       // Roll back user creation so they can retry registration
       await this.usersService.remove(user.id, true).catch((removeError) => {
@@ -85,7 +89,7 @@ export class AuthService {
     }
 
     const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.updateRefreshToken(user.id, tokens.refreshToken);
+    await this.createSession(user.id, tokens.refreshToken);
     await this.usersService.updateLastLogin(user.id);
 
     this.logger.log(`User logged in: ${user.id}`);
@@ -96,25 +100,58 @@ export class AuthService {
     };
   }
 
-  async logout(userId: string): Promise<void> {
-    await this.usersService.updateRefreshToken(userId, null);
+  /**
+   * Bug #12: `logout` used to clear the single `refreshToken` column on
+   * `User`, so it had no way to log out just one device — and conversely a
+   * second device's login, which overwrote that same column, logged out
+   * the first without anyone asking for that. Each login/refresh now owns
+   * its own `RefreshSession` row: pass the session's own refresh token to
+   * revoke only it, or omit it to revoke every device (the old endpoint's
+   * only behavior, kept as the default so existing callers don't change
+   * behavior).
+   */
+  async logout(userId: string, refreshToken?: string): Promise<void> {
+    if (refreshToken) {
+      await this.refreshSessionRepo.revokeByTokenHash(hashToken(refreshToken), userId);
+    } else {
+      await this.refreshSessionRepo.revokeAllForUser(userId);
+    }
     this.logger.log(`User logged out: ${userId}`);
   }
 
   async refreshTokens(userId: string, refreshToken: string): Promise<ITokens> {
     const user = await this.usersService.findById(userId);
-
-    if (!user || !user.refreshToken) {
+    if (!user) {
       throw new InvalidTokenException('refresh token');
     }
 
-    const isTokenValid = await compareToken(refreshToken, user.refreshToken);
-    if (!isTokenValid) {
+    // Looked up by the token's own hash (deterministic SHA-256, see
+    // hashToken), so a match already proves the token is correct — no
+    // separate timingSafeEqual compare needed the way the old single-column
+    // design required one (there, the lookup was by userId alone, so the
+    // token itself had to be checked after the fact).
+    const tokenHash = hashToken(refreshToken);
+    const session = await this.refreshSessionRepo.findActiveByTokenHash(tokenHash);
+    if (!session || session.userId !== user.id) {
       throw new InvalidTokenException('refresh token');
     }
 
     const tokens = await this.generateTokens(user.id, user.email, user.role);
-    await this.updateRefreshToken(user.id, tokens.refreshToken);
+    // Rotate the same row in place — this is the one that keeps "one row
+    // per device" true across a session's lifetime instead of growing a
+    // new row every time the access token expires. Conditional on the row
+    // still holding `tokenHash` and still being non-revoked: closes the
+    // window where a concurrent logout or a second concurrent refresh of
+    // this same token raced the read above (see rotate's doc comment).
+    const rotated = await this.refreshSessionRepo.rotate(
+      session.id,
+      tokenHash,
+      hashToken(tokens.refreshToken),
+      this.decodeExpiry(tokens.refreshToken),
+    );
+    if (!rotated) {
+      throw new InvalidTokenException('refresh token');
+    }
 
     this.logger.log(`Tokens refreshed for: ${userId}`);
 
@@ -127,6 +164,9 @@ export class AuthService {
       email,
       role,
     };
+    // Random nonce so two refresh tokens signed in the same second for the
+    // same user don't come out byte-identical — see IJwtPayload.jti.
+    const refreshPayload: IJwtPayload = { ...payload, jti: randomUUID() };
 
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(payload, {
@@ -134,7 +174,7 @@ export class AuthService {
         expiresIn: this.jwtConfig.expiresIn,
         algorithm: 'HS256',
       }),
-      this.jwtService.signAsync(payload, {
+      this.jwtService.signAsync(refreshPayload, {
         secret: this.jwtConfig.refreshSecret,
         expiresIn: this.jwtConfig.refreshExpiresIn,
         algorithm: 'HS256',
@@ -144,8 +184,25 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  private async updateRefreshToken(userId: string, refreshToken: string): Promise<void> {
-    const hashedToken = await hashToken(refreshToken);
-    await this.usersService.updateRefreshToken(userId, hashedToken);
+  private async createSession(userId: string, refreshToken: string): Promise<void> {
+    await this.refreshSessionRepo.create({
+      userId,
+      tokenHash: hashToken(refreshToken),
+      expiresAt: this.decodeExpiry(refreshToken),
+    });
+  }
+
+  /**
+   * Reads the `exp` claim off the token we just signed instead of
+   * re-parsing `JWT_REFRESH_EXPIRES_IN` ("7d" etc.) ourselves — keeps the
+   * session row's expiry guaranteed consistent with the token's actual
+   * expiry with no separate duration-parsing logic to drift out of sync.
+   */
+  private decodeExpiry(token: string): Date {
+    const payload = this.jwtService.decode<IJwtPayload>(token);
+    if (!payload?.exp) {
+      throw new InvalidTokenException('refresh token');
+    }
+    return new Date(payload.exp * 1000);
   }
 }

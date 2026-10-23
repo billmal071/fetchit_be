@@ -29,11 +29,6 @@ export interface IUserRepository extends ISoftDeleteRepository<
   findByGoogleId(googleId: string): Promise<User | null>;
 
   /**
-   * Update user's refresh token
-   */
-  updateRefreshToken(id: string, refreshToken: string | null): Promise<void>;
-
-  /**
    * Update user's last login timestamp
    */
   updateLastLogin(id: string): Promise<void>;
