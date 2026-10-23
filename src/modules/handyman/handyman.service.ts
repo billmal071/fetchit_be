@@ -38,7 +38,7 @@ import { BadRequestException, ForbiddenException } from '@common/exceptions/base
 import {
   HandymanProfileCompletedEvent,
   HandymanDocumentsSubmittedEvent,
-  ServiceRequestCompletedEvent,
+  ServiceRequestCompletionSubmittedEvent,
 } from '@common/events';
 import {
   CompleteProfileDto,
@@ -92,16 +92,17 @@ export class HandymanService {
     // if the row does not exist yet (it is otherwise created on completion).
     const profile = await this.profileRepo.ensureByUserId(userId);
 
+    const ongoingStatuses = [
+      ServiceRequestStatus.ASSIGNED,
+      ServiceRequestStatus.IN_PROGRESS,
+      ServiceRequestStatus.AWAITING_CONFIRMATION,
+    ];
     const [ongoingCount, completedCount] = await Promise.all([
-      this.serviceRequestRepo
-        .countByHandymanAndStatus(profile.id, ServiceRequestStatus.ASSIGNED)
-        .then(async (assigned) => {
-          const inProgress = await this.serviceRequestRepo.countByHandymanAndStatus(
-            profile.id,
-            ServiceRequestStatus.IN_PROGRESS,
-          );
-          return assigned + inProgress;
-        }),
+      Promise.all(
+        ongoingStatuses.map((status) =>
+          this.serviceRequestRepo.countByHandymanAndStatus(profile.id, status),
+        ),
+      ).then((counts) => counts.reduce((sum, count) => sum + count, 0)),
       this.serviceRequestRepo.countByHandymanAndStatus(profile.id, ServiceRequestStatus.COMPLETED),
     ]);
 
@@ -371,7 +372,11 @@ export class HandymanService {
     const statusFilter: Record<string, unknown> = {};
     if (filter === 'ongoing') {
       statusFilter.status = {
-        in: [ServiceRequestStatus.ASSIGNED, ServiceRequestStatus.IN_PROGRESS],
+        in: [
+          ServiceRequestStatus.ASSIGNED,
+          ServiceRequestStatus.IN_PROGRESS,
+          ServiceRequestStatus.AWAITING_CONFIRMATION,
+        ],
       };
     } else if (filter === 'completed') {
       statusFilter.status = ServiceRequestStatus.COMPLETED;
@@ -570,6 +575,11 @@ export class HandymanService {
   }
 
   // Fix #11: Emit SERVICE_REQUEST_COMPLETED event when handyman marks complete
+  // Bug #10: this used to set COMPLETED directly, the same transition
+  // confirmCompletion below also makes — so either side could close the job
+  // unilaterally and the other's "confirmation" never actually happened.
+  // The handyman now only moves the request to AWAITING_CONFIRMATION;
+  // confirmCompletion is the one place that sets COMPLETED.
   async completeRequest(userId: string, requestId: string): Promise<ServiceRequest> {
     const profile = await this.profileRepo.findByUserId(userId);
     if (!profile) {
@@ -588,18 +598,35 @@ export class HandymanService {
     if (request.status !== ServiceRequestStatus.IN_PROGRESS) {
       throw new InvalidVerificationTransitionException(
         request.status,
-        ServiceRequestStatus.COMPLETED,
+        ServiceRequestStatus.AWAITING_CONFIRMATION,
       );
     }
 
-    const updatedRequest = await this.serviceRequestRepo.update(requestId, {
-      status: ServiceRequestStatus.COMPLETED,
-      completedAt: new Date(),
+    // Conditional update: a double-submit of this same request (e.g. a
+    // retried PATCH) could otherwise race two reads of the same IN_PROGRESS
+    // row, both pass the check above, and the second write would re-run
+    // after the customer has already confirmed — resurrecting a COMPLETED
+    // request back to AWAITING_CONFIRMATION with no way to undo it, since
+    // neither this method nor confirmCompletion accepts that status again.
+    const { count } = await this.prisma.serviceRequest.updateMany({
+      where: { id: requestId, status: ServiceRequestStatus.IN_PROGRESS },
+      data: { status: ServiceRequestStatus.AWAITING_CONFIRMATION },
+    });
+
+    if (count === 0) {
+      throw new InvalidVerificationTransitionException(
+        request.status,
+        ServiceRequestStatus.AWAITING_CONFIRMATION,
+      );
+    }
+
+    const updatedRequest = await this.prisma.serviceRequest.findUniqueOrThrow({
+      where: { id: requestId },
     });
 
     this.eventEmitter.emit(
-      EVENTS.SERVICE_REQUEST_COMPLETED,
-      new ServiceRequestCompletedEvent(requestId, profile.id, request.customerId),
+      EVENTS.SERVICE_REQUEST_COMPLETION_SUBMITTED,
+      new ServiceRequestCompletionSubmittedEvent(requestId, profile.id, request.customerId),
     );
 
     return updatedRequest;

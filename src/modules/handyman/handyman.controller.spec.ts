@@ -133,6 +133,6 @@ describe('HandymanController', () => {
   it('completeRequest calls service', async () => {
     const result = await controller.completeRequest(user, 'sr1');
     expect(service.completeRequest).toHaveBeenCalledWith('u1', 'sr1');
-    expect(result.message).toBe(SUCCESS_MESSAGES.SERVICE_REQUEST_UPDATED);
+    expect(result.message).toBe(SUCCESS_MESSAGES.SERVICE_REQUEST_COMPLETION_SUBMITTED);
   });
 });

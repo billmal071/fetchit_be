@@ -668,25 +668,26 @@ describe('ServiceRequestsService', () => {
 
   describe('confirmCompletion', () => {
     it('should complete with timestamp and emit event', async () => {
-      const inProgress = {
+      const awaitingConfirmation = {
         ...mockRequest,
-        status: ServiceRequestStatus.IN_PROGRESS,
+        status: ServiceRequestStatus.AWAITING_CONFIRMATION,
         assignedHandymanId: 'profile-1',
       };
       const completed = {
-        ...inProgress,
+        ...awaitingConfirmation,
         status: ServiceRequestStatus.COMPLETED,
         completedAt: expect.any(Date),
       };
-      mockRequestRepo.findById.mockResolvedValue(inProgress);
-      mockRequestRepo.update.mockResolvedValue(completed);
+      mockRequestRepo.findById.mockResolvedValue(awaitingConfirmation);
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.serviceRequest.findUniqueOrThrow.mockResolvedValue(completed);
 
       const result = await service.confirmCompletion(requestId, userId);
 
       expect(result).toEqual(completed);
-      expect(mockRequestRepo.update).toHaveBeenCalledWith(requestId, {
-        status: ServiceRequestStatus.COMPLETED,
-        completedAt: expect.any(Date),
+      expect(mockPrisma.serviceRequest.updateMany).toHaveBeenCalledWith({
+        where: { id: requestId, status: ServiceRequestStatus.AWAITING_CONFIRMATION },
+        data: { status: ServiceRequestStatus.COMPLETED, completedAt: expect.any(Date) },
       });
       expect(mockEventEmitter.emit).toHaveBeenCalledWith(
         EVENTS.SERVICE_REQUEST_COMPLETED,
@@ -698,7 +699,22 @@ describe('ServiceRequestsService', () => {
       );
     });
 
-    it('should throw ForbiddenException when not IN_PROGRESS', async () => {
+    it('should throw ForbiddenException when a concurrent confirmation already changed the status', async () => {
+      const awaitingConfirmation = {
+        ...mockRequest,
+        status: ServiceRequestStatus.AWAITING_CONFIRMATION,
+        assignedHandymanId: 'profile-1',
+      };
+      mockRequestRepo.findById.mockResolvedValue(awaitingConfirmation);
+      mockPrisma.serviceRequest.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.confirmCompletion(requestId, userId)).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(mockEventEmitter.emit).not.toHaveBeenCalled();
+    });
+
+    it('should throw ForbiddenException when not AWAITING_CONFIRMATION', async () => {
       mockRequestRepo.findById.mockResolvedValue(mockRequest); // status is OPEN
 
       await expect(service.confirmCompletion(requestId, userId)).rejects.toThrow(
@@ -706,14 +722,26 @@ describe('ServiceRequestsService', () => {
       );
     });
 
-    it('should throw ForbiddenException when not the owner', async () => {
+    it('should throw ForbiddenException when handyman marked complete but a different customer confirms', async () => {
+      const awaitingConfirmation = {
+        ...mockRequest,
+        status: ServiceRequestStatus.AWAITING_CONFIRMATION,
+      };
+      mockRequestRepo.findById.mockResolvedValue(awaitingConfirmation);
+
+      await expect(service.confirmCompletion(requestId, otherUserId)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('should throw ForbiddenException when still IN_PROGRESS (handyman has not marked complete yet)', async () => {
       const inProgress = {
         ...mockRequest,
         status: ServiceRequestStatus.IN_PROGRESS,
       };
       mockRequestRepo.findById.mockResolvedValue(inProgress);
 
-      await expect(service.confirmCompletion(requestId, otherUserId)).rejects.toThrow(
+      await expect(service.confirmCompletion(requestId, userId)).rejects.toThrow(
         ForbiddenException,
       );
     });

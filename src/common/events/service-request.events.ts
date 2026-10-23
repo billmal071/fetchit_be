@@ -15,6 +15,14 @@ export class ServiceRequestAssignedEvent {
   ) {}
 }
 
+export class ServiceRequestCompletionSubmittedEvent {
+  constructor(
+    public readonly serviceRequestId: string,
+    public readonly handymanProfileId: string,
+    public readonly customerId: string,
+  ) {}
+}
+
 export class ServiceRequestCompletedEvent {
   constructor(
     public readonly serviceRequestId: string,

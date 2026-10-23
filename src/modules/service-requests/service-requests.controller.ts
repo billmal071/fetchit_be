@@ -175,7 +175,9 @@ export class ServiceRequestsController {
   @Roles(UserRole.CUSTOMER)
   @ApiOperation({
     summary: 'Confirm completion of a service request',
-    description: 'Confirm completion of an in-progress service request.',
+    description:
+      'Confirm completion of a service request the handyman has marked complete ' +
+      '(status AWAITING_CONFIRMATION).',
   })
   @ApiParam({ name: 'id', description: 'Service request UUID' })
   @ApiSuccessResponse(ServiceRequestResponseDto)

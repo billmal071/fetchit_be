@@ -406,6 +406,11 @@ export class ServiceRequestsService {
     return this.prisma.serviceRequestApplication.findUniqueOrThrow({ where: { id: appId } });
   }
 
+  // Bug #10: this used to accept IN_PROGRESS, the same status
+  // completeRequest's unconditional write also matched — so whichever side
+  // called first won, and the other's step was skipped rather than
+  // confirmed. Now only a request the handyman has actually marked
+  // AWAITING_CONFIRMATION can be confirmed.
   async confirmCompletion(requestId: string, userId: string): Promise<ServiceRequest> {
     const request = await this.requestRepo.findById(requestId);
 
@@ -417,13 +422,30 @@ export class ServiceRequestsService {
       throw new ForbiddenException('You can only confirm completion of your own service requests');
     }
 
-    if (request.status !== ServiceRequestStatus.IN_PROGRESS) {
-      throw new ForbiddenException('Only in-progress service requests can be marked as completed');
+    if (request.status !== ServiceRequestStatus.AWAITING_CONFIRMATION) {
+      throw new ForbiddenException(
+        'Only requests the handyman has marked complete can be confirmed',
+      );
     }
 
-    const updatedRequest = await this.requestRepo.update(requestId, {
-      status: ServiceRequestStatus.COMPLETED,
-      completedAt: new Date(),
+    // Conditional update: a double-submit of this same confirmation (e.g. a
+    // retried PATCH) could otherwise race two reads of the same
+    // AWAITING_CONFIRMATION row, both pass the check above, and the second
+    // write would re-emit SERVICE_REQUEST_COMPLETED a second time once those
+    // listeners do more than log (payout, review prompt, etc).
+    const { count } = await this.prisma.serviceRequest.updateMany({
+      where: { id: requestId, status: ServiceRequestStatus.AWAITING_CONFIRMATION },
+      data: { status: ServiceRequestStatus.COMPLETED, completedAt: new Date() },
+    });
+
+    if (count === 0) {
+      throw new ForbiddenException(
+        'Only requests the handyman has marked complete can be confirmed',
+      );
+    }
+
+    const updatedRequest = await this.prisma.serviceRequest.findUniqueOrThrow({
+      where: { id: requestId },
     });
 
     this.eventEmitter.emit(

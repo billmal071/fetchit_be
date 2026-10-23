@@ -5,7 +5,7 @@ import { ServiceRequestStatus } from '@prisma/client';
 
 export class ServiceRequestQueryDto extends PaginationDto {
   @ApiPropertyOptional({
-    enum: ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'],
+    enum: ServiceRequestStatus,
     description: 'Filter by status',
     example: 'OPEN',
   })
