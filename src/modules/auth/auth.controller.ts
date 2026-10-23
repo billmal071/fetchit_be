@@ -5,6 +5,7 @@ import { AuthService } from './auth.service';
 import {
   LoginDto,
   RefreshTokenDto,
+  LogoutDto,
   AuthResponseDto,
   RefreshTokensResponseDto,
   ForgotPasswordDto,
@@ -76,11 +77,16 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Logout current user',
-    description: 'Invalidate the current refresh token.',
+    description:
+      'Revoke a refresh session. Pass the current session refresh token to log out just ' +
+      'this device, or omit it to log out of every device.',
   })
   @ApiErrorResponses()
-  async logout(@CurrentUser() user: IRequestUser): Promise<{ message: string }> {
-    await this.authService.logout(user.id);
+  async logout(
+    @CurrentUser() user: IRequestUser,
+    @Body() dto: LogoutDto,
+  ): Promise<{ message: string }> {
+    await this.authService.logout(user.id, dto.refreshToken);
     return { message: SUCCESS_MESSAGES.LOGOUT_SUCCESS };
   }
 

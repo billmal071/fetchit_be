@@ -36,6 +36,12 @@ export interface IJwtPayload {
   sub: string;
   email: string;
   role: string;
+  // Refresh tokens only: random per-token nonce. Without it, two refresh
+  // tokens signed for the same user in the same wall-clock second are
+  // byte-identical (HS256 is deterministic and `sub`/`email`/`role`/`iat`
+  // would all match), which collides on RefreshSession.tokenHash's unique
+  // constraint — turning "log in on two devices quickly" into a 500.
+  jti?: string;
   iat?: number;
   exp?: number;
 }

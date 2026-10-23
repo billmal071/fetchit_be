@@ -10,6 +10,7 @@ import {
   ServiceCategoryRepository,
   ServiceRequestRepository,
   ServiceRequestApplicationRepository,
+  RefreshSessionRepository,
   USER_REPOSITORY,
   WAITLIST_REPOSITORY,
   PASSWORD_RESET_REPOSITORY,
@@ -19,6 +20,7 @@ import {
   SERVICE_CATEGORY_REPOSITORY,
   SERVICE_REQUEST_REPOSITORY,
   SERVICE_REQUEST_APPLICATION_REPOSITORY,
+  REFRESH_SESSION_REPOSITORY,
 } from './repositories';
 
 @Global()
@@ -61,6 +63,10 @@ import {
       provide: SERVICE_REQUEST_APPLICATION_REPOSITORY,
       useClass: ServiceRequestApplicationRepository,
     },
+    {
+      provide: REFRESH_SESSION_REPOSITORY,
+      useClass: RefreshSessionRepository,
+    },
   ],
   exports: [
     PrismaService,
@@ -73,6 +79,7 @@ import {
     SERVICE_CATEGORY_REPOSITORY,
     SERVICE_REQUEST_REPOSITORY,
     SERVICE_REQUEST_APPLICATION_REPOSITORY,
+    REFRESH_SESSION_REPOSITORY,
   ],
 })
 export class DatabaseModule {}

@@ -8,3 +8,4 @@ export * from './handyman-document-repository.interface';
 export * from './service-category-repository.interface';
 export * from './service-request-repository.interface';
 export * from './service-request-application-repository.interface';
+export * from './refresh-session-repository.interface';

@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { OAuthService, IGoogleUser } from './oauth.service';
 import { UsersService } from '@/modules/users/users.service';
 import { PrismaService } from '@/database/prisma.service';
+import { REFRESH_SESSION_REPOSITORY } from '@/database/repositories';
 
 const mockGoogleUser: IGoogleUser = {
   googleId: 'g123',
@@ -27,6 +28,7 @@ describe('OAuthService', () => {
   let usersService: Record<string, jest.Mock>;
   let prisma: Record<string, Record<string, jest.Mock>>;
   let jwtService: Record<string, jest.Mock>;
+  let refreshSessionRepo: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     usersService = {
@@ -34,11 +36,14 @@ describe('OAuthService', () => {
       findByEmail: jest.fn(),
       findById: jest.fn(),
       createOAuthUser: jest.fn(),
-      updateRefreshToken: jest.fn(),
       updateLastLogin: jest.fn(),
     };
     prisma = { user: { update: jest.fn() } };
-    jwtService = { signAsync: jest.fn() };
+    jwtService = {
+      signAsync: jest.fn(),
+      decode: jest.fn().mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 604800 }),
+    };
+    refreshSessionRepo = { create: jest.fn() };
 
     jwtService.signAsync
       .mockResolvedValueOnce('access-token')
@@ -50,6 +55,7 @@ describe('OAuthService', () => {
         { provide: UsersService, useValue: usersService },
         { provide: PrismaService, useValue: prisma },
         { provide: JwtService, useValue: jwtService },
+        { provide: REFRESH_SESSION_REPOSITORY, useValue: refreshSessionRepo },
         {
           provide: ConfigService,
           useValue: {
@@ -131,13 +137,15 @@ describe('OAuthService', () => {
       expect(result.isNewUser).toBe(true);
     });
 
-    it('should generate tokens and update refresh token', async () => {
+    it('should generate tokens and create a refresh session', async () => {
       usersService.findByGoogleId.mockResolvedValue(mockUser);
 
       await service.handleGoogleLogin(mockGoogleUser);
 
       expect(jwtService.signAsync).toHaveBeenCalledTimes(2);
-      expect(usersService.updateRefreshToken).toHaveBeenCalledWith('u1', expect.any(String));
+      expect(refreshSessionRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'u1' }),
+      );
       expect(usersService.updateLastLogin).toHaveBeenCalledWith('u1');
     });
 

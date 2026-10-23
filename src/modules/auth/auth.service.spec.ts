@@ -6,6 +6,7 @@ import { hashToken } from '@/common/utils';
 import { AuthService } from './auth.service';
 import { UsersService } from '@/modules/users/users.service';
 import { EmailVerificationService } from './services';
+import { REFRESH_SESSION_REPOSITORY } from '@/database/repositories';
 import {
   InvalidCredentialsException,
   EmailNotVerifiedException,
@@ -17,11 +18,12 @@ describe('AuthService', () => {
   let usersService: typeof mockUsersService;
   let jwtService: typeof mockJwtService;
   let emailVerificationService: typeof mockEmailVerificationService;
+  let refreshSessionRepo: typeof mockRefreshSessionRepo;
 
   let hashedPassword: string;
-  let hashedRefreshToken: string;
   const rawPassword = 'Password1!';
   const rawRefreshToken = 'real-refresh-token';
+  const futureExp = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
 
   const mockConfigService = {
     get: jest.fn((key: string) => {
@@ -39,26 +41,35 @@ describe('AuthService', () => {
     create: jest.fn(),
     findByEmail: jest.fn(),
     findById: jest.fn(),
-    updateRefreshToken: jest.fn(),
     updateLastLogin: jest.fn(),
     remove: jest.fn(),
   };
 
   const mockJwtService = {
     signAsync: jest.fn().mockResolvedValue('mock-jwt-token'),
+    decode: jest.fn().mockReturnValue({ exp: futureExp }),
   };
 
   const mockEmailVerificationService = {
     sendVerificationEmailByUserId: jest.fn().mockResolvedValue(undefined),
   };
 
+  const mockRefreshSessionRepo = {
+    create: jest.fn(),
+    findActiveByTokenHash: jest.fn(),
+    revokeByTokenHash: jest.fn(),
+    revokeAllForUser: jest.fn(),
+    rotate: jest.fn(),
+  };
+
   beforeAll(async () => {
     hashedPassword = await bcrypt.hash(rawPassword, 12);
-    hashedRefreshToken = hashToken(rawRefreshToken);
   });
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    mockJwtService.signAsync.mockResolvedValue('mock-jwt-token');
+    mockJwtService.decode.mockReturnValue({ exp: futureExp });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -67,6 +78,7 @@ describe('AuthService', () => {
         { provide: JwtService, useValue: mockJwtService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: EmailVerificationService, useValue: mockEmailVerificationService },
+        { provide: REFRESH_SESSION_REPOSITORY, useValue: mockRefreshSessionRepo },
       ],
     }).compile();
 
@@ -74,6 +86,7 @@ describe('AuthService', () => {
     usersService = mockUsersService;
     jwtService = mockJwtService;
     emailVerificationService = mockEmailVerificationService;
+    refreshSessionRepo = mockRefreshSessionRepo;
   });
 
   const createMockUser = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -84,7 +97,6 @@ describe('AuthService', () => {
     role: 'CUSTOMER',
     status: 'ACTIVE',
     emailVerified: true,
-    refreshToken: hashedRefreshToken,
     createdAt: new Date('2024-01-15T10:30:00.000Z'),
     updatedAt: new Date('2024-01-15T10:30:00.000Z'),
     ...overrides,
@@ -97,7 +109,7 @@ describe('AuthService', () => {
   };
 
   describe('register', () => {
-    it('should create user, generate tokens, update refresh token, and send verification email', async () => {
+    it('should create user, generate tokens, create a session, and send verification email', async () => {
       const mockCreatedUser = {
         id: 'user-1',
         username: 'johndoe',
@@ -110,7 +122,7 @@ describe('AuthService', () => {
       };
 
       usersService.create.mockResolvedValue(mockCreatedUser);
-      usersService.updateRefreshToken.mockResolvedValue(undefined);
+      refreshSessionRepo.create.mockResolvedValue({});
 
       const result = await authService.register(createUserDto);
 
@@ -122,7 +134,11 @@ describe('AuthService', () => {
 
       expect(usersService.create).toHaveBeenCalledWith(createUserDto);
       expect(jwtService.signAsync).toHaveBeenCalledTimes(2);
-      expect(usersService.updateRefreshToken).toHaveBeenCalledWith('user-1', expect.any(String));
+      expect(refreshSessionRepo.create).toHaveBeenCalledWith({
+        userId: 'user-1',
+        tokenHash: hashToken('mock-jwt-token'),
+        expiresAt: new Date(futureExp * 1000),
+      });
       // Verification email is fire-and-forget, but service should be called
       // Use a small delay to allow the promise chain to execute
       await new Promise((resolve) => setImmediate(resolve));
@@ -157,11 +173,11 @@ describe('AuthService', () => {
   });
 
   describe('login', () => {
-    it('should return tokens for valid credentials', async () => {
+    it('should return tokens and create a session for valid credentials', async () => {
       const mockUser = createMockUser();
       usersService.findByEmail.mockResolvedValue(mockUser);
-      usersService.updateRefreshToken.mockResolvedValue(undefined);
       usersService.updateLastLogin.mockResolvedValue(undefined);
+      refreshSessionRepo.create.mockResolvedValue({});
 
       const loginDto = { email: 'john@example.com', password: rawPassword };
       const result = await authService.login(loginDto);
@@ -174,7 +190,14 @@ describe('AuthService', () => {
 
       expect(usersService.findByEmail).toHaveBeenCalledWith('john@example.com');
       expect(jwtService.signAsync).toHaveBeenCalledTimes(2);
-      expect(usersService.updateRefreshToken).toHaveBeenCalledWith('user-1', expect.any(String));
+      // Bug #12: login must only INSERT this device's session, never touch
+      // any other device's row.
+      expect(refreshSessionRepo.create).toHaveBeenCalledWith({
+        userId: 'user-1',
+        tokenHash: hashToken('mock-jwt-token'),
+        expiresAt: new Date(futureExp * 1000),
+      });
+      expect(refreshSessionRepo.revokeAllForUser).not.toHaveBeenCalled();
       expect(usersService.updateLastLogin).toHaveBeenCalledWith('user-1');
     });
 
@@ -224,20 +247,35 @@ describe('AuthService', () => {
   });
 
   describe('logout', () => {
-    it('should clear refresh token', async () => {
-      usersService.updateRefreshToken.mockResolvedValue(undefined);
+    it('revokes only the current session when a refresh token is given', async () => {
+      await authService.logout('user-1', rawRefreshToken);
 
+      expect(refreshSessionRepo.revokeByTokenHash).toHaveBeenCalledWith(
+        hashToken(rawRefreshToken),
+        'user-1',
+      );
+      expect(refreshSessionRepo.revokeAllForUser).not.toHaveBeenCalled();
+    });
+
+    it('revokes every session when no refresh token is given', async () => {
       await authService.logout('user-1');
 
-      expect(usersService.updateRefreshToken).toHaveBeenCalledWith('user-1', null);
+      expect(refreshSessionRepo.revokeAllForUser).toHaveBeenCalledWith('user-1');
+      expect(refreshSessionRepo.revokeByTokenHash).not.toHaveBeenCalled();
     });
   });
 
   describe('refreshTokens', () => {
-    it('should return new tokens for valid refresh token', async () => {
-      const mockUser = createMockUser({ refreshToken: hashedRefreshToken });
+    it('rotates the matching session in place and returns new tokens', async () => {
+      const mockUser = createMockUser();
+      const session = {
+        id: 'session-1',
+        userId: 'user-1',
+        tokenHash: hashToken(rawRefreshToken),
+      };
       usersService.findById.mockResolvedValue(mockUser);
-      usersService.updateRefreshToken.mockResolvedValue(undefined);
+      refreshSessionRepo.findActiveByTokenHash.mockResolvedValue(session);
+      refreshSessionRepo.rotate.mockResolvedValue({});
 
       const result = await authService.refreshTokens('user-1', rawRefreshToken);
 
@@ -246,8 +284,16 @@ describe('AuthService', () => {
       expect(result.refreshToken).toBe('mock-jwt-token');
 
       expect(usersService.findById).toHaveBeenCalledWith('user-1');
+      expect(refreshSessionRepo.findActiveByTokenHash).toHaveBeenCalledWith(
+        hashToken(rawRefreshToken),
+      );
       expect(jwtService.signAsync).toHaveBeenCalledTimes(2);
-      expect(usersService.updateRefreshToken).toHaveBeenCalledWith('user-1', expect.any(String));
+      expect(refreshSessionRepo.rotate).toHaveBeenCalledWith(
+        'session-1',
+        hashToken(rawRefreshToken),
+        hashToken('mock-jwt-token'),
+        new Date(futureExp * 1000),
+      );
     });
 
     it('should throw InvalidTokenException when user not found', async () => {
@@ -260,9 +306,10 @@ describe('AuthService', () => {
       expect(jwtService.signAsync).not.toHaveBeenCalled();
     });
 
-    it('should throw InvalidTokenException when no stored refresh token', async () => {
-      const mockUser = createMockUser({ refreshToken: null });
+    it('should throw InvalidTokenException when no active session matches the token', async () => {
+      const mockUser = createMockUser();
       usersService.findById.mockResolvedValue(mockUser);
+      refreshSessionRepo.findActiveByTokenHash.mockResolvedValue(null);
 
       await expect(authService.refreshTokens('user-1', rawRefreshToken)).rejects.toThrow(
         InvalidTokenException,
@@ -271,15 +318,73 @@ describe('AuthService', () => {
       expect(jwtService.signAsync).not.toHaveBeenCalled();
     });
 
-    it('should throw InvalidTokenException when token does not match', async () => {
-      const mockUser = createMockUser({ refreshToken: hashedRefreshToken });
+    it('should throw InvalidTokenException when the matching session belongs to a different user', async () => {
+      const mockUser = createMockUser();
       usersService.findById.mockResolvedValue(mockUser);
+      refreshSessionRepo.findActiveByTokenHash.mockResolvedValue({
+        id: 'session-1',
+        userId: 'someone-else',
+        tokenHash: hashToken(rawRefreshToken),
+      });
 
-      await expect(authService.refreshTokens('user-1', 'wrong-refresh-token')).rejects.toThrow(
+      await expect(authService.refreshTokens('user-1', rawRefreshToken)).rejects.toThrow(
         InvalidTokenException,
       );
 
       expect(jwtService.signAsync).not.toHaveBeenCalled();
+    });
+
+    it('should throw InvalidTokenException when the session was revoked or rotated concurrently', async () => {
+      const mockUser = createMockUser();
+      const session = {
+        id: 'session-1',
+        userId: 'user-1',
+        tokenHash: hashToken(rawRefreshToken),
+      };
+      usersService.findById.mockResolvedValue(mockUser);
+      refreshSessionRepo.findActiveByTokenHash.mockResolvedValue(session);
+      // Conditional rotate found the row already changed (logout or a
+      // concurrent refresh of this same token won the race) — null means
+      // "lost the race", not "crashed".
+      refreshSessionRepo.rotate.mockResolvedValue(null);
+
+      await expect(authService.refreshTokens('user-1', rawRefreshToken)).rejects.toThrow(
+        InvalidTokenException,
+      );
+    });
+  });
+
+  describe('two logins in quick succession', () => {
+    it('signs distinct refresh tokens (via a jti nonce) even in the same second', async () => {
+      // Bug: HS256 is deterministic and {sub, email, role, iat, exp} are
+      // identical for two logins in the same wall-clock second, so without
+      // a per-token nonce the signed tokens — and therefore their
+      // RefreshSession.tokenHash — would collide on the unique constraint.
+      const mockUser = createMockUser();
+      usersService.findByEmail.mockResolvedValue(mockUser);
+      usersService.updateLastLogin.mockResolvedValue(undefined);
+      refreshSessionRepo.create.mockResolvedValue({});
+
+      const refreshPayloads: Array<{ jti?: string }> = [];
+      let callCount = 0;
+      jwtService.signAsync.mockImplementation(async (payload: { jti?: string }) => {
+        callCount += 1;
+        // Every odd call is the access token, every even call the refresh
+        // token (see generateTokens' Promise.all order).
+        if (callCount % 2 === 0) {
+          refreshPayloads.push(payload);
+        }
+        return `mock-jwt-token-${callCount}`;
+      });
+
+      const loginDto = { email: 'john@example.com', password: rawPassword };
+      await authService.login(loginDto);
+      await authService.login(loginDto);
+
+      expect(refreshPayloads).toHaveLength(2);
+      expect(refreshPayloads[0].jti).toBeDefined();
+      expect(refreshPayloads[1].jti).toBeDefined();
+      expect(refreshPayloads[0].jti).not.toBe(refreshPayloads[1].jti);
     });
   });
 });
