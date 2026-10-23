@@ -11,6 +11,7 @@ import {
   InvalidCredentialsException,
   EmailNotVerifiedException,
   InvalidTokenException,
+  AccountSuspendedException,
 } from '@/common/exceptions/domain.exception';
 
 describe('AuthService', () => {
@@ -244,6 +245,18 @@ describe('AuthService', () => {
 
       expect(jwtService.signAsync).not.toHaveBeenCalled();
     });
+
+    it('should throw AccountSuspendedException when the account is suspended', async () => {
+      const suspendedUser = createMockUser({ status: 'SUSPENDED' });
+      usersService.findByEmail.mockResolvedValue(suspendedUser);
+
+      const loginDto = { email: 'john@example.com', password: rawPassword };
+
+      await expect(authService.login(loginDto)).rejects.toThrow(AccountSuspendedException);
+
+      expect(jwtService.signAsync).not.toHaveBeenCalled();
+      expect(refreshSessionRepo.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('logout', () => {
@@ -303,6 +316,18 @@ describe('AuthService', () => {
         InvalidTokenException,
       );
 
+      expect(jwtService.signAsync).not.toHaveBeenCalled();
+    });
+
+    it('should throw AccountSuspendedException when the account was suspended after the session was created', async () => {
+      const suspendedUser = createMockUser({ status: 'SUSPENDED' });
+      usersService.findById.mockResolvedValue(suspendedUser);
+
+      await expect(authService.refreshTokens('user-1', rawRefreshToken)).rejects.toThrow(
+        AccountSuspendedException,
+      );
+
+      expect(refreshSessionRepo.findActiveByTokenHash).not.toHaveBeenCalled();
       expect(jwtService.signAsync).not.toHaveBeenCalled();
     });
 

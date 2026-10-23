@@ -13,6 +13,7 @@ export {
   InvalidCredentialsException,
   TokenExpiredException,
   EmailNotVerifiedException,
+  AccountSuspendedException,
   InvalidTokenException,
   InvalidAdminSecretException,
   ResourceNotFoundException,

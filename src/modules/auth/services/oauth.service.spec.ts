@@ -19,6 +19,7 @@ const mockUser = {
   email: 'test@gmail.com',
   username: 'test_abc',
   role: 'CUSTOMER',
+  status: 'ACTIVE',
   provider: 'LOCAL',
   googleId: null,
 };
@@ -89,6 +90,14 @@ describe('OAuthService', () => {
       expect(result.redirectUrl).toContain('http://test.com/auth/oauth-callback#accessToken=');
     });
 
+    it('should reject a suspended account instead of issuing tokens', async () => {
+      usersService.findByGoogleId.mockResolvedValue({ ...mockUser, status: 'SUSPENDED' });
+
+      await expect(service.handleGoogleLogin(mockGoogleUser)).rejects.toThrow(
+        'This account is not active',
+      );
+    });
+
     it('should link Google account to existing local user', async () => {
       usersService.findByGoogleId.mockResolvedValue(null);
       usersService.findByEmail.mockResolvedValue(mockUser);
@@ -99,10 +108,42 @@ describe('OAuthService', () => {
       expect(prisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 'u1' },
-          data: expect.objectContaining({ googleId: 'g123', emailVerified: true }),
+          data: expect.objectContaining({
+            googleId: 'g123',
+            emailVerified: true,
+            status: 'ACTIVE',
+          }),
         }),
       );
       expect(result.isNewUser).toBe(false);
+    });
+
+    // Bug #13 regression: a user who registered by email and never
+    // verified is PENDING + unverified (regular registration never sets
+    // status — only EmailVerificationRepository's verify flow does).
+    // Signing in with Google for the first time hits this exact link
+    // path, and linkGoogleAccount must activate the account itself —
+    // nothing else ever will, since resend-verification short-circuits
+    // once emailVerified is true.
+    it('activates a never-verified local account on first Google link', async () => {
+      const unverifiedLocalUser = { ...mockUser, status: 'PENDING', emailVerified: false };
+      usersService.findByGoogleId.mockResolvedValue(null);
+      usersService.findByEmail.mockResolvedValue(unverifiedLocalUser);
+      prisma.user.update.mockResolvedValue({
+        ...unverifiedLocalUser,
+        googleId: 'g123',
+        emailVerified: true,
+        status: 'ACTIVE',
+      });
+
+      const result = await service.handleGoogleLogin(mockGoogleUser);
+
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ emailVerified: true, status: 'ACTIVE' }),
+        }),
+      );
+      expect(result.tokens.accessToken).toBe('access-token');
     });
 
     it('should throw when existing user already has Google provider', async () => {
@@ -162,6 +203,11 @@ describe('OAuthService', () => {
     it('should map "already linked" error to account_exists code', () => {
       const url = service.getFrontendErrorUrl('Account already linked');
       expect(url).toBe('http://test.com/auth/oauth-error?error=account_exists');
+    });
+
+    it('should map "suspended" error to account_suspended code', () => {
+      const url = service.getFrontendErrorUrl('This account is not active');
+      expect(url).toBe('http://test.com/auth/oauth-error?error=account_suspended');
     });
 
     it('should map unknown errors to oauth_failed code', () => {

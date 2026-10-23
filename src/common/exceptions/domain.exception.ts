@@ -37,6 +37,23 @@ export class EmailNotVerifiedException extends DomainException {
   }
 }
 
+// Bug #13: login/refresh never checked `status`, so a suspended user still
+// got tokens and only found out something was wrong on the *next* request,
+// from JwtStrategy's generic "account is not active" 401 — a confusing
+// error for a problem login/refresh could have reported clearly up front.
+export class AccountSuspendedException extends DomainException {
+  constructor() {
+    // Deliberately not "suspended" specifically — UserStatus also has
+    // INACTIVE, and an admin can set either via PATCH /users/:id. Naming
+    // the wrong reason would be worse than this generic one.
+    super(
+      'This account is not active. Contact support for assistance.',
+      'AUTH_ACCOUNT_SUSPENDED',
+      HttpStatus.FORBIDDEN,
+    );
+  }
+}
+
 export class InvalidTokenException extends DomainException {
   constructor(tokenType: string = 'token') {
     super(`Invalid ${tokenType}`, 'AUTH_INVALID_TOKEN', HttpStatus.UNAUTHORIZED, { tokenType });
