@@ -50,3 +50,4 @@ temp_interactive_push.bat
 
 # Local storage driver upload root (development only)
 /storage/uploads/
+.neon
