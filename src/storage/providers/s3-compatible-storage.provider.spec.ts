@@ -159,3 +159,53 @@ describe('S3CompatibleStorageProvider.getSignedUrl', () => {
     await expect(provider.getSignedUrl('../../etc/passwd', 300)).rejects.toThrow();
   });
 });
+
+/**
+ * Neon Object Storage runs on this same class rather than a driver of its own,
+ * because it speaks the S3 protocol. These pin the two things that make that
+ * reuse safe: the URL shape Neon documents, and an honest provider name.
+ */
+describe('as the Neon Object Storage driver', () => {
+  const neonOptions: IS3CompatibleStorageOptions = {
+    endpoint: 'https://br-example-123.storage.us-east-2.aws.neon.tech',
+    region: 'us-east-2',
+    bucket: 'fetchit-uploads',
+    accessKeyId: 'key',
+    secretAccessKey: 'secret',
+    // Neon supports path-style addressing only.
+    forcePathStyle: true,
+    providerName: 'neon',
+  };
+
+  it('builds the object URL Neon documents: <endpoint>/<bucket>/<key>', () => {
+    const provider = new S3CompatibleStorageProvider(neonOptions);
+
+    expect(provider.getUrl('avatars/u1/abc.jpg')).toBe(
+      'https://br-example-123.storage.us-east-2.aws.neon.tech/fetchit-uploads/avatars/u1/abc.jpg',
+    );
+  });
+
+  it('reports itself as neon rather than the generic s3-compatible name', () => {
+    expect(new S3CompatibleStorageProvider(neonOptions).getProviderName()).toBe('neon');
+  });
+
+  it('still defaults to s3-compatible when no name is given', () => {
+    const withoutName: IS3CompatibleStorageOptions = { ...neonOptions };
+    delete withoutName.providerName;
+
+    expect(new S3CompatibleStorageProvider(withoutName).getProviderName()).toBe('s3-compatible');
+  });
+
+  it('presigns an expiring URL, which is why neon is allowed for KYC documents', async () => {
+    const provider = new S3CompatibleStorageProvider(neonOptions);
+
+    const parsed = new URL(await provider.getSignedUrl('receipts/u1/r.pdf', 300));
+
+    expect(parsed.pathname).toBe('/fetchit-uploads/receipts/u1/r.pdf');
+    expect(parsed.searchParams.get('X-Amz-Expires')).toBe('300');
+    expect(parsed.searchParams.get('X-Amz-Signature')).toBeTruthy();
+    // The region is part of the SigV4 credential scope, which is why
+    // AWS_REGION is required rather than defaulted for this driver.
+    expect(parsed.searchParams.get('X-Amz-Credential')).toContain('us-east-2');
+  });
+});

@@ -95,7 +95,7 @@ const baseEnvSchema = z.object({
   // Storage (pluggable object storage: 'local' or 's3-compatible').
   // Every entry is optional with a safe default so an existing deployment that
   // sets none of them still boots on the filesystem driver.
-  STORAGE_DRIVER: z.enum(['local', 's3-compatible', 'cloudinary']).default('local'),
+  STORAGE_DRIVER: z.enum(['local', 's3-compatible', 'cloudinary', 'neon']).default('local'),
   STORAGE_PUBLIC_BASE_URL: z.string().url().optional(),
   STORAGE_MAX_FILE_SIZE: z.coerce
     .number()
@@ -127,6 +127,25 @@ const baseEnvSchema = z.object({
   STORAGE_CLOUDINARY_CLOUD_NAME: z.string().optional(),
   STORAGE_CLOUDINARY_API_KEY: z.string().optional(),
   STORAGE_CLOUDINARY_API_SECRET: z.string().optional(),
+
+  // Neon Object Storage. S3-compatible (path-style + SigV4 only), so it runs
+  // on the same provider class as 's3-compatible' — but its credentials are
+  // injected under AWS-STANDARD names, not STORAGE_S3_*, because that is what
+  // Neon writes: `neon env pull` / `neon deploy` / `neon checkout` populate
+  // AWS_* in .env.local, and a deployed Neon Function gets them for free.
+  //
+  // They are declared here rather than mapped into STORAGE_S3_* on purpose.
+  // Neon credentials are BRANCH-scoped, so every branch switch rewrites AWS_*;
+  // a hand-copied STORAGE_S3_* pair would keep pointing at the old branch with
+  // nothing to indicate it had gone stale.
+  //
+  // Bucket is ours, not Neon's: it is declared in neon.ts and created by
+  // `neon deploy`, so Neon has no env var for it.
+  AWS_ENDPOINT_URL_S3: z.string().url().optional(),
+  AWS_REGION: z.string().optional(),
+  AWS_ACCESS_KEY_ID: z.string().optional(),
+  AWS_SECRET_ACCESS_KEY: z.string().optional(),
+  STORAGE_NEON_BUCKET: z.string().optional(),
 });
 
 /** Credentials each non-default driver cannot run without. */
@@ -140,6 +159,17 @@ const REQUIRED_BY_DRIVER = {
     'STORAGE_CLOUDINARY_CLOUD_NAME',
     'STORAGE_CLOUDINARY_API_KEY',
     'STORAGE_CLOUDINARY_API_SECRET',
+  ],
+  // AWS_REGION is required rather than defaulted: SigV4 signs with the region,
+  // so a wrong one fails authentication at the first request instead of
+  // falling back to anything sensible. Neon injects it, so there is nothing to
+  // guess.
+  neon: [
+    'AWS_ENDPOINT_URL_S3',
+    'AWS_REGION',
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY',
+    'STORAGE_NEON_BUCKET',
   ],
 } as const satisfies Record<string, readonly (keyof z.infer<typeof baseEnvSchema>)[]>;
 

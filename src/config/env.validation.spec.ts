@@ -133,3 +133,76 @@ describe('variables read by configuration()', () => {
     expect(() => validateEnv({ ...baseEnv })).not.toThrow();
   });
 });
+
+describe('Neon Object Storage driver', () => {
+  const neonEnv = {
+    STORAGE_DRIVER: 'neon',
+    STORAGE_NEON_BUCKET: 'fetchit-uploads',
+    AWS_ENDPOINT_URL_S3: 'https://br-example-123.storage.us-east-2.aws.neon.tech',
+    AWS_REGION: 'us-east-2',
+    AWS_ACCESS_KEY_ID: 'key',
+    AWS_SECRET_ACCESS_KEY: 'secret',
+  };
+
+  it('accepts a fully configured neon driver', () => {
+    const config = validateEnv({ ...baseEnv, ...neonEnv });
+
+    expect(config.STORAGE_DRIVER).toBe('neon');
+    expect(config.STORAGE_NEON_BUCKET).toBe('fetchit-uploads');
+    expect(config.AWS_REGION).toBe('us-east-2');
+  });
+
+  /**
+   * The whole point of declaring the AWS_* names in the schema. Nest assigns
+   * only the validated object back to process.env and zod strips unknown
+   * keys, so an undeclared AWS_ACCESS_KEY_ID set via .env would vanish before
+   * configuration() ever read it — and the driver would then construct an
+   * S3 client with empty credentials and fail on the first upload rather than
+   * at boot.
+   */
+  it.each([
+    'AWS_ENDPOINT_URL_S3',
+    'AWS_REGION',
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY',
+    'STORAGE_NEON_BUCKET',
+  ] as const)('keeps %s instead of stripping it', (key) => {
+    const config = validateEnv({ ...baseEnv, ...neonEnv }) as Record<string, unknown>;
+
+    expect(config[key]).toBe(neonEnv[key]);
+  });
+
+  it.each([
+    'STORAGE_NEON_BUCKET',
+    'AWS_ENDPOINT_URL_S3',
+    'AWS_REGION',
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY',
+  ] as const)('fails fast when %s is missing', (missing) => {
+    const partial: Record<string, unknown> = { ...baseEnv, ...neonEnv };
+    delete partial[missing];
+
+    expect(() => validateEnv(partial)).toThrow(
+      new RegExp(`${missing} is required when STORAGE_DRIVER is 'neon'`),
+    );
+  });
+
+  it('does not demand S3 or Cloudinary credentials from the neon driver', () => {
+    expect(() => validateEnv({ ...baseEnv, ...neonEnv })).not.toThrow();
+  });
+
+  it('leaves the AWS_* names unset when another driver is selected', () => {
+    // They are optional, so an existing deployment on any other driver keeps
+    // booting without them.
+    const config = validateEnv({ ...baseEnv }) as Record<string, unknown>;
+
+    expect(config.STORAGE_DRIVER).toBe('local');
+    expect(config.AWS_ACCESS_KEY_ID).toBeUndefined();
+  });
+
+  it('rejects a non-URL endpoint rather than failing at the first request', () => {
+    expect(() => validateEnv({ ...baseEnv, ...neonEnv, AWS_ENDPOINT_URL_S3: 'not-a-url' })).toThrow(
+      /Environment validation failed/,
+    );
+  });
+});

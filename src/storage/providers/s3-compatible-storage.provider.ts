@@ -28,6 +28,13 @@ export interface IS3CompatibleStorageOptions {
   forcePathStyle: boolean;
   /** Base URL for returned object URLs (e.g. a CDN or R2 public bucket domain). */
   publicBaseUrl?: string;
+  /**
+   * Name this instance reports from `getProviderName()`. Defaults to
+   * 's3-compatible'. Neon Object Storage runs on this same class — it speaks
+   * the S3 protocol — so it overrides this to say so, rather than having every
+   * log line and error attribute a Neon problem to a generic S3 driver.
+   */
+  providerName?: string;
   /** Injectable for tests. */
   client?: S3Client;
 }
@@ -49,8 +56,10 @@ export class S3CompatibleStorageProvider implements IStorageProvider {
   private readonly endpoint?: string;
   private readonly region: string;
   private readonly forcePathStyle: boolean;
+  private readonly providerName: string;
 
   constructor(options: IS3CompatibleStorageOptions) {
+    this.providerName = options.providerName ?? 's3-compatible';
     this.bucket = options.bucket;
     this.publicBaseUrl = options.publicBaseUrl;
     this.endpoint = options.endpoint;
@@ -70,7 +79,7 @@ export class S3CompatibleStorageProvider implements IStorageProvider {
       });
 
     this.logger.log(
-      `S3-compatible storage initialized (bucket=${this.bucket}, ` +
+      `${this.providerName} storage initialized (bucket=${this.bucket}, ` +
         `endpoint=${this.endpoint ?? 'aws-s3-default'})`,
     );
   }
@@ -125,6 +134,6 @@ export class S3CompatibleStorageProvider implements IStorageProvider {
   }
 
   getProviderName(): string {
-    return 's3-compatible';
+    return this.providerName;
   }
 }
