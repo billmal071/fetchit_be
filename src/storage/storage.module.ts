@@ -76,14 +76,17 @@ const logger = new Logger('StorageModule');
 
         if (driver === 'neon' && config) {
           // Neon's credentials arrive under AWS-STANDARD names, which anything
-          // else on the host may also be using. Neither dotenv nor
-          // @nestjs/config overwrites a variable that is already a real
-          // environment variable, so on a box that exports AWS_ACCESS_KEY_ID
-          // for an unrelated reason, `neon env pull` writes .env.local and it
-          // is silently ignored — leaving this driver signing Neon requests
-          // with a foreign key. The endpoint is the one value that reveals it,
-          // so check the host and say so at boot rather than leaving a pile of
-          // SigV4 failures to interpret.
+          // else on the host may also be using. @nestjs/config never
+          // overwrites a variable the process already has, so an exported
+          // AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY takes precedence over
+          // the same name in .env and this driver signs Neon requests with the
+          // host's key instead.
+          //
+          // The check below reads only the endpoint host, so it catches a
+          // shadowed or simply wrong ENDPOINT. It cannot detect shadowed
+          // CREDENTIALS — nothing here can, since a foreign key is still a
+          // plausible-looking string. Those surface as SigV4 failures, and
+          // `env | grep ^AWS_` on the box is what distinguishes them.
           let neonHost = '';
           try {
             neonHost = new URL(config.neon.endpoint).hostname;
@@ -97,6 +100,25 @@ const logger = new Logger('StorageModule');
                 `"${neonHost || config.neon.endpoint}", not a *.neon.tech address. ` +
                 'If this is unintended, check whether the host already exports AWS_* ' +
                 'variables — real environment variables win over .env/.env.local.',
+            );
+          }
+
+          // getUrl() returns an unsigned address, and `neon.ts` declares this
+          // bucket private, so that address is refused with 403. It is what
+          // POST /uploads returns as `url` for avatars and receipts, and what
+          // the frontend persists. Reads of KYC documents are unaffected —
+          // those go through getSignedUrl().
+          //
+          // STORAGE_PUBLIC_BASE_URL (a CDN over a public_read bucket) makes
+          // the returned address resolvable; without it, avatar and receipt
+          // URLs will not load. Warned rather than refused, because the
+          // document flow this driver is primarily for works either way.
+          if (!config.publicBaseUrl) {
+            logger.warn(
+              'STORAGE_DRIVER=neon without STORAGE_PUBLIC_BASE_URL: POST /uploads returns an ' +
+                'unsigned object URL, which a private bucket refuses (403). Avatar and receipt ' +
+                'URLs will not load. Set STORAGE_PUBLIC_BASE_URL over a public_read bucket, or ' +
+                'have callers store the key and sign on read.',
             );
           }
 

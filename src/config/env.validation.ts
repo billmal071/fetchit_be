@@ -183,7 +183,10 @@ export const envSchema = baseEnvSchema.superRefine((env, ctx) => {
   if (!required) return;
 
   for (const key of required) {
-    if (!env[key]) {
+    // Trimmed: a whitespace-only value is truthy, so `!env[key]` would accept
+    // it and hand " " to the S3/Cloudinary client, turning a boot-time
+    // misconfiguration into request-time auth failures.
+    if (!String(env[key] ?? '').trim()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: [key],

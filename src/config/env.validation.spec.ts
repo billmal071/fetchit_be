@@ -187,6 +187,30 @@ describe('Neon Object Storage driver', () => {
     );
   });
 
+  it.each([
+    'STORAGE_NEON_BUCKET',
+    'AWS_REGION',
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY',
+  ] as const)('rejects an empty %s', (key) => {
+    expect(() => validateEnv({ ...baseEnv, ...neonEnv, [key]: '' })).toThrow(
+      new RegExp(`${key} is required when STORAGE_DRIVER is 'neon'`),
+    );
+  });
+
+  it.each([
+    'STORAGE_NEON_BUCKET',
+    'AWS_REGION',
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY',
+  ] as const)('rejects a whitespace-only %s', (key) => {
+    // Truthy, so an untrimmed check would accept it and hand " " to the S3
+    // client — a boot-time misconfiguration turned into request-time failures.
+    expect(() => validateEnv({ ...baseEnv, ...neonEnv, [key]: '   ' })).toThrow(
+      new RegExp(`${key} is required when STORAGE_DRIVER is 'neon'`),
+    );
+  });
+
   it('does not demand S3 or Cloudinary credentials from the neon driver', () => {
     expect(() => validateEnv({ ...baseEnv, ...neonEnv })).not.toThrow();
   });

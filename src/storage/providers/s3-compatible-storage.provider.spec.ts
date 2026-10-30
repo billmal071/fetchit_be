@@ -202,6 +202,10 @@ describe('as the Neon Object Storage driver', () => {
     const parsed = new URL(await provider.getSignedUrl('receipts/u1/r.pdf', 300));
 
     expect(parsed.pathname).toBe('/fetchit-uploads/receipts/u1/r.pdf');
+    // Pins that `endpoint` reaches S3Client. getUrl() builds its URL from
+    // this.endpoint directly, so it would keep passing if the option stopped
+    // being forwarded and presigning fell back to the default AWS host.
+    expect(parsed.host).toBe('br-example-123.storage.us-east-2.aws.neon.tech');
     expect(parsed.searchParams.get('X-Amz-Expires')).toBe('300');
     expect(parsed.searchParams.get('X-Amz-Signature')).toBeTruthy();
     // The region is part of the SigV4 credential scope, which is why
