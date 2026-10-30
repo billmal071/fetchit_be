@@ -161,6 +161,13 @@ const baseEnvSchema = z.object({
   STORAGE_NEON_PUBLIC_PREFIXES: z.string().default('avatars,receipts'),
 });
 
+/**
+ * First path segment of handyman KYC document keys, generated in
+ * `handyman.service.ts`. Named here because the public-bucket guard below has
+ * to reject it: it is the one prefix that must never become publicly readable.
+ */
+export const HANDYMAN_DOCUMENT_PREFIX = 'handyman-documents';
+
 /** Credentials each non-default driver cannot run without. */
 const REQUIRED_BY_DRIVER = {
   's3-compatible': [
@@ -192,6 +199,54 @@ const REQUIRED_BY_DRIVER = {
  * was explicitly selected, so the default `local` path stays credential-free.
  */
 export const envSchema = baseEnvSchema.superRefine((env, ctx) => {
+  // Checked before the early return below, so a misrouted prefix is caught
+  // whatever STORAGE_DRIVER is set to.
+  const publicPrefixes = env.STORAGE_NEON_PUBLIC_PREFIXES.split(',')
+    .map((prefix) => prefix.trim())
+    .filter(Boolean);
+
+  // `bucketFor()` compares the key's first path segment, so an entry written
+  // as 'avatars/' never matches anything: avatars would silently land in the
+  // private bucket and their URLs would be refused.
+  const withSlash = publicPrefixes.filter((prefix) => prefix.includes('/'));
+  if (withSlash.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['STORAGE_NEON_PUBLIC_PREFIXES'],
+      message:
+        `entries must be single path segments without "/" — got ${withSlash.join(', ')}. ` +
+        'Routing matches the first path segment of a key, so a trailing slash never matches.',
+    });
+  }
+
+  // The private/public boundary enforced in code rather than left to the
+  // warning in .env.example. Listing this prefix would write handyman KYC
+  // documents into the public_read bucket, where anyone holding the URL can
+  // read them — the exact outcome the two-bucket split exists to prevent.
+  if (publicPrefixes.includes(HANDYMAN_DOCUMENT_PREFIX)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['STORAGE_NEON_PUBLIC_PREFIXES'],
+      message:
+        `'${HANDYMAN_DOCUMENT_PREFIX}' must never be listed here: identity documents have to ` +
+        'stay in the private bucket, where every read is signed and expires.',
+    });
+  }
+
+  // A public bucket nothing routes to is a dead setting: every object goes to
+  // the private bucket, so the URL POST /uploads returns is refused.
+  // STORAGE_PUBLIC_BASE_URL does not rescue it — that only rewrites the
+  // address, it does not move the object.
+  if (env.STORAGE_NEON_PUBLIC_BUCKET && publicPrefixes.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['STORAGE_NEON_PUBLIC_PREFIXES'],
+      message:
+        'must list at least one prefix when STORAGE_NEON_PUBLIC_BUCKET is set, otherwise no key ' +
+        'routes to that bucket and avatar/receipt URLs are refused.',
+    });
+  }
+
   const required = REQUIRED_BY_DRIVER[env.STORAGE_DRIVER as keyof typeof REQUIRED_BY_DRIVER];
   if (!required) return;
 

@@ -523,6 +523,12 @@ jobs:
             # that reports green while shipping nothing. The health check cannot
             # catch it, because the old build answers /health/readiness too.
             APP_NAME="fetchit-be-$DEPLOY_ENV"
+            # Trailing slashes are stripped from both sides before comparing:
+            # APP_PATH comes from a secret and may well end in '/', while pm2
+            # reports cwd without one. A literal comparison would then look
+            # like a mismatch and delete a healthy process on every deploy.
+            strip_slash() { printf '%s' "${1%/}"; }
+            WANT_CWD="$(strip_slash "$APP_PATH")"
             # Prints the app's pm_cwd, or nothing if that cannot be determined
             # (app absent, or `pm2 jlist` emitting something other than JSON).
             # Unknown must never fail the deploy on its own — this check exists
@@ -543,28 +549,33 @@ jobs:
               ' || true
             }
 
-            RUNNING_CWD="$(read_cwd || true)"
+            RUNNING_CWD="$(strip_slash "$(read_cwd || true)")"
             if [ -z "$RUNNING_CWD" ]; then
               echo "::warning::Could not read $APP_NAME's working directory from pm2, so the deployed-build check was skipped. Verify by hand: pm2 describe $APP_NAME | grep 'exec cwd'"
-            elif [ "$RUNNING_CWD" != "$APP_PATH" ]; then
-              echo "::warning::$APP_NAME was running from '$RUNNING_CWD', not '$APP_PATH' - recreating it so it serves the deployed build."
+            elif [ "$RUNNING_CWD" != "$WANT_CWD" ]; then
+              echo "::warning::$APP_NAME was running from '$RUNNING_CWD', not '$WANT_CWD' - recreating it so it serves the deployed build."
               # Not zero-downtime, but this process is serving the wrong code,
               # so a restart is the point rather than a cost.
               pm2 delete "$APP_NAME" || true
               pm2 start ecosystem.config.js --env "$DEPLOY_ENV"
-              RUNNING_CWD="$(read_cwd || true)"
+              RUNNING_CWD="$(strip_slash "$(read_cwd || true)")"
 
-              if [ "$RUNNING_CWD" != "$APP_PATH" ]; then
-                echo "$APP_NAME runs from '$RUNNING_CWD' instead of '$APP_PATH' and could not be re-anchored; it is serving a different build than this deploy shipped." >&2
+              if [ "$RUNNING_CWD" != "$WANT_CWD" ]; then
+                echo "$APP_NAME runs from '$RUNNING_CWD' instead of '$WANT_CWD' and could not be re-anchored; it is serving a different build than this deploy shipped." >&2
                 exit 1
               fi
-              echo "Re-anchored $APP_NAME to $APP_PATH."
+              echo "Re-anchored $APP_NAME to $WANT_CWD."
             else
-              echo "Verified $APP_NAME is running from $APP_PATH."
+              echo "Verified $APP_NAME is running from $WANT_CWD."
             fi
 
-            # Persist process list
-            pm2 save
+            # NOTE: `pm2 save` deliberately does NOT run here. The snapshot is
+            # written only after the health check passes (see the step below),
+            # so the failure path still has the PREVIOUS process list to
+            # resurrect. Saving here would overwrite that snapshot with the
+            # replacement this deploy just started — and since a re-anchor
+            # deletes the old process rather than reloading it, there would be
+            # nothing left to roll back to.
 
             echo "Deployed to $DEPLOY_ENV."
         env:
@@ -607,6 +618,19 @@ jobs:
           APP_PORT: ${{ secrets.APP_PORT }}
           DEPLOY_ENV: ${{ steps.ctx.outputs.env }}
 
+      # Only now is the running process known good, so this is when the
+      # snapshot is written. Before this point `dump.pm2` still describes the
+      # process list from BEFORE the deploy, which is what the failure path
+      # below needs in order to roll back to something that worked.
+      - name: Persist PM2 process list
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: pm2 save
+
       - name: Restore previous PM2 process list on failure
         if: failure()
         uses: appleboy/ssh-action@v1.0.3
@@ -615,6 +639,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
+          envs: DEPLOY_ENV
           script: |
             [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
             [ -f "$HOME/.profile" ] && source "$HOME/.profile"
@@ -624,6 +649,14 @@ jobs:
             # back code (rsync has already overwritten dist/) or migrations
             # (prisma migrate deploy is forward-only). A failed deploy needs
             # manual attention; it is not automatically reverted.
+            # The replacement runs under the same app name as the process it
+            # replaced, and `pm2 resurrect` will not displace a running app, so
+            # the failed one is removed first. Otherwise this restores nothing
+            # and leaves the broken process serving traffic. That matters more
+            # than it used to: a re-anchor DELETES the old process rather than
+            # reloading it, so no healthy instance is still running.
+            echo "Removing the failed replacement before restoring..."
+            npx pm2 delete "fetchit-be-${DEPLOY_ENV:-development}" || true
             echo "Restoring saved PM2 process list..."
             npx pm2 resurrect || true
             echo "Check server logs; code and migrations are NOT reverted."

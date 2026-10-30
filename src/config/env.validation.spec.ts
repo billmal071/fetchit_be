@@ -1,3 +1,4 @@
+import configuration from './configuration';
 import { validateEnv } from './env.validation';
 
 const baseEnv = {
@@ -274,5 +275,123 @@ describe('Neon public bucket', () => {
     const config = validateEnv({ ...baseEnv, ...neonEnv });
 
     expect(config.STORAGE_NEON_PUBLIC_BUCKET).toBeUndefined();
+  });
+});
+
+describe('STORAGE_NEON_PUBLIC_PREFIXES guards', () => {
+  const neonEnv = {
+    STORAGE_DRIVER: 'neon',
+    STORAGE_NEON_BUCKET: 'fetchit-uploads',
+    STORAGE_NEON_PUBLIC_BUCKET: 'fetchit-public',
+    AWS_ENDPOINT_URL_S3: 'https://br-example-123.storage.us-east-2.aws.neon.tech',
+    AWS_REGION: 'us-east-2',
+    AWS_ACCESS_KEY_ID: 'key',
+    AWS_SECRET_ACCESS_KEY: 'secret',
+  };
+
+  /**
+   * The private/public boundary, enforced rather than documented. Listing this
+   * prefix would write handyman KYC documents into the public_read bucket,
+   * readable by anyone holding the URL — the outcome the split exists to stop.
+   */
+  it.each([
+    'handyman-documents',
+    'avatars,handyman-documents',
+    'avatars, handyman-documents ,receipts',
+  ])('refuses to boot when the list contains handyman-documents (%s)', (prefixes) => {
+    expect(() =>
+      validateEnv({ ...baseEnv, ...neonEnv, STORAGE_NEON_PUBLIC_PREFIXES: prefixes }),
+    ).toThrow(/must never be listed here/);
+  });
+
+  it('rejects handyman-documents even on another driver', () => {
+    // The guard runs before the driver-specific checks, so a prefix list that
+    // would leak documents cannot sit unnoticed in a local/cloudinary .env
+    // waiting to take effect the moment the driver is switched.
+    expect(() =>
+      validateEnv({
+        ...baseEnv,
+        STORAGE_DRIVER: 'local',
+        STORAGE_NEON_PUBLIC_PREFIXES: 'handyman-documents',
+      }),
+    ).toThrow(/must never be listed here/);
+  });
+
+  it.each(['avatars/', 'avatars/u1', 'avatars,receipts/'])(
+    'rejects an entry containing a slash (%s)',
+    (prefixes) => {
+      // bucketFor() matches the key's first path segment, so 'avatars/' never
+      // matches and avatars would silently land in the private bucket.
+      expect(() =>
+        validateEnv({ ...baseEnv, ...neonEnv, STORAGE_NEON_PUBLIC_PREFIXES: prefixes }),
+      ).toThrow(/single path segments/);
+    },
+  );
+
+  it('rejects an empty list when a public bucket is set', () => {
+    expect(() =>
+      validateEnv({ ...baseEnv, ...neonEnv, STORAGE_NEON_PUBLIC_PREFIXES: '  ,  ' }),
+    ).toThrow(/must list at least one prefix/);
+  });
+
+  it('allows an empty list when no public bucket is set', () => {
+    const withoutPublicBucket: Record<string, string> = { ...neonEnv };
+    delete withoutPublicBucket.STORAGE_NEON_PUBLIC_BUCKET;
+
+    expect(() =>
+      validateEnv({ ...baseEnv, ...withoutPublicBucket, STORAGE_NEON_PUBLIC_PREFIXES: '' }),
+    ).not.toThrow();
+  });
+
+  it('accepts a narrowed single-segment list', () => {
+    expect(() =>
+      validateEnv({ ...baseEnv, ...neonEnv, STORAGE_NEON_PUBLIC_PREFIXES: 'avatars' }),
+    ).not.toThrow();
+  });
+});
+
+describe('configuration() storage.neon mapping', () => {
+  // validateEnv proves the value survives validation; this proves it actually
+  // reaches the provider options. Nothing covered the env-to-provider hop.
+  const withEnv = <T>(vars: Record<string, string | undefined>, run: () => T): T => {
+    const saved = { ...process.env };
+    Object.assign(process.env, vars);
+    try {
+      return run();
+    } finally {
+      process.env = saved;
+    }
+  };
+
+  it('maps a narrowed STORAGE_NEON_PUBLIC_PREFIXES to publicKeyPrefixes', () => {
+    const storage = withEnv(
+      {
+        STORAGE_NEON_PUBLIC_BUCKET: 'fetchit-public',
+        STORAGE_NEON_PUBLIC_PREFIXES: 'avatars',
+      },
+      () => configuration().storage,
+    );
+
+    expect(storage.neon.publicBucket).toBe('fetchit-public');
+    expect(storage.neon.publicKeyPrefixes).toEqual(['avatars']);
+  });
+
+  it('trims entries and drops empty ones', () => {
+    const storage = withEnv(
+      { STORAGE_NEON_PUBLIC_PREFIXES: ' avatars , , receipts ' },
+      () => configuration().storage,
+    );
+
+    expect(storage.neon.publicKeyPrefixes).toEqual(['avatars', 'receipts']);
+  });
+
+  it('defaults to avatars and receipts, and leaves publicBucket undefined', () => {
+    const storage = withEnv(
+      { STORAGE_NEON_PUBLIC_PREFIXES: undefined, STORAGE_NEON_PUBLIC_BUCKET: undefined },
+      () => configuration().storage,
+    );
+
+    expect(storage.neon.publicKeyPrefixes).toEqual(['avatars', 'receipts']);
+    expect(storage.neon.publicBucket).toBeUndefined();
   });
 });

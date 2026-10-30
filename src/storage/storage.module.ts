@@ -135,15 +135,10 @@ const logger = new Logger('StorageModule');
             );
           }
 
-          // A public bucket that no prefix routes to is almost certainly a
-          // misconfigured STORAGE_NEON_PUBLIC_PREFIXES, and the symptom would
-          // be avatars silently landing in the private bucket again.
-          if (config.neon.publicBucket && config.neon.publicKeyPrefixes.length === 0) {
-            logger.warn(
-              'STORAGE_NEON_PUBLIC_BUCKET is set but STORAGE_NEON_PUBLIC_PREFIXES is empty, ' +
-                'so no key routes to it and every object goes to the private bucket.',
-            );
-          }
+          // A public bucket with no prefixes routing to it, and a prefix list
+          // containing `handyman-documents` or a '/', are all rejected by
+          // validateEnv before boot — see the STORAGE_NEON_PUBLIC_PREFIXES
+          // guards in env.validation.ts. Nothing to warn about here.
 
           return new S3CompatibleStorageProvider({
             endpoint: config.neon.endpoint,

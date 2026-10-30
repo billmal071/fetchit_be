@@ -24,7 +24,8 @@
  * credentials and no network.
  */
 /* eslint-disable no-console -- standalone CLI script: stdout is its interface */
-import { config as loadEnv } from 'dotenv';
+import { existsSync, readFileSync } from 'fs';
+import { config as loadEnv, parse as parseEnvFile } from 'dotenv';
 import {
   S3Client,
   PutObjectCommand,
@@ -33,10 +34,40 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
-// `neon env pull` writes .env when that file exists and .env.local otherwise,
-// so both are loaded. dotenv never overwrites an already-set variable, so the
-// first file to define a name wins and real environment variables beat both.
-loadEnv({ path: ['.env.local', '.env'] });
+// `.env` FIRST, because that is the only file the app reads — Nest's
+// ConfigModule.forRoot() sets no envFilePath. If this script preferred
+// .env.local it could pass against a different Neon branch than the app is
+// actually talking to, which is worse than failing. `.env.local` stays as a
+// fallback because `neon env pull` writes there when no `.env` exists.
+//
+// dotenv never overwrites an already-set variable, so the first file to define
+// a name wins and real environment variables beat both files.
+loadEnv({ path: ['.env', '.env.local'] });
+
+/**
+ * Both files existing with different credentials means the two are pointing at
+ * different branches, and only `.env` is the one the app uses. Silently
+ * preferring it would make a green run misleading, so say so.
+ */
+function warnOnDivergentEnvFiles(): void {
+  if (!existsSync('.env') || !existsSync('.env.local')) {
+    return;
+  }
+
+  const primary = parseEnvFile(readFileSync('.env'));
+  const fallback = parseEnvFile(readFileSync('.env.local'));
+  const divergent = Object.keys(fallback).filter(
+    (name) =>
+      name.startsWith('AWS_') && primary[name] !== undefined && primary[name] !== fallback[name],
+  );
+
+  if (divergent.length > 0) {
+    console.warn(
+      `[warn] .env and .env.local disagree on ${divergent.join(', ')}. Using .env, which is ` +
+        'the only file the app reads — so .env.local may describe a different Neon branch.\n',
+    );
+  }
+}
 
 /** Buckets must match what neon.ts declares and `neon deploy` created. */
 const privateBucket = process.env.STORAGE_NEON_BUCKET || 'fetchit-uploads';
@@ -119,16 +150,29 @@ async function withObject(
   key: string,
   check: (key: string) => Promise<void>,
 ): Promise<void> {
-  await s3.send(
-    new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: 'text/plain' }),
-  );
-  console.log(`  [put]  ${bucket}/${key}`);
-
+  // The PUT is INSIDE the try: if it commits server-side but the response is
+  // lost (timeout, reset), it rejects here while the object exists, and
+  // cleanup still has to run.
   try {
+    await s3.send(
+      new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: 'text/plain' }),
+    );
+    console.log(`  [put]  ${bucket}/${key}`);
+
     await check(key);
   } finally {
-    await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
-    console.log(`  [del]  cleaned up`);
+    // Never let a cleanup failure replace the real error: a delete of a key
+    // the PUT never created is expected to fail, and that must not become the
+    // reported cause.
+    try {
+      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+      console.log(`  [del]  cleaned up`);
+    } catch (cleanupError) {
+      console.warn(
+        `  [warn] could not delete ${bucket}/${key}: ` +
+          `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+      );
+    }
   }
 }
 
@@ -142,6 +186,7 @@ function unsignedUrl(bucket: string, key: string): string {
 
 async function main(): Promise<void> {
   requireEnv();
+  warnOnDivergentEnvFiles();
 
   // forcePathStyle is required: Neon Object Storage supports path-style
   // addressing only. Endpoint, region and credentials come from the standard
