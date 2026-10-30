@@ -106,6 +106,10 @@ export interface IStorageConfig {
     bucket: string;
     accessKeyId: string;
     secretAccessKey: string;
+    /** Optional public_read bucket for keys under `publicKeyPrefixes`. */
+    publicBucket?: string;
+    /** First path segments routed to `publicBucket`. */
+    publicKeyPrefixes: readonly string[];
   };
 }
 

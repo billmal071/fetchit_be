@@ -230,3 +230,49 @@ describe('Neon Object Storage driver', () => {
     );
   });
 });
+
+describe('Neon public bucket', () => {
+  const neonEnv = {
+    STORAGE_DRIVER: 'neon',
+    STORAGE_NEON_BUCKET: 'fetchit-uploads',
+    AWS_ENDPOINT_URL_S3: 'https://br-example-123.storage.us-east-2.aws.neon.tech',
+    AWS_REGION: 'us-east-2',
+    AWS_ACCESS_KEY_ID: 'key',
+    AWS_SECRET_ACCESS_KEY: 'secret',
+  };
+
+  it('defaults the public prefixes to avatars and receipts', () => {
+    expect(validateEnv({ ...baseEnv, ...neonEnv }).STORAGE_NEON_PUBLIC_PREFIXES).toBe(
+      'avatars,receipts',
+    );
+  });
+
+  // Same strip trap as the AWS_* names: undeclared keys never reach
+  // configuration(), so the bucket would silently read as undefined and every
+  // avatar would land in the private bucket.
+  it('keeps STORAGE_NEON_PUBLIC_BUCKET instead of stripping it', () => {
+    const config = validateEnv({
+      ...baseEnv,
+      ...neonEnv,
+      STORAGE_NEON_PUBLIC_BUCKET: 'fetchit-public',
+    });
+
+    expect(config.STORAGE_NEON_PUBLIC_BUCKET).toBe('fetchit-public');
+  });
+
+  it('keeps a narrowed STORAGE_NEON_PUBLIC_PREFIXES', () => {
+    const config = validateEnv({
+      ...baseEnv,
+      ...neonEnv,
+      STORAGE_NEON_PUBLIC_PREFIXES: 'avatars',
+    });
+
+    expect(config.STORAGE_NEON_PUBLIC_PREFIXES).toBe('avatars');
+  });
+
+  it('boots without a public bucket, since it is optional', () => {
+    const config = validateEnv({ ...baseEnv, ...neonEnv });
+
+    expect(config.STORAGE_NEON_PUBLIC_BUCKET).toBeUndefined();
+  });
+});

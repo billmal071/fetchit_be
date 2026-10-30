@@ -146,6 +146,19 @@ const baseEnvSchema = z.object({
   AWS_ACCESS_KEY_ID: z.string().optional(),
   AWS_SECRET_ACCESS_KEY: z.string().optional(),
   STORAGE_NEON_BUCKET: z.string().optional(),
+  // Second, public_read bucket for objects whose URL a client persists and
+  // re-reads later: avatars and receipts. `getUrl()` is synchronous and
+  // unsigned, so against the private bucket its address is refused, and
+  // signing instead would return a URL that expires while still stored.
+  //
+  // Optional: leave it unset and everything uses STORAGE_NEON_BUCKET, which
+  // is the behaviour before this existed. Identity documents never go here —
+  // they stay in the private bucket and are signed on every read.
+  STORAGE_NEON_PUBLIC_BUCKET: z.string().optional(),
+  // Comma-separated first path segments routed to the public bucket. Narrow
+  // it (e.g. just 'avatars') to keep receipts private; anything removed from
+  // here needs a read path that signs, or its URLs stop resolving.
+  STORAGE_NEON_PUBLIC_PREFIXES: z.string().default('avatars,receipts'),
 });
 
 /** Credentials each non-default driver cannot run without. */

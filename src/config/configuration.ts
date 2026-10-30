@@ -146,6 +146,11 @@ export default (): IConfiguration => ({
       bucket: process.env.STORAGE_NEON_BUCKET || '',
       accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
       secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
+      publicBucket: process.env.STORAGE_NEON_PUBLIC_BUCKET || undefined,
+      publicKeyPrefixes: (process.env.STORAGE_NEON_PUBLIC_PREFIXES ?? 'avatars,receipts')
+        .split(',')
+        .map((prefix) => prefix.trim())
+        .filter(Boolean),
     },
   },
 });

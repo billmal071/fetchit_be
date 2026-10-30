@@ -26,6 +26,25 @@ export interface IS3CompatibleStorageOptions {
   secretAccessKey: string;
   /** Required by R2, MinIO and Supabase. */
   forcePathStyle: boolean;
+  /**
+   * Optional second bucket for objects that must stay readable from a plain,
+   * non-expiring URL a client can persist — profile pictures and receipts.
+   *
+   * It exists because `getUrl()` is synchronous and unsigned: against a
+   * private bucket the address it returns is refused, and signing instead
+   * would hand back a URL that expires while the caller still has it stored.
+   * Splitting by bucket keeps identity documents in the private one, where
+   * every read is signed, without a second provider or any read-path change.
+   *
+   * Leave unset and every key uses `bucket`, which is the previous behaviour.
+   */
+  publicBucket?: string;
+  /**
+   * Key prefixes routed to `publicBucket`. Matched on the first path segment,
+   * so 'avatars' matches `avatars/<user>/<uuid>.png` and nothing else.
+   * Ignored when `publicBucket` is unset.
+   */
+  publicKeyPrefixes?: readonly string[];
   /** Base URL for returned object URLs (e.g. a CDN or R2 public bucket domain). */
   publicBaseUrl?: string;
   /**
@@ -57,10 +76,14 @@ export class S3CompatibleStorageProvider implements IStorageProvider {
   private readonly region: string;
   private readonly forcePathStyle: boolean;
   private readonly providerName: string;
+  private readonly publicBucket?: string;
+  private readonly publicKeyPrefixes: readonly string[];
 
   constructor(options: IS3CompatibleStorageOptions) {
     this.providerName = options.providerName ?? 's3-compatible';
     this.bucket = options.bucket;
+    this.publicBucket = options.publicBucket;
+    this.publicKeyPrefixes = options.publicKeyPrefixes ?? [];
     this.publicBaseUrl = options.publicBaseUrl;
     this.endpoint = options.endpoint;
     this.region = options.region;
@@ -80,8 +103,25 @@ export class S3CompatibleStorageProvider implements IStorageProvider {
 
     this.logger.log(
       `${this.providerName} storage initialized (bucket=${this.bucket}, ` +
+        (this.publicBucket
+          ? `publicBucket=${this.publicBucket} for ${this.publicKeyPrefixes.join('/') || 'nothing'}, `
+          : '') +
         `endpoint=${this.endpoint ?? 'aws-s3-default'})`,
     );
+  }
+
+  /**
+   * Which bucket holds this key. Derived from the key alone, so a key written
+   * by `upload()` always resolves to the same bucket on read and delete.
+   */
+  private bucketFor(key: string): string {
+    if (!this.publicBucket) {
+      return this.bucket;
+    }
+
+    const firstSegment = key.split('/')[0];
+
+    return this.publicKeyPrefixes.includes(firstSegment) ? this.publicBucket : this.bucket;
   }
 
   async upload(input: IStorageUploadInput): Promise<IStoredObject> {
@@ -89,7 +129,7 @@ export class S3CompatibleStorageProvider implements IStorageProvider {
 
     await this.client.send(
       new PutObjectCommand({
-        Bucket: this.bucket,
+        Bucket: this.bucketFor(input.key),
         Key: input.key,
         Body: input.body,
         ContentType: input.contentType,
@@ -107,7 +147,7 @@ export class S3CompatibleStorageProvider implements IStorageProvider {
 
   async delete(key: string): Promise<void> {
     assertSafeStorageKey(key);
-    await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
+    await this.client.send(new DeleteObjectCommand({ Bucket: this.bucketFor(key), Key: key }));
   }
 
   getUrl(key: string): string {
@@ -115,22 +155,26 @@ export class S3CompatibleStorageProvider implements IStorageProvider {
       return joinUrl(this.publicBaseUrl, key);
     }
 
+    const bucket = this.bucketFor(key);
+
     if (this.endpoint) {
       const base = this.endpoint.replace(/\/+$/, '');
       return this.forcePathStyle
-        ? `${base}/${this.bucket}/${key}`
-        : base.replace(/^(https?:\/\/)/, `$1${this.bucket}.`) + `/${key}`;
+        ? `${base}/${bucket}/${key}`
+        : base.replace(/^(https?:\/\/)/, `$1${bucket}.`) + `/${key}`;
     }
 
-    return `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
+    return `https://${bucket}.s3.${this.region}.amazonaws.com/${key}`;
   }
 
   async getSignedUrl(key: string, expiresInSeconds: number): Promise<string> {
     assertSafeStorageKey(key);
 
-    return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key: key }), {
-      expiresIn: expiresInSeconds,
-    });
+    return getSignedUrl(
+      this.client,
+      new GetObjectCommand({ Bucket: this.bucketFor(key), Key: key }),
+      { expiresIn: expiresInSeconds },
+    );
   }
 
   getProviderName(): string {

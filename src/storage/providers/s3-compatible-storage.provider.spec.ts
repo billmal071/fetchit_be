@@ -213,3 +213,106 @@ describe('as the Neon Object Storage driver', () => {
     expect(parsed.searchParams.get('X-Amz-Credential')).toContain('us-east-2');
   });
 });
+
+/**
+ * The two-bucket split: avatars and receipts need a plain URL a client can
+ * store and re-read, which a private bucket refuses and a presigned URL
+ * outlives. Identity documents must stay in the private bucket regardless.
+ */
+describe('public-bucket routing', () => {
+  const twoBucket: IS3CompatibleStorageOptions = {
+    endpoint: 'https://br-example-123.storage.us-east-2.aws.neon.tech',
+    region: 'us-east-2',
+    bucket: 'fetchit-uploads',
+    accessKeyId: 'key',
+    secretAccessKey: 'secret',
+    forcePathStyle: true,
+    providerName: 'neon',
+    publicBucket: 'fetchit-public',
+    publicKeyPrefixes: ['avatars', 'receipts'],
+  };
+
+  it.each([
+    ['avatars/u1/a.png', 'fetchit-public'],
+    ['receipts/u1/r.pdf', 'fetchit-public'],
+    ['handyman-documents/p1/selfie/s.jpg', 'fetchit-uploads'],
+  ])('routes %s to %s in getUrl', (key, expectedBucket) => {
+    const provider = new S3CompatibleStorageProvider(twoBucket);
+
+    expect(provider.getUrl(key)).toBe(
+      `https://br-example-123.storage.us-east-2.aws.neon.tech/${expectedBucket}/${key}`,
+    );
+  });
+
+  it('uploads each key to the bucket its prefix selects', async () => {
+    const send = jest.fn().mockResolvedValue({});
+    const provider = new S3CompatibleStorageProvider({
+      ...twoBucket,
+      client: { send } as unknown as S3Client,
+    });
+
+    await provider.upload({
+      key: 'avatars/u1/a.png',
+      body: Buffer.from('x'),
+      contentType: 'image/png',
+    });
+    await provider.upload({
+      key: 'handyman-documents/p1/selfie/s.jpg',
+      body: Buffer.from('y'),
+      contentType: 'image/jpeg',
+    });
+
+    expect(send.mock.calls[0][0]).toBeInstanceOf(PutObjectCommand);
+    expect(send.mock.calls[0][0].input.Bucket).toBe('fetchit-public');
+    expect(send.mock.calls[1][0].input.Bucket).toBe('fetchit-uploads');
+  });
+
+  it('deletes from the same bucket it uploaded to', async () => {
+    const send = jest.fn().mockResolvedValue({});
+    const provider = new S3CompatibleStorageProvider({
+      ...twoBucket,
+      client: { send } as unknown as S3Client,
+    });
+
+    await provider.delete('avatars/u1/a.png');
+
+    expect(send.mock.calls[0][0]).toBeInstanceOf(DeleteObjectCommand);
+    expect(send.mock.calls[0][0].input.Bucket).toBe('fetchit-public');
+  });
+
+  it('signs a private-bucket key against the private bucket', async () => {
+    const provider = new S3CompatibleStorageProvider(twoBucket);
+
+    const parsed = new URL(await provider.getSignedUrl('handyman-documents/p1/selfie/s.jpg', 300));
+
+    expect(parsed.pathname).toBe('/fetchit-uploads/handyman-documents/p1/selfie/s.jpg');
+    expect(parsed.searchParams.get('X-Amz-Signature')).toBeTruthy();
+  });
+
+  it('matches only the whole first segment, never a prefix of it', () => {
+    const provider = new S3CompatibleStorageProvider(twoBucket);
+
+    // 'avatars-private' starts with 'avatars' as a string but is a different
+    // first segment, so it must NOT reach the public bucket.
+    expect(provider.getUrl('avatars-private/u1/a.png')).toContain('/fetchit-uploads/');
+  });
+
+  it('sends every key to the private bucket when no public bucket is set', () => {
+    const singleBucket: IS3CompatibleStorageOptions = { ...twoBucket };
+    delete singleBucket.publicBucket;
+    const provider = new S3CompatibleStorageProvider(singleBucket);
+
+    expect(provider.getUrl('avatars/u1/a.png')).toContain('/fetchit-uploads/');
+  });
+
+  it('keeps publicBaseUrl winning over bucket routing', () => {
+    // A CDN in front of the public bucket addresses objects by key alone, so
+    // the bucket name must not appear once publicBaseUrl is set.
+    const provider = new S3CompatibleStorageProvider({
+      ...twoBucket,
+      publicBaseUrl: 'https://files.example.com',
+    });
+
+    expect(provider.getUrl('avatars/u1/a.png')).toBe('https://files.example.com/avatars/u1/a.png');
+  });
+});

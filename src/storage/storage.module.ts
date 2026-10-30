@@ -22,7 +22,10 @@ const logger = new Logger('StorageModule');
  *   through environment variables.
  * - `neon`: Neon Object Storage, which is also S3-compatible and so runs on
  *   the same provider class, but takes Neon's branch-scoped AWS_* credentials
- *   and always uses path-style addressing (Neon supports nothing else).
+ *   and always uses path-style addressing (Neon supports nothing else). It can
+ *   also split objects across two buckets by key prefix: a private one for
+ *   identity documents (signed on every read) and an optional public_read one
+ *   for avatars and receipts, whose URLs a client persists.
  *
  * Configuration via environment variables:
  * - STORAGE_DRIVER: 'local' | 'cloudinary' | 's3-compatible' (default: 'local')
@@ -109,26 +112,36 @@ const logger = new Logger('StorageModule');
           // the frontend persists. Reads of KYC documents are unaffected —
           // those go through getSignedUrl().
           //
-          // Do NOT "fix" this by making the bucket public_read.
-          // STORAGE_PUBLIC_BASE_URL only changes the address that is built; it
-          // cannot make a private object readable. The only way it resolves is
-          // if the bucket itself allows anonymous reads — and `fetchit-uploads`
-          // holds handyman KYC documents under the same prefixes as avatars and
-          // receipts, so opening it up would publish identity documents to
-          // anyone with a key. There is no per-prefix routing to separate them.
+          // `getUrl()` is synchronous and unsigned, so the address it returns
+          // for a PRIVATE bucket is refused (403) — and that address is what
+          // POST /uploads hands back as `url` for avatars and receipts, which
+          // the frontend then persists. Signing it instead would only move the
+          // failure: a presigned URL expires while the caller still has it
+          // stored.
           //
-          // So the two real options are a SEPARATE public_read bucket for
-          // avatars and receipts only, or callers storing the key and signing
-          // on read. Both are follow-up work, which is why this warns rather
-          // than refusing: document reads — what this driver is primarily for —
-          // already sign on read and are unaffected.
-          if (!config.publicBaseUrl) {
+          // STORAGE_NEON_PUBLIC_BUCKET is the fix: a second, public_read bucket
+          // holding only the prefixes in STORAGE_NEON_PUBLIC_PREFIXES, so those
+          // URLs resolve anonymously and indefinitely. Identity documents are
+          // NOT among those prefixes — they stay in the private bucket and are
+          // signed on every read, which is why this must be a separate bucket
+          // rather than opening up the shared one.
+          if (!config.neon.publicBucket && !config.publicBaseUrl) {
             logger.warn(
-              'STORAGE_DRIVER=neon: POST /uploads returns an unsigned object URL, which a ' +
-                'private bucket refuses (403), so avatar and receipt URLs will not load. ' +
-                'Do NOT make this bucket public_read to work around it — it also holds KYC ' +
-                'documents. Use a separate public bucket for those two purposes, or store the ' +
-                'key and sign on read. Handyman document reads are unaffected.',
+              'STORAGE_DRIVER=neon without STORAGE_NEON_PUBLIC_BUCKET: POST /uploads returns ' +
+                'an unsigned URL that the private bucket refuses (403), so avatar and receipt ' +
+                'URLs will not load. Declare a public_read bucket in neon.ts and set ' +
+                'STORAGE_NEON_PUBLIC_BUCKET to it. Do NOT make the private bucket public — it ' +
+                'holds KYC documents. Handyman document reads are unaffected either way.',
+            );
+          }
+
+          // A public bucket that no prefix routes to is almost certainly a
+          // misconfigured STORAGE_NEON_PUBLIC_PREFIXES, and the symptom would
+          // be avatars silently landing in the private bucket again.
+          if (config.neon.publicBucket && config.neon.publicKeyPrefixes.length === 0) {
+            logger.warn(
+              'STORAGE_NEON_PUBLIC_BUCKET is set but STORAGE_NEON_PUBLIC_PREFIXES is empty, ' +
+                'so no key routes to it and every object goes to the private bucket.',
             );
           }
 
@@ -143,6 +156,8 @@ const logger = new Logger('StorageModule');
             // would only let a deployment break itself.
             forcePathStyle: true,
             publicBaseUrl: config.publicBaseUrl,
+            publicBucket: config.neon.publicBucket,
+            publicKeyPrefixes: config.neon.publicKeyPrefixes,
             providerName: 'neon',
           });
         }
