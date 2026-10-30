@@ -460,7 +460,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: APP_PATH,DEPLOY_ENV,GITHUB_RUN_ID
+          envs: APP_PATH,DEPLOY_ENV,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT
           script: |
             # ssh-action runs the script as one blob and takes the LAST
             # command status as the step status, so without this a failed
@@ -496,11 +496,16 @@ jobs:
             cd "$APP_PATH"
 
             # Written immediately before the PM2 replacement below, and read by
-            # the failure path to decide whether pm2 may be touched at all. The
-            # run id is in the name so a marker from an EARLIER deploy can never
-            # be mistaken for this one — a failure before this step ever runs
-            # (migrations, rsync, the .env write) must find no marker.
-            PM2_MARKER="/tmp/fetchit-deploy-pm2-touched-$DEPLOY_ENV-$GITHUB_RUN_ID"
+            # the failure path to decide whether pm2 may be touched at all. A
+            # failure before this step ever runs (migrations, rsync, the .env
+            # write) must find no marker.
+            #
+            # Scoped to the ATTEMPT, not just the run: a re-run keeps the same
+            # GITHUB_RUN_ID, and the sweep below only executes once this step
+            # is reached. So after a successful attempt left its marker behind,
+            # a re-run failing EARLIER than this step would have found that
+            # marker and deleted a healthy app.
+            PM2_MARKER="/tmp/fetchit-deploy-pm2-touched-$DEPLOY_ENV-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
             rm -f "/tmp/fetchit-deploy-pm2-touched-$DEPLOY_ENV-"* || true
 
             node -v
@@ -543,7 +548,18 @@ jobs:
             # like a mismatch and delete a healthy process on every deploy.
             # "/" must survive: stripping it to "" would make the check below
             # treat a root-directory app as "cwd unknown" and skip silently.
-            strip_slash() { case "$1" in /) printf '/' ;; *) printf '%s' "${1%/}" ;; esac; }
+            # Strips EVERY trailing slash, not just one: APP_PATH comes from a
+            # secret and '/srv/fetchit//' would otherwise keep one and read as a
+            # mismatch against the pm_cwd pm2 reports, which has none. '/' is
+            # preserved, since reducing it to '' would make the check below
+            # treat a root-directory app as "cwd unknown" and skip silently.
+            strip_slash() {
+              _path="$1"
+              while [ "$_path" != "/" ] && [ "${_path%/}" != "$_path" ]; do
+                _path="${_path%/}"
+              done
+              printf '%s' "$_path"
+            }
             WANT_CWD="$(strip_slash "$APP_PATH")"
             # Prints the app's pm_cwd, or nothing if that cannot be determined
             # (app absent, or `pm2 jlist` emitting something other than JSON).
@@ -655,7 +671,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: DEPLOY_ENV,GITHUB_RUN_ID
+          envs: DEPLOY_ENV,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT
           script: |
             [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
             [ -f "$HOME/.profile" ] && source "$HOME/.profile"
@@ -680,13 +696,20 @@ jobs:
             # same name, and `pm2 resurrect` will not displace a running app, so
             # the failed replacement has to go first or this restores nothing
             # and leaves the broken process serving traffic.
-            PM2_MARKER="/tmp/fetchit-deploy-pm2-touched-${DEPLOY_ENV:-development}-${GITHUB_RUN_ID:-unknown}"
+            PM2_MARKER="/tmp/fetchit-deploy-pm2-touched-${DEPLOY_ENV:-development}-${GITHUB_RUN_ID:-unknown}-${GITHUB_RUN_ATTEMPT:-unknown}"
             if [ -f "$PM2_MARKER" ]; then
               echo "Removing the failed replacement before restoring..."
               npx pm2 delete "fetchit-be-${DEPLOY_ENV:-development}" || true
               rm -f "$PM2_MARKER" || true
               echo "Restoring saved PM2 process list..."
-              npx pm2 resurrect || true
+              # A failed resurrect means the app is DOWN with nothing else
+              # coming to start it, so it must not pass silently the way the
+              # other `|| true` cleanups do.
+              if npx pm2 resurrect; then
+                echo "Restored."
+              else
+                echo "::error::pm2 resurrect FAILED after removing the failed replacement - fetchit-be-${DEPLOY_ENV:-development} is DOWN and needs manual attention: pm2 start ecosystem.config.js --env ${DEPLOY_ENV:-development}"
+              fi
             else
               echo "This deploy never reached the PM2 replacement, so the running process was not touched - leaving it alone."
             fi

@@ -59,7 +59,22 @@ const NEON_CREDENTIAL_NAMES = [
 ] as const;
 
 /**
- * `.env` is the only file the app reads, so a credential that exists ONLY in
+ * The bucket and prefix settings the app reads from `.env` through
+ * `configuration.ts`. They are not credentials, but they sit in exactly the
+ * same position: present only in `.env.local`, this script would exercise a
+ * bucket the app never looks at.
+ */
+const APP_STORAGE_NAMES = [
+  'STORAGE_NEON_BUCKET',
+  'STORAGE_NEON_PUBLIC_BUCKET',
+  // Included even though both sides default to 'avatars,receipts': absent from
+  // BOTH files is fine, but set only in `.env.local` means the script routes by
+  // that list while the app routes by the default.
+  'STORAGE_NEON_PUBLIC_PREFIXES',
+] as const;
+
+/**
+ * `.env` is the only file the app reads, so a setting that exists ONLY in
  * `.env.local` is one this script would sign with and the app would boot
  * without. The run would PASS while the app failed validation at startup —
  * a green result for a configuration that cannot work, which is the one
@@ -77,7 +92,7 @@ function checkEnvFileAgreement(): void {
   const primary = parseEnvFile(readFileSync('.env'));
   const fallback = parseEnvFile(readFileSync('.env.local'));
 
-  const fallbackOnly = NEON_CREDENTIAL_NAMES.filter(
+  const fallbackOnly = [...NEON_CREDENTIAL_NAMES, ...APP_STORAGE_NAMES].filter(
     (name) =>
       !String(primary[name] ?? '').trim() &&
       String(fallback[name] ?? '').trim() &&
@@ -91,7 +106,8 @@ function checkEnvFileAgreement(): void {
       `${fallbackOnly.join(', ')} ${fallbackOnly.length === 1 ? 'is' : 'are'} set in .env.local ` +
         'but missing from .env, which is the only env file the app reads ' +
         '(ConfigModule.forRoot() sets no envFilePath). This script would pass using ' +
-        '.env.local while the app failed its own validation at boot.\n' +
+        '.env.local while the app saw something else entirely — a missing credential fails ' +
+        'its validation at boot, and a missing bucket or prefix silently routes elsewhere.\n' +
         'Copy the value into .env (or re-run `neon env pull` with .env in place), or delete ' +
         '.env.local so there is one source of truth.',
     );
@@ -126,7 +142,11 @@ const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
  * signing error several calls later.
  */
 function requireEnv(): void {
-  const missing = NEON_CREDENTIAL_NAMES.filter((name) => !process.env[name]);
+  // Trimmed: a whitespace-only credential is truthy, so an untrimmed check
+  // would hand ' ' to S3Client and the failure would surface as a vague SigV4
+  // error several calls later instead of from this message. Same gap that was
+  // closed in env.validation.ts for the app's own required keys.
+  const missing = NEON_CREDENTIAL_NAMES.filter((name) => !process.env[name]?.trim());
 
   if (missing.length > 0) {
     throw new Error(
