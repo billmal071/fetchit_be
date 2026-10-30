@@ -44,18 +44,53 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 // a name wins and real environment variables beat both files.
 loadEnv({ path: ['.env', '.env.local'] });
 
+/** The AWS-standard names the Neon CLI injects and the driver signs with. */
+const NEON_CREDENTIAL_NAMES = [
+  'AWS_ENDPOINT_URL_S3',
+  'AWS_REGION',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_SECRET_ACCESS_KEY',
+] as const;
+
 /**
- * Both files existing with different credentials means the two are pointing at
- * different branches, and only `.env` is the one the app uses. Silently
- * preferring it would make a green run misleading, so say so.
+ * `.env` is the only file the app reads, so a credential that exists ONLY in
+ * `.env.local` is one this script would sign with and the app would boot
+ * without. The run would PASS while the app failed validation at startup —
+ * a green result for a configuration that cannot work, which is the one
+ * outcome this script must never produce. So it fails rather than warns.
+ *
+ * Different VALUES for the same name are only a warning: `.env` wins here and
+ * `.env` is what the app reads, so the branch under test is the right one and
+ * the stale `.env.local` is just worth pointing out.
  */
-function warnOnDivergentEnvFiles(): void {
+function checkEnvFileAgreement(): void {
   if (!existsSync('.env') || !existsSync('.env.local')) {
     return;
   }
 
   const primary = parseEnvFile(readFileSync('.env'));
   const fallback = parseEnvFile(readFileSync('.env.local'));
+
+  const fallbackOnly = NEON_CREDENTIAL_NAMES.filter(
+    (name) =>
+      !String(primary[name] ?? '').trim() &&
+      String(fallback[name] ?? '').trim() &&
+      // A real environment variable beats both files for the app too, so a
+      // file-level gap behind it is not misleading.
+      !hasRealEnvOverride(name, primary, fallback),
+  );
+
+  if (fallbackOnly.length > 0) {
+    throw new Error(
+      `${fallbackOnly.join(', ')} ${fallbackOnly.length === 1 ? 'is' : 'are'} set in .env.local ` +
+        'but missing from .env, which is the only env file the app reads ' +
+        '(ConfigModule.forRoot() sets no envFilePath). This script would pass using ' +
+        '.env.local while the app failed its own validation at boot.\n' +
+        'Copy the value into .env (or re-run `neon env pull` with .env in place), or delete ' +
+        '.env.local so there is one source of truth.',
+    );
+  }
+
   const divergent = Object.keys(fallback).filter(
     (name) =>
       name.startsWith('AWS_') && primary[name] !== undefined && primary[name] !== fallback[name],
@@ -67,6 +102,21 @@ function warnOnDivergentEnvFiles(): void {
         'the only file the app reads — so .env.local may describe a different Neon branch.\n',
     );
   }
+}
+
+/**
+ * A variable exported in the real environment overrides both files for this
+ * script AND for the app, so a file-level gap behind it is not misleading.
+ * Detected by the value in `process.env` matching neither file, since dotenv
+ * leaves an already-set variable alone.
+ */
+function hasRealEnvOverride(
+  name: string,
+  primary: Record<string, string>,
+  fallback: Record<string, string>,
+): boolean {
+  const live = process.env[name];
+  return Boolean(live) && live !== primary[name] && live !== fallback[name];
 }
 
 /** Buckets must match what neon.ts declares and `neon deploy` created. */
@@ -85,12 +135,7 @@ const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
  * signing error several calls later.
  */
 function requireEnv(): void {
-  const missing = [
-    'AWS_ENDPOINT_URL_S3',
-    'AWS_REGION',
-    'AWS_ACCESS_KEY_ID',
-    'AWS_SECRET_ACCESS_KEY',
-  ].filter((name) => !process.env[name]);
+  const missing = NEON_CREDENTIAL_NAMES.filter((name) => !process.env[name]);
 
   if (missing.length > 0) {
     throw new Error(
@@ -185,8 +230,8 @@ function unsignedUrl(bucket: string, key: string): string {
 }
 
 async function main(): Promise<void> {
+  checkEnvFileAgreement();
   requireEnv();
-  warnOnDivergentEnvFiles();
 
   // forcePathStyle is required: Neon Object Storage supports path-style
   // addressing only. Endpoint, region and credentials come from the standard

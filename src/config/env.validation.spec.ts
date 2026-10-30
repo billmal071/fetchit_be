@@ -343,6 +343,19 @@ describe('STORAGE_NEON_PUBLIC_PREFIXES guards', () => {
     ).not.toThrow();
   });
 
+  it('allows an empty list when the public bucket is blank', () => {
+    // A blank bucket is read as unset by configuration(), so the guard must
+    // agree rather than reporting a bucket the app would never use.
+    expect(() =>
+      validateEnv({
+        ...baseEnv,
+        ...neonEnv,
+        STORAGE_NEON_PUBLIC_BUCKET: '   ',
+        STORAGE_NEON_PUBLIC_PREFIXES: '',
+      }),
+    ).not.toThrow();
+  });
+
   it('accepts a narrowed single-segment list', () => {
     expect(() =>
       validateEnv({ ...baseEnv, ...neonEnv, STORAGE_NEON_PUBLIC_PREFIXES: 'avatars' }),
@@ -353,13 +366,28 @@ describe('STORAGE_NEON_PUBLIC_PREFIXES guards', () => {
 describe('configuration() storage.neon mapping', () => {
   // validateEnv proves the value survives validation; this proves it actually
   // reaches the provider options. Nothing covered the env-to-provider hop.
+  // `process.env` coerces every assigned value to a string, so assigning
+  // `undefined` stores the literal 'undefined' rather than unsetting the
+  // variable — which is not what a test asserting DEFAULTS means. Keys with no
+  // value are deleted instead, and the restore mutates the real `process.env`
+  // rather than replacing it with a plain object (replacing it would drop the
+  // coercion for every later test in the file).
   const withEnv = <T>(vars: Record<string, string | undefined>, run: () => T): T => {
     const saved = { ...process.env };
-    Object.assign(process.env, vars);
+    for (const [name, value] of Object.entries(vars)) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
     try {
       return run();
     } finally {
-      process.env = saved;
+      for (const name of Object.keys(process.env)) {
+        if (!(name in saved)) delete process.env[name];
+      }
+      Object.assign(process.env, saved);
     }
   };
 
@@ -383,6 +411,14 @@ describe('configuration() storage.neon mapping', () => {
     );
 
     expect(storage.neon.publicKeyPrefixes).toEqual(['avatars', 'receipts']);
+  });
+
+  it('reads a blank STORAGE_NEON_PUBLIC_BUCKET as unset', () => {
+    // '   ' is truthy, so an untrimmed read would hand `bucketFor()` a bucket
+    // named '   ' and every avatar PutObject would go out with a blank Bucket.
+    const storage = withEnv({ STORAGE_NEON_PUBLIC_BUCKET: '   ' }, () => configuration().storage);
+
+    expect(storage.neon.publicBucket).toBeUndefined();
   });
 
   it('defaults to avatars and receipts, and leaves publicBucket undefined', () => {

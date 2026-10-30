@@ -237,7 +237,12 @@ export const envSchema = baseEnvSchema.superRefine((env, ctx) => {
   // the private bucket, so the URL POST /uploads returns is refused.
   // STORAGE_PUBLIC_BASE_URL does not rescue it — that only rewrites the
   // address, it does not move the object.
-  if (env.STORAGE_NEON_PUBLIC_BUCKET && publicPrefixes.length === 0) {
+  // Trimmed to match configuration.ts, which reads a blank value as unset.
+  // The two must agree: if this guard treated '   ' as a configured bucket
+  // while configuration() dropped it, the error would name a bucket the app
+  // was never going to use.
+  const publicBucket = env.STORAGE_NEON_PUBLIC_BUCKET?.trim();
+  if (publicBucket && publicPrefixes.length === 0) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['STORAGE_NEON_PUBLIC_PREFIXES'],

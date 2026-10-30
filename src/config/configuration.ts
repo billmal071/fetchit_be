@@ -146,7 +146,12 @@ export default (): IConfiguration => ({
       bucket: process.env.STORAGE_NEON_BUCKET || '',
       accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
       secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-      publicBucket: process.env.STORAGE_NEON_PUBLIC_BUCKET || undefined,
+      // Trimmed, and a blank value means UNSET rather than a bucket named
+      // '   '. Without this, `STORAGE_NEON_PUBLIC_BUCKET=' '` reaches
+      // `bucketFor()` as a truthy bucket name and every avatar upload sends
+      // PutObject with a blank Bucket. Falling back to the single private
+      // bucket is the fail-safe reading of a blank optional setting.
+      publicBucket: process.env.STORAGE_NEON_PUBLIC_BUCKET?.trim() || undefined,
       publicKeyPrefixes: (process.env.STORAGE_NEON_PUBLIC_PREFIXES ?? 'avatars,receipts')
         .split(',')
         .map((prefix) => prefix.trim())

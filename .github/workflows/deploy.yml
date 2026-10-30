@@ -454,6 +454,7 @@ jobs:
           APP_PATH: ${{ secrets.APP_PATH }}
 
       - name: Run post-deploy commands
+        id: post_deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -527,7 +528,9 @@ jobs:
             # APP_PATH comes from a secret and may well end in '/', while pm2
             # reports cwd without one. A literal comparison would then look
             # like a mismatch and delete a healthy process on every deploy.
-            strip_slash() { printf '%s' "${1%/}"; }
+            # "/" must survive: stripping it to "" would make the check below
+            # treat a root-directory app as "cwd unknown" and skip silently.
+            strip_slash() { case "$1" in /) printf '/' ;; *) printf '%s' "${1%/}" ;; esac; }
             WANT_CWD="$(strip_slash "$APP_PATH")"
             # Prints the app's pm_cwd, or nothing if that cannot be determined
             # (app absent, or `pm2 jlist` emitting something other than JSON).
@@ -639,7 +642,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: DEPLOY_ENV
+          envs: DEPLOY_ENV,POST_DEPLOY_OUTCOME
           script: |
             [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
             [ -f "$HOME/.profile" ] && source "$HOME/.profile"
@@ -649,17 +652,37 @@ jobs:
             # back code (rsync has already overwritten dist/) or migrations
             # (prisma migrate deploy is forward-only). A failed deploy needs
             # manual attention; it is not automatically reverted.
-            # The replacement runs under the same app name as the process it
-            # replaced, and `pm2 resurrect` will not displace a running app, so
-            # the failed one is removed first. Otherwise this restores nothing
-            # and leaves the broken process serving traffic. That matters more
-            # than it used to: a re-anchor DELETES the old process rather than
-            # reloading it, so no healthy instance is still running.
-            echo "Removing the failed replacement before restoring..."
-            npx pm2 delete "fetchit-be-${DEPLOY_ENV:-development}" || true
+            #
+            # The delete is GATED on the post-deploy step having run, because
+            # `if: failure()` also fires for migrations, rsync and the .env
+            # write — all of which happen BEFORE pm2 is touched. Deleting then
+            # would stop a process that is still healthy and hand its fate to
+            # `pm2 resurrect`, which is `|| true` and may not bring it back.
+            # When post-deploy DID run, the app was reloaded or recreated under
+            # the same name, and `pm2 resurrect` will not displace a running
+            # app, so the failed replacement has to go first or this restores
+            # nothing and leaves the broken process serving traffic.
+            case "${POST_DEPLOY_OUTCOME:-}" in
+              success|failure)
+                echo "Removing the failed replacement before restoring..."
+                npx pm2 delete "fetchit-be-${DEPLOY_ENV:-development}" || true
+                ;;
+              *)
+                echo "Post-deploy never ran (outcome: '${POST_DEPLOY_OUTCOME:-unknown}'), so pm2 was not touched - leaving the running process alone."
+                ;;
+            esac
             echo "Restoring saved PM2 process list..."
             npx pm2 resurrect || true
             echo "Check server logs; code and migrations are NOT reverted."
+        env:
+          # `envs:` only forwards variables that are already in THIS step's
+          # environment. Without this block DEPLOY_ENV was empty on the remote
+          # side and the delete fell back to 'fetchit-be-development' — which
+          # on a failed staging or production deploy means the wrong app name:
+          # the broken replacement survives and a healthy development process
+          # gets deleted instead.
+          DEPLOY_ENV: ${{ steps.ctx.outputs.env }}
+          POST_DEPLOY_OUTCOME: ${{ steps.post_deploy.outcome }}
 
       - name: Cleanup sensitive files
         if: always()
