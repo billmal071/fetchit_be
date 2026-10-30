@@ -343,6 +343,41 @@ describe('STORAGE_NEON_PUBLIC_PREFIXES guards', () => {
     ).not.toThrow();
   });
 
+  it('rejects a public bucket that is the same bucket as the private one', () => {
+    // One bucket serving both sides collapses the split: every key routes to
+    // it, so a public_read bucket would publish handyman-documents/.
+    expect(() =>
+      validateEnv({
+        ...baseEnv,
+        ...neonEnv,
+        STORAGE_NEON_BUCKET: 'fetchit-uploads',
+        STORAGE_NEON_PUBLIC_BUCKET: 'fetchit-uploads',
+      }),
+    ).toThrow(/must not be the same bucket as STORAGE_NEON_BUCKET/);
+  });
+
+  it('rejects it even when the two differ only by surrounding whitespace', () => {
+    expect(() =>
+      validateEnv({
+        ...baseEnv,
+        ...neonEnv,
+        STORAGE_NEON_BUCKET: 'fetchit-uploads',
+        STORAGE_NEON_PUBLIC_BUCKET: '  fetchit-uploads  ',
+      }),
+    ).toThrow(/must not be the same bucket as STORAGE_NEON_BUCKET/);
+  });
+
+  it('still accepts two genuinely different buckets', () => {
+    expect(() =>
+      validateEnv({
+        ...baseEnv,
+        ...neonEnv,
+        STORAGE_NEON_BUCKET: 'fetchit-uploads',
+        STORAGE_NEON_PUBLIC_BUCKET: 'fetchit-public',
+      }),
+    ).not.toThrow();
+  });
+
   it('allows an empty list when the public bucket is blank', () => {
     // A blank bucket is read as unset by configuration(), so the guard must
     // agree rather than reporting a bucket the app would never use.

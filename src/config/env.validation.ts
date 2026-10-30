@@ -242,6 +242,24 @@ export const envSchema = baseEnvSchema.superRefine((env, ctx) => {
   // while configuration() dropped it, the error would name a bucket the app
   // was never going to use.
   const publicBucket = env.STORAGE_NEON_PUBLIC_BUCKET?.trim();
+
+  // The split is two BUCKETS, not two prefixes inside one. Pointing both names
+  // at the same bucket makes `bucketFor()` return it for every key, so the
+  // separation silently collapses: if that bucket is public_read, every KYC
+  // document under `handyman-documents/` becomes readable by anyone holding
+  // its URL. Leave STORAGE_NEON_PUBLIC_BUCKET unset for single-bucket mode —
+  // that is the fail-safe direction, since everything then stays private.
+  if (publicBucket && publicBucket === env.STORAGE_NEON_BUCKET?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['STORAGE_NEON_PUBLIC_BUCKET'],
+      message:
+        `must not be the same bucket as STORAGE_NEON_BUCKET ('${publicBucket}'). The public/private ` +
+        'split needs two separate buckets; one bucket serving both would publish identity documents ' +
+        'if it is public_read. Unset this to use the single private bucket instead.',
+    });
+  }
+
   if (publicBucket && publicPrefixes.length === 0) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
