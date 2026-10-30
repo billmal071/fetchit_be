@@ -16,7 +16,10 @@ export default defineConfig({
     // `handyman-documents/` prefix. Every read goes through a presigned URL
     // with an expiry — which is the reason to prefer this over the Cloudinary
     // driver, whose "authenticated" URLs are signed but never expire.
-    'fetchit-uploads': {},
+    // Named `staging` because it predates this config and already held the
+    // branch's credentials; the name is historical, not meaningful — the app
+    // takes it from STORAGE_NEON_BUCKET, so nothing in code assumes it.
+    staging: {},
     // PUBLIC_READ, and deliberately a separate bucket. Avatars and receipts
     // need a plain URL that a client can store and re-read later: `getUrl()`
     // is unsigned, so against the private bucket its address is refused, and

@@ -127,7 +127,7 @@ function checkEnvFileAgreement(): void {
 }
 
 /** Buckets must match what neon.ts declares and `neon deploy` created. */
-const privateBucket = process.env.STORAGE_NEON_BUCKET || 'fetchit-uploads';
+const privateBucket = process.env.STORAGE_NEON_BUCKET || 'staging';
 const publicBucket = process.env.STORAGE_NEON_PUBLIC_BUCKET;
 const publicPrefixes = (process.env.STORAGE_NEON_PUBLIC_PREFIXES ?? 'avatars,receipts')
   .split(',')
