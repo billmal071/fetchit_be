@@ -516,6 +516,53 @@ jobs:
             pm2 reload ecosystem.config.js --env "$DEPLOY_ENV" \
               || pm2 start ecosystem.config.js --env "$DEPLOY_ENV"
 
+            # Verify the process we just reloaded is actually running FROM
+            # APP_PATH. `pm2 reload` keeps an existing app's original pm_cwd, so
+            # a process first started from another directory keeps serving that
+            # tree while every deploy rsyncs new code into APP_PATH — a deploy
+            # that reports green while shipping nothing. The health check cannot
+            # catch it, because the old build answers /health/readiness too.
+            APP_NAME="fetchit-be-$DEPLOY_ENV"
+            # Prints the app's pm_cwd, or nothing if that cannot be determined
+            # (app absent, or `pm2 jlist` emitting something other than JSON).
+            # Unknown must never fail the deploy on its own — this check exists
+            # to catch a real mismatch, not to add a new way for CI to break.
+            read_cwd() {
+              pm2 jlist 2>/dev/null | APP_NAME="$APP_NAME" node -e '
+                let raw = "";
+                process.stdin
+                  .on("data", (chunk) => (raw += chunk))
+                  .on("end", () => {
+                    try {
+                      const app = JSON.parse(raw).find((p) => p.name === process.env.APP_NAME);
+                      process.stdout.write(app ? app.pm2_env.pm_cwd || "" : "");
+                    } catch {
+                      process.stdout.write("");
+                    }
+                  });
+              ' || true
+            }
+
+            RUNNING_CWD="$(read_cwd || true)"
+            if [ -z "$RUNNING_CWD" ]; then
+              echo "::warning::Could not read $APP_NAME's working directory from pm2, so the deployed-build check was skipped. Verify by hand: pm2 describe $APP_NAME | grep 'exec cwd'"
+            elif [ "$RUNNING_CWD" != "$APP_PATH" ]; then
+              echo "::warning::$APP_NAME was running from '$RUNNING_CWD', not '$APP_PATH' - recreating it so it serves the deployed build."
+              # Not zero-downtime, but this process is serving the wrong code,
+              # so a restart is the point rather than a cost.
+              pm2 delete "$APP_NAME" || true
+              pm2 start ecosystem.config.js --env "$DEPLOY_ENV"
+              RUNNING_CWD="$(read_cwd || true)"
+
+              if [ "$RUNNING_CWD" != "$APP_PATH" ]; then
+                echo "$APP_NAME runs from '$RUNNING_CWD' instead of '$APP_PATH' and could not be re-anchored; it is serving a different build than this deploy shipped." >&2
+                exit 1
+              fi
+              echo "Re-anchored $APP_NAME to $APP_PATH."
+            else
+              echo "Verified $APP_NAME is running from $APP_PATH."
+            fi
+
             # Persist process list
             pm2 save
 

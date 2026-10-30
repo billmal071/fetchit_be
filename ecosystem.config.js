@@ -1,10 +1,23 @@
+const path = require('path');
+
 const ENV_SUFFIX = process.env.DEPLOY_ENV || 'development';
 
 module.exports = {
   apps: [
     {
       name: `fetchit-be-${ENV_SUFFIX}`,
-      script: 'dist/main.js',
+      // Absolute, and anchored to wherever THIS file was deployed, rather than
+      // the relative 'dist/main.js' it used to be. A relative script path is
+      // resolved against the process's cwd, and PM2 keeps an existing app's
+      // original `pm_cwd` across a `reload` — so once a process had been
+      // started from some other directory, every later deploy rsynced new code
+      // into APP_PATH while the running process kept executing the old tree.
+      // That is invisible: the health check passes against the old build, and
+      // the only symptom is methods added since then missing at runtime
+      // ("this.storage.getSignedUrl is not a function" on the admin document
+      // review endpoint).
+      cwd: __dirname,
+      script: path.join(__dirname, 'dist', 'main.js'),
       // Only production needs multi-core cluster scaling. dev/staging share a
       // small, memory-constrained box with many other apps, so run a single
       // fork-mode process there — cluster mode with one instance just adds the
