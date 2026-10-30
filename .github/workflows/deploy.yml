@@ -446,12 +446,59 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: ENV_FILE,APP_PATH
+          envs: ENV_FILE,APP_PATH,STORAGE_DRIVER,STORAGE_NEON_BUCKET,STORAGE_NEON_PUBLIC_BUCKET,STORAGE_NEON_PUBLIC_PREFIXES,AWS_ENDPOINT_URL_S3,AWS_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY
           script: |
+            set -eu
+
+            # ENV_FILE is still the bulk of the file, written wholesale.
             printf '%s' "$ENV_FILE" > "$APP_PATH/.env"
+
+            # ENV_FILE is written with `printf '%s'`, so it does NOT
+            # necessarily end in a newline. Without this, the first appended
+            # line below would be glued onto its last line.
+            if [ -s "$APP_PATH/.env" ] && [ "$(tail -c1 "$APP_PATH/.env" | wc -l)" -eq 0 ]; then
+              printf '\n' >> "$APP_PATH/.env"
+            fi
+
+            # Storage settings come from their own secrets rather than from
+            # inside ENV_FILE, so rotating a Neon credential does not mean
+            # re-pasting the whole env file. An empty secret is skipped, which
+            # leaves whatever ENV_FILE had for that name — so an environment
+            # that has not been given these keeps working unchanged. A secret
+            # that IS set wins: its name is stripped from the ENV_FILE body
+            # first, so the file never ends up with the same key twice.
+            append_env() {
+              _name="$1"
+              _value="$2"
+              [ -n "$_value" ] || return 0
+              grep -v "^[[:space:]]*${_name}=" "$APP_PATH/.env" > "$APP_PATH/.env.next" || true
+              mv "$APP_PATH/.env.next" "$APP_PATH/.env"
+              printf '%s=%s\n' "$_name" "$_value" >> "$APP_PATH/.env"
+              echo "  + $_name"
+            }
+
+            echo "Applying storage settings from their own secrets (names only, never values):"
+            append_env STORAGE_DRIVER "${STORAGE_DRIVER:-}"
+            append_env STORAGE_NEON_BUCKET "${STORAGE_NEON_BUCKET:-}"
+            append_env STORAGE_NEON_PUBLIC_BUCKET "${STORAGE_NEON_PUBLIC_BUCKET:-}"
+            append_env STORAGE_NEON_PUBLIC_PREFIXES "${STORAGE_NEON_PUBLIC_PREFIXES:-}"
+            append_env AWS_ENDPOINT_URL_S3 "${AWS_ENDPOINT_URL_S3:-}"
+            append_env AWS_REGION "${AWS_REGION:-}"
+            append_env AWS_ACCESS_KEY_ID "${AWS_ACCESS_KEY_ID:-}"
+            append_env AWS_SECRET_ACCESS_KEY "${AWS_SECRET_ACCESS_KEY:-}"
+            echo "(nothing listed above means those secrets are unset for this environment)"
         env:
           ENV_FILE: ${{ secrets.ENV_FILE }}
           APP_PATH: ${{ secrets.APP_PATH }}
+          # Optional: unset secrets arrive as empty strings and are skipped.
+          STORAGE_DRIVER: ${{ secrets.STORAGE_DRIVER }}
+          STORAGE_NEON_BUCKET: ${{ secrets.STORAGE_NEON_BUCKET }}
+          STORAGE_NEON_PUBLIC_BUCKET: ${{ secrets.STORAGE_NEON_PUBLIC_BUCKET }}
+          STORAGE_NEON_PUBLIC_PREFIXES: ${{ secrets.STORAGE_NEON_PUBLIC_PREFIXES }}
+          AWS_ENDPOINT_URL_S3: ${{ secrets.AWS_ENDPOINT_URL_S3 }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
       - name: Run post-deploy commands
         uses: appleboy/ssh-action@v1.0.3
