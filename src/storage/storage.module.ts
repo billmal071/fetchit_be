@@ -109,16 +109,26 @@ const logger = new Logger('StorageModule');
           // the frontend persists. Reads of KYC documents are unaffected —
           // those go through getSignedUrl().
           //
-          // STORAGE_PUBLIC_BASE_URL (a CDN over a public_read bucket) makes
-          // the returned address resolvable; without it, avatar and receipt
-          // URLs will not load. Warned rather than refused, because the
-          // document flow this driver is primarily for works either way.
+          // Do NOT "fix" this by making the bucket public_read.
+          // STORAGE_PUBLIC_BASE_URL only changes the address that is built; it
+          // cannot make a private object readable. The only way it resolves is
+          // if the bucket itself allows anonymous reads — and `fetchit-uploads`
+          // holds handyman KYC documents under the same prefixes as avatars and
+          // receipts, so opening it up would publish identity documents to
+          // anyone with a key. There is no per-prefix routing to separate them.
+          //
+          // So the two real options are a SEPARATE public_read bucket for
+          // avatars and receipts only, or callers storing the key and signing
+          // on read. Both are follow-up work, which is why this warns rather
+          // than refusing: document reads — what this driver is primarily for —
+          // already sign on read and are unaffected.
           if (!config.publicBaseUrl) {
             logger.warn(
-              'STORAGE_DRIVER=neon without STORAGE_PUBLIC_BASE_URL: POST /uploads returns an ' +
-                'unsigned object URL, which a private bucket refuses (403). Avatar and receipt ' +
-                'URLs will not load. Set STORAGE_PUBLIC_BASE_URL over a public_read bucket, or ' +
-                'have callers store the key and sign on read.',
+              'STORAGE_DRIVER=neon: POST /uploads returns an unsigned object URL, which a ' +
+                'private bucket refuses (403), so avatar and receipt URLs will not load. ' +
+                'Do NOT make this bucket public_read to work around it — it also holds KYC ' +
+                'documents. Use a separate public bucket for those two purposes, or store the ' +
+                'key and sign on read. Handyman document reads are unaffected.',
             );
           }
 
