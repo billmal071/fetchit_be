@@ -454,14 +454,13 @@ jobs:
           APP_PATH: ${{ secrets.APP_PATH }}
 
       - name: Run post-deploy commands
-        id: post_deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: APP_PATH,DEPLOY_ENV
+          envs: APP_PATH,DEPLOY_ENV,GITHUB_RUN_ID
           script: |
             # ssh-action runs the script as one blob and takes the LAST
             # command status as the step status, so without this a failed
@@ -496,6 +495,14 @@ jobs:
 
             cd "$APP_PATH"
 
+            # Written immediately before the PM2 replacement below, and read by
+            # the failure path to decide whether pm2 may be touched at all. The
+            # run id is in the name so a marker from an EARLIER deploy can never
+            # be mistaken for this one — a failure before this step ever runs
+            # (migrations, rsync, the .env write) must find no marker.
+            PM2_MARKER="/tmp/fetchit-deploy-pm2-touched-$DEPLOY_ENV-$GITHUB_RUN_ID"
+            rm -f "/tmp/fetchit-deploy-pm2-touched-$DEPLOY_ENV-"* || true
+
             node -v
             pnpm -v
             pm2 -v
@@ -512,6 +519,12 @@ jobs:
             # `migrate deploy`, which runs on the runner (see above) because
             # this box has no outbound 5432.
             pnpm db:generate
+
+            # From here on the running process is being replaced, so the
+            # failure path is allowed to delete and resurrect. Everything above
+            # (install, db:generate) leaves the old process untouched, and a
+            # failure there must NOT take it down.
+            : > "$PM2_MARKER"
 
             # Reload (zero-downtime) or start the correct PM2 app for this env
             pm2 reload ecosystem.config.js --env "$DEPLOY_ENV" \
@@ -642,7 +655,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: DEPLOY_ENV,POST_DEPLOY_OUTCOME
+          envs: DEPLOY_ENV,GITHUB_RUN_ID
           script: |
             [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
             [ -f "$HOME/.profile" ] && source "$HOME/.profile"
@@ -653,26 +666,30 @@ jobs:
             # (prisma migrate deploy is forward-only). A failed deploy needs
             # manual attention; it is not automatically reverted.
             #
-            # The delete is GATED on the post-deploy step having run, because
-            # `if: failure()` also fires for migrations, rsync and the .env
-            # write — all of which happen BEFORE pm2 is touched. Deleting then
-            # would stop a process that is still healthy and hand its fate to
-            # `pm2 resurrect`, which is `|| true` and may not bring it back.
-            # When post-deploy DID run, the app was reloaded or recreated under
-            # the same name, and `pm2 resurrect` will not displace a running
-            # app, so the failed replacement has to go first or this restores
-            # nothing and leaves the broken process serving traffic.
-            case "${POST_DEPLOY_OUTCOME:-}" in
-              success|failure)
-                echo "Removing the failed replacement before restoring..."
-                npx pm2 delete "fetchit-be-${DEPLOY_ENV:-development}" || true
-                ;;
-              *)
-                echo "Post-deploy never ran (outcome: '${POST_DEPLOY_OUTCOME:-unknown}'), so pm2 was not touched - leaving the running process alone."
-                ;;
-            esac
-            echo "Restoring saved PM2 process list..."
-            npx pm2 resurrect || true
+            # The delete is GATED on the marker the post-deploy step writes
+            # immediately before it replaces the process. `if: failure()` also
+            # fires for migrations, rsync, the .env write, and for `pnpm
+            # install` / `pnpm db:generate` INSIDE the post-deploy step — all of
+            # which leave the running process untouched. Deleting then would
+            # stop a healthy app and hand its fate to `pm2 resurrect`, which is
+            # `|| true` and may not bring it back. Gating on the step's outcome
+            # would not be enough, since install and db:generate share the step
+            # with the reload.
+            #
+            # Once the marker exists the app was reloaded or recreated under the
+            # same name, and `pm2 resurrect` will not displace a running app, so
+            # the failed replacement has to go first or this restores nothing
+            # and leaves the broken process serving traffic.
+            PM2_MARKER="/tmp/fetchit-deploy-pm2-touched-${DEPLOY_ENV:-development}-${GITHUB_RUN_ID:-unknown}"
+            if [ -f "$PM2_MARKER" ]; then
+              echo "Removing the failed replacement before restoring..."
+              npx pm2 delete "fetchit-be-${DEPLOY_ENV:-development}" || true
+              rm -f "$PM2_MARKER" || true
+              echo "Restoring saved PM2 process list..."
+              npx pm2 resurrect || true
+            else
+              echo "This deploy never reached the PM2 replacement, so the running process was not touched - leaving it alone."
+            fi
             echo "Check server logs; code and migrations are NOT reverted."
         env:
           # `envs:` only forwards variables that are already in THIS step's
@@ -682,7 +699,6 @@ jobs:
           # the broken replacement survives and a healthy development process
           # gets deleted instead.
           DEPLOY_ENV: ${{ steps.ctx.outputs.env }}
-          POST_DEPLOY_OUTCOME: ${{ steps.post_deploy.outcome }}
 
       - name: Cleanup sensitive files
         if: always()

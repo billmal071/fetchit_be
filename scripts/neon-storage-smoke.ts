@@ -42,6 +42,12 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 //
 // dotenv never overwrites an already-set variable, so the first file to define
 // a name wins and real environment variables beat both files.
+// Captured BEFORE loadEnv, so a name present here was exported in the real
+// environment rather than read out of a file. Inferring that from value
+// comparisons instead would misread an exported value that happens to equal
+// the one in a file.
+const exportedEnv = { ...process.env };
+
 loadEnv({ path: ['.env', '.env.local'] });
 
 /** The AWS-standard names the Neon CLI injects and the driver signs with. */
@@ -77,7 +83,7 @@ function checkEnvFileAgreement(): void {
       String(fallback[name] ?? '').trim() &&
       // A real environment variable beats both files for the app too, so a
       // file-level gap behind it is not misleading.
-      !hasRealEnvOverride(name, primary, fallback),
+      !String(exportedEnv[name] ?? '').trim(),
   );
 
   if (fallbackOnly.length > 0) {
@@ -102,21 +108,6 @@ function checkEnvFileAgreement(): void {
         'the only file the app reads — so .env.local may describe a different Neon branch.\n',
     );
   }
-}
-
-/**
- * A variable exported in the real environment overrides both files for this
- * script AND for the app, so a file-level gap behind it is not misleading.
- * Detected by the value in `process.env` matching neither file, since dotenv
- * leaves an already-set variable alone.
- */
-function hasRealEnvOverride(
-  name: string,
-  primary: Record<string, string>,
-  fallback: Record<string, string>,
-): boolean {
-  const live = process.env[name];
-  return Boolean(live) && live !== primary[name] && live !== fallback[name];
 }
 
 /** Buckets must match what neon.ts declares and `neon deploy` created. */
