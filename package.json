@@ -25,7 +25,8 @@
     "db:studio": "prisma studio",
     "db:seed": "prisma db seed",
     "db:push": "prisma db push",
-    "neon:smoke": "ts-node scripts/neon-storage-smoke.ts"
+    "neon:smoke": "ts-node scripts/neon-storage-smoke.ts",
+    "storage:migrate-local": "node dist/cli/migrate-local-storage.js"
   },
   "packageManager": "pnpm@9.15.0",
   "db": {
