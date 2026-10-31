@@ -126,9 +126,22 @@ function checkEnvFileAgreement(): void {
   }
 }
 
-/** Buckets must match what neon.ts declares and `neon deploy` created. */
-const privateBucket = process.env.STORAGE_NEON_BUCKET || 'staging';
-const publicBucket = process.env.STORAGE_NEON_PUBLIC_BUCKET;
+/**
+ * Resolved exactly as the app resolves them, so a PASS here cannot describe a
+ * configuration the app would reject.
+ *
+ * No fallback for the private bucket: `validateEnv` REQUIRES
+ * STORAGE_NEON_BUCKET under the `neon` driver, so defaulting it here would let
+ * the script pass against a bucket the app would never reach — it would refuse
+ * to boot. The value is used untrimmed because `configuration()` does the same;
+ * only a blank one is rejected, matching the schema's trimmed required check.
+ *
+ * The public bucket IS trimmed and a blank read as unset, again because
+ * `configuration()` does: without that, ' ' would send the script looking for a
+ * bucket named ' ' and fail a configuration the app accepts as single-bucket.
+ */
+const privateBucket = process.env.STORAGE_NEON_BUCKET ?? '';
+const publicBucket = process.env.STORAGE_NEON_PUBLIC_BUCKET?.trim() || undefined;
 const publicPrefixes = (process.env.STORAGE_NEON_PUBLIC_PREFIXES ?? 'avatars,receipts')
   .split(',')
   .map((prefix) => prefix.trim())
@@ -146,7 +159,9 @@ function requireEnv(): void {
   // would hand ' ' to S3Client and the failure would surface as a vague SigV4
   // error several calls later instead of from this message. Same gap that was
   // closed in env.validation.ts for the app's own required keys.
-  const missing = NEON_CREDENTIAL_NAMES.filter((name) => !process.env[name]?.trim());
+  const missing = [...NEON_CREDENTIAL_NAMES, 'STORAGE_NEON_BUCKET'].filter(
+    (name) => !process.env[name]?.trim(),
+  );
 
   if (missing.length > 0) {
     throw new Error(

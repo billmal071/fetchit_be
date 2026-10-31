@@ -471,7 +471,23 @@ jobs:
               _name="$1"
               _value="$2"
               [ -n "$_value" ] || return 0
-              grep -v "^[[:space:]]*${_name}=" "$APP_PATH/.env" > "$APP_PATH/.env.next" || true
+              # grep exits 1 when -v selects nothing, which is normal here, but
+              # >1 means a real read/write error. A blanket `|| true` accepted
+              # both and would move an empty or truncated .env.next over .env,
+              # leaving the app to boot against missing configuration.
+              grep -v "^[[:space:]]*${_name}=" "$APP_PATH/.env" > "$APP_PATH/.env.next"
+              _status=$?
+              if [ "$_status" -gt 1 ]; then
+                echo "::error::grep failed with status $_status while rewriting .env for $_name; leaving .env untouched" >&2
+                rm -f "$APP_PATH/.env.next"
+                return "$_status"
+              fi
+              # `>` into the existing .env keeps its inode and mode, but `mv`
+              # replaces both — so a .env an operator had restricted would come
+              # back at the remote umask. Carry the mode across rather than
+              # imposing one, since the app user may not be this SSH user.
+              _mode="$(stat -c %a "$APP_PATH/.env" 2>/dev/null || true)"
+              [ -n "$_mode" ] && chmod "$_mode" "$APP_PATH/.env.next"
               mv "$APP_PATH/.env.next" "$APP_PATH/.env"
               printf '%s=%s\n' "$_name" "$_value" >> "$APP_PATH/.env"
               echo "  + $_name"
@@ -607,7 +623,13 @@ jobs:
               done
               printf '%s' "$_path"
             }
-            WANT_CWD="$(strip_slash "$APP_PATH")"
+            # pwd -P, not APP_PATH: this script has already `cd`-ed into
+            # APP_PATH, and ecosystem.config.js anchors the app with
+            # `__dirname`, which Node resolves through symlinks. If APP_PATH is
+            # or traverses a symlink, pm_cwd comes back physical while APP_PATH
+            # is not — a mismatch that survives the delete-and-restart and so
+            # fails every single deploy.
+            WANT_CWD="$(strip_slash "$(pwd -P)")"
             # Prints the app's pm_cwd, or nothing if that cannot be determined
             # (app absent, or `pm2 jlist` emitting something other than JSON).
             # Unknown must never fail the deploy on its own — this check exists
