@@ -1,7 +1,15 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  promises as fsPromises,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import {
+  IAvatarRow,
   IAvatarRows,
   IMigrationOptions,
   IMigrationResult,
@@ -51,19 +59,28 @@ describe('migrateLocalStorage', () => {
     };
   };
 
-  /** users.avatar rows, in memory. */
+  /**
+   * users.avatar rows, in memory. `find` matches the way Prisma's `endsWith`
+   * does on Postgres - a LIKE, where `_` is any one character and `%` any run -
+   * so the tests see the same over-matching the real query produces.
+   */
   const makeAvatars = (rows: Array<string | null>): IAvatarRows & { rows: typeof rows } => {
-    const matches = (suffix: string, url: string): number[] =>
-      rows.flatMap((avatar, index) =>
-        avatar !== null && avatar.endsWith(suffix) && avatar !== url ? [index] : [],
+    const likeSuffix = (suffix: string): RegExp =>
+      new RegExp(
+        `${suffix
+          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          .replace(/_/g, '.')
+          .replace(/%/g, '.*')}$`,
       );
     return {
       rows,
-      count: async (suffix, url) => matches(suffix, url).length,
-      rewrite: async (suffix, url): Promise<number> => {
-        const hit = matches(suffix, url);
-        hit.forEach((index) => (rows[index] = url));
-        return hit.length;
+      find: async (suffix): Promise<IAvatarRow[]> =>
+        rows.flatMap((avatar, index) =>
+          avatar !== null && likeSuffix(suffix).test(avatar) ? [{ id: `${index}`, avatar }] : [],
+        ),
+      update: async (ids, url): Promise<number> => {
+        ids.forEach((id) => (rows[Number(id)] = url));
+        return ids.length;
       },
     };
   };
@@ -255,6 +272,64 @@ describe('migrateLocalStorage', () => {
 
     expect(target.uploads[0].contentType).toBe('application/octet-stream');
   });
+
+  it('treats `_` in a key literally, so it never repoints an avatar that only LIKE-matches', async () => {
+    put('avatars/u1/a_b.png', PNG);
+    // `_` is a LIKE wildcard, so the query for `/avatars/u1/a_b.png` also
+    // returns this other user's `a-b.png`. Only the exact match may change.
+    const avatars = makeAvatars([
+      'http://old/uploads/avatars/u1/a_b.png',
+      'http://old/uploads/avatars/u1/a-b.png',
+    ]);
+
+    const { result } = run({ avatars });
+    const outcome = await result;
+
+    expect(outcome.avatarRowsUpdated).toBe(1);
+    expect(avatars.rows).toEqual([
+      `https://neon.example/${PUBLIC}/avatars/u1/a_b.png`,
+      'http://old/uploads/avatars/u1/a-b.png',
+    ]);
+  });
+
+  it('records an unreadable directory as a failure and still migrates everything else', async () => {
+    put('avatars/u1/a.png', PNG);
+    put('handyman-documents/p1/d.pdf', PDF);
+    const realReaddir = fsPromises.readdir.bind(fsPromises);
+    const spy = jest
+      .spyOn(fsPromises, 'readdir')
+      .mockImplementation(((dir: string, options: unknown) =>
+        String(dir).endsWith('avatars')
+          ? Promise.reject(new Error('EACCES: permission denied'))
+          : realReaddir(dir, options as never)) as never);
+
+    try {
+      const { result } = run();
+      const outcome = await result;
+
+      expect(outcome.failed).toEqual([
+        { key: 'avatars/', error: 'could not list directory: EACCES: permission denied' },
+      ]);
+      expect(outcome.copied).toEqual(['handyman-documents/p1/d.pdf']);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not read the bytes of a file that is already in Neon', async () => {
+    put('avatars/u1/a.png', PNG);
+    const buckets = new Map([[PUBLIC, new Map([['avatars/u1/a.png', PNG]])]]);
+    const spy = jest.spyOn(fsPromises, 'readFile');
+
+    try {
+      const { result } = run({ buckets });
+      await result;
+
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe('listLocalKeys', () => {
@@ -265,7 +340,10 @@ describe('listLocalKeys', () => {
       writeFileSync(join(root, 'avatars', 'u1', 'a.png'), PNG);
       symlinkSync('/etc/passwd', join(root, 'avatars', 'u1', 'link.png'));
 
-      await expect(listLocalKeys(root)).resolves.toEqual(['avatars/u1/a.png']);
+      await expect(listLocalKeys(root)).resolves.toEqual({
+        keys: ['avatars/u1/a.png'],
+        unreadable: [],
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

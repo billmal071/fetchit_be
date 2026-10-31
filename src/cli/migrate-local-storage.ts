@@ -63,11 +63,20 @@ export interface IMigrationTarget {
   getUrl(key: string): string;
 }
 
+export interface IAvatarRow {
+  id: string;
+  avatar: string;
+}
+
 export interface IAvatarRows {
-  /** Rows whose avatar ends with `suffix` and is not already `url`. */
-  count(suffix: string, url: string): Promise<number>;
-  /** Rewrite those rows to `url`; returns how many changed. */
-  rewrite(suffix: string, url: string): Promise<number>;
+  /**
+   * CANDIDATE rows whose avatar may end with `suffix`. Allowed to over-match:
+   * Prisma's `endsWith` is a SQL LIKE, where `_` in a key is a wildcard.
+   * migrateLocalStorage re-checks each candidate exactly before touching it.
+   */
+  find(suffix: string): Promise<IAvatarRow[]>;
+  /** Point these rows at `url`; returns how many changed. */
+  update(ids: string[], url: string): Promise<number>;
 }
 
 export interface IMigrationOptions {
@@ -97,12 +106,33 @@ export interface IMigrationResult {
   avatarsNotPublic: string[];
 }
 
-/** Every regular file under `root`, as a `/`-separated key. Symlinks are skipped. */
-export async function listLocalKeys(root: string): Promise<string[]> {
+export interface ILocalListing {
+  keys: string[];
+  /** Directories that could not be read; everything else is still listed. */
+  unreadable: Array<{ dir: string; error: string }>;
+}
+
+/**
+ * Every regular file under `root`, as a `/`-separated key. Symlinks are
+ * skipped. A directory that cannot be read (permissions, say) is recorded and
+ * skipped rather than aborting the walk, so one bad directory cannot stop
+ * every other file from migrating.
+ */
+export async function listLocalKeys(root: string): Promise<ILocalListing> {
   const keys: string[] = [];
+  const unreadable: ILocalListing['unreadable'] = [];
 
   const walk = async (dir: string): Promise<void> => {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      unreadable.push({
+        dir: relative(root, dir).split(sep).join('/') || '.',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
     for (const entry of entries) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) {
@@ -114,7 +144,7 @@ export async function listLocalKeys(root: string): Promise<string[]> {
   };
 
   await walk(root);
-  return keys.sort();
+  return { keys: keys.sort(), unreadable };
 }
 
 const isAvatarKey = (key: string): boolean => key.split('/')[0] === AVATAR_PREFIX;
@@ -137,7 +167,13 @@ export async function migrateLocalStorage(options: IMigrationOptions): Promise<I
   // Keys now present in the target, so their avatar rows may be repointed.
   const inTarget: string[] = [];
 
-  for (const key of await listLocalKeys(root)) {
+  const listing = await listLocalKeys(root);
+  for (const { dir, error } of listing.unreadable) {
+    result.failed.push({ key: `${dir}/`, error: `could not list directory: ${error}` });
+    log(`  [FAIL]  ${dir}/ — could not list directory: ${error}`);
+  }
+
+  for (const key of listing.keys) {
     try {
       assertSafeStorageKey(key);
     } catch {
@@ -148,11 +184,15 @@ export async function migrateLocalStorage(options: IMigrationOptions): Promise<I
 
     try {
       const bucket = target.bucketFor(key);
-      const body = await fs.readFile(join(root, key));
+      const path = join(root, key);
+      // Size from stat, not the bytes: this runs after every deploy, and after
+      // the first pass nearly every key is already in Neon, so reading each
+      // file just to compare a length would make the no-op scale with disk.
+      const { size } = await fs.stat(path);
       const existingSize = await headObject(bucket, key);
 
       if (existingSize !== null) {
-        if (existingSize === body.length) {
+        if (existingSize === size) {
           result.alreadyPresent.push(key);
           inTarget.push(key);
           log(`  [have]  ${bucket}/${key}`);
@@ -160,12 +200,13 @@ export async function migrateLocalStorage(options: IMigrationOptions): Promise<I
           result.conflicts.push(key);
           log(
             `  [DIFF]  ${bucket}/${key} — already in Neon at ${existingSize} bytes, ` +
-              `${body.length} on disk; left alone`,
+              `${size} on disk; left alone`,
           );
         }
         continue;
       }
 
+      const body = await fs.readFile(path);
       const sniffed = sniffFileType(body);
       const contentType = sniffed?.mimeType ?? FALLBACK_CONTENT_TYPE;
 
@@ -194,9 +235,14 @@ export async function migrateLocalStorage(options: IMigrationOptions): Promise<I
     const url = target.getUrl(key);
 
     try {
-      const changed = dryRun
-        ? await avatars.count(suffix, url)
-        : await avatars.rewrite(suffix, url);
+      // Exact re-check of every candidate, because the query underneath is a
+      // LIKE: a `_` in the key would otherwise match any character there and
+      // repoint an unrelated user's avatar. Over-matching is harmless only
+      // because this filter runs before anything is written.
+      const ids = (await avatars.find(suffix))
+        .filter((row) => row.avatar.endsWith(suffix) && row.avatar !== url)
+        .map((row) => row.id);
+      const changed = ids.length === 0 ? 0 : dryRun ? ids.length : await avatars.update(ids, url);
       result.avatarRowsUpdated += changed;
       if (changed > 0) {
         log(`  [user]  ${dryRun ? 'would point' : 'pointed'} ${changed} avatar(s) at ${url}`);
@@ -329,15 +375,16 @@ async function main(): Promise<number> {
         Boolean(storage.publicBaseUrl) ||
         (neon.publicBucket !== undefined && provider.bucketFor(key) === neon.publicBucket),
       avatars: {
-        count: (suffix, url) =>
-          prisma.user.count({ where: { avatar: { endsWith: suffix }, NOT: { avatar: url } } }),
-        rewrite: async (suffix, url) =>
+        find: async (suffix) =>
           (
-            await prisma.user.updateMany({
-              where: { avatar: { endsWith: suffix }, NOT: { avatar: url } },
-              data: { avatar: url },
+            await prisma.user.findMany({
+              where: { avatar: { endsWith: suffix } },
+              select: { id: true, avatar: true },
             })
-          ).count,
+          ).flatMap((row) => (row.avatar === null ? [] : [{ id: row.id, avatar: row.avatar }])),
+        update: async (ids, url) =>
+          (await prisma.user.updateMany({ where: { id: { in: ids } }, data: { avatar: url } }))
+            .count,
       },
     });
 
