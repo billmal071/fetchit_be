@@ -18,6 +18,10 @@
  * bucket the app will look in (avatars/ and receipts/ in the public bucket,
  * handyman-documents/ in the private one).
  *
+ * The deploy workflow also runs it after every successful deploy, with
+ * `--only-if-neon` (a no-op on any other driver). Re-running is cheap: after
+ * the first pass every key is already in Neon and is skipped.
+ *
  * Safe to re-run: a key already in Neon at the same size is skipped. A key in
  * Neon at a DIFFERENT size is reported and left alone rather than overwritten.
  *
@@ -232,12 +236,17 @@ const isNotFound = (error: unknown): boolean => {
 async function main(): Promise<number> {
   // A literal `--` (from `pnpm storage:migrate-local -- --dry-run`) is not an argument.
   const args = process.argv.slice(2).filter((arg) => arg !== '--');
-  const unknown = args.filter((arg) => arg !== '--dry-run');
+  const known = ['--dry-run', '--only-if-neon'];
+  const unknown = args.filter((arg) => !known.includes(arg));
   if (unknown.length) {
-    console.error(`Unknown argument(s): ${unknown.join(' ')}\nUsage: [--dry-run]`);
+    console.error(`Unknown argument(s): ${unknown.join(' ')}\nUsage: [--dry-run] [--only-if-neon]`);
     return 2;
   }
   const dryRun = args.includes('--dry-run');
+  // For the deploy workflow, which runs this after every deploy: an
+  // environment still on another driver has nothing to migrate INTO, so that
+  // is a no-op rather than an error.
+  const onlyIfNeon = args.includes('--only-if-neon');
 
   // The app's own file, with the app's precedence: Nest's ConfigModule reads
   // .env only and never overrides an already-exported variable, and neither
@@ -254,6 +263,10 @@ async function main(): Promise<number> {
   }
 
   const storage = configuration().storage;
+  if (storage.driver !== 'neon' && onlyIfNeon) {
+    console.log(`STORAGE_DRIVER is '${storage.driver}', not 'neon' - nothing to migrate.`);
+    return 0;
+  }
   if (storage.driver !== 'neon') {
     console.error(
       `STORAGE_DRIVER is '${storage.driver}'. This copies local files INTO Neon, so it needs ` +
