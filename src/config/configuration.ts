@@ -1,6 +1,6 @@
 import type { IStorageConfig, StorageDriver } from '@/storage/interfaces';
 
-const STORAGE_DRIVERS: readonly StorageDriver[] = ['local', 's3-compatible', 'cloudinary'];
+const STORAGE_DRIVERS: readonly StorageDriver[] = ['local', 's3-compatible', 'cloudinary', 'neon'];
 
 /**
  * `local` is the fallback for anything unrecognised, so a typo degrades to the
@@ -135,6 +135,27 @@ export default (): IConfiguration => ({
       cloudName: process.env.STORAGE_CLOUDINARY_CLOUD_NAME || '',
       apiKey: process.env.STORAGE_CLOUDINARY_API_KEY || '',
       apiSecret: process.env.STORAGE_CLOUDINARY_API_SECRET || '',
+    },
+    // Read straight from the AWS-standard names Neon injects, deliberately
+    // NOT copied into the `s3` block above: Neon credentials are branch-scoped
+    // and rewritten on every `neon env pull` / `checkout`, so a duplicated
+    // STORAGE_S3_* pair would silently keep pointing at a stale branch.
+    neon: {
+      endpoint: process.env.AWS_ENDPOINT_URL_S3 || '',
+      region: process.env.AWS_REGION || '',
+      bucket: process.env.STORAGE_NEON_BUCKET || '',
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
+      // Trimmed, and a blank value means UNSET rather than a bucket named
+      // '   '. Without this, `STORAGE_NEON_PUBLIC_BUCKET=' '` reaches
+      // `bucketFor()` as a truthy bucket name and every avatar upload sends
+      // PutObject with a blank Bucket. Falling back to the single private
+      // bucket is the fail-safe reading of a blank optional setting.
+      publicBucket: process.env.STORAGE_NEON_PUBLIC_BUCKET?.trim() || undefined,
+      publicKeyPrefixes: (process.env.STORAGE_NEON_PUBLIC_PREFIXES ?? 'avatars,receipts')
+        .split(',')
+        .map((prefix) => prefix.trim())
+        .filter(Boolean),
     },
   },
 });

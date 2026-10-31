@@ -69,7 +69,7 @@ export interface IStoredObject {
   contentType: string;
 }
 
-export type StorageDriver = 'local' | 's3-compatible' | 'cloudinary';
+export type StorageDriver = 'local' | 's3-compatible' | 'cloudinary' | 'neon';
 
 export interface IStorageConfig {
   driver: StorageDriver;
@@ -92,6 +92,24 @@ export interface IStorageConfig {
     cloudName: string;
     apiKey: string;
     apiSecret: string;
+  };
+  /**
+   * Neon Object Storage. S3-compatible, so it runs on the same provider class
+   * as `s3`, but its credentials arrive under AWS-standard names because that
+   * is what Neon injects (`neon env pull`, or automatically inside a Neon
+   * Function) — see the IStorageConfig note in configuration.ts for why those
+   * are not folded into the `s3` block.
+   */
+  neon: {
+    endpoint: string;
+    region: string;
+    bucket: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+    /** Optional public_read bucket for keys under `publicKeyPrefixes`. */
+    publicBucket?: string;
+    /** First path segments routed to `publicBucket`. */
+    publicKeyPrefixes: readonly string[];
   };
 }
 

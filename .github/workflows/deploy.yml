@@ -446,12 +446,94 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: ENV_FILE,APP_PATH
+          envs: ENV_FILE,APP_PATH,STORAGE_DRIVER,STORAGE_NEON_BUCKET,STORAGE_NEON_PUBLIC_BUCKET,STORAGE_NEON_PUBLIC_PREFIXES,AWS_ENDPOINT_URL_S3,AWS_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY
           script: |
+            set -eu
+
+            # ENV_FILE is still the bulk of the file, written wholesale.
             printf '%s' "$ENV_FILE" > "$APP_PATH/.env"
+
+            # ENV_FILE is written with `printf '%s'`, so it does NOT
+            # necessarily end in a newline. Without this, the first appended
+            # line below would be glued onto its last line.
+            if [ -s "$APP_PATH/.env" ] && [ "$(tail -c1 "$APP_PATH/.env" | wc -l)" -eq 0 ]; then
+              printf '\n' >> "$APP_PATH/.env"
+            fi
+
+            # Storage settings come from their own secrets rather than from
+            # inside ENV_FILE, so rotating a Neon credential does not mean
+            # re-pasting the whole env file. An empty secret is skipped, which
+            # leaves whatever ENV_FILE had for that name — so an environment
+            # that has not been given these keeps working unchanged. A secret
+            # that IS set wins: its name is stripped from the ENV_FILE body
+            # first, so the file never ends up with the same key twice.
+            append_env() {
+              _name="$1"
+              _value="$2"
+              [ -n "$_value" ] || return 0
+              # This file takes credentials, so it must never exist at the
+              # remote umask even briefly: grep writes secrets into it before
+              # any later chmod could run. Created 0600 up front; the `>`
+              # below truncates in place and keeps that mode.
+              rm -f "$APP_PATH/.env.next"
+              (umask 077 && : > "$APP_PATH/.env.next")
+
+              # `if`, not `cmd` then `$?`: under `set -e` a nonzero grep exits
+              # the script before the status can be read — and status 1,
+              # "selected no lines", is a NORMAL outcome here (an empty .env,
+              # or one holding only this key). Only >1 is a real read/write
+              # error, and a blanket `|| true` used to accept that too, which
+              # could move a truncated .env.next over .env and leave the app
+              # booting against missing configuration.
+              if grep -v "^[[:space:]]*${_name}=" "$APP_PATH/.env" > "$APP_PATH/.env.next"; then
+                _status=0
+              else
+                _status=$?
+              fi
+              if [ "$_status" -gt 1 ]; then
+                echo "::error::grep failed with status $_status while rewriting .env for $_name; leaving .env untouched" >&2
+                rm -f "$APP_PATH/.env.next"
+                return "$_status"
+              fi
+
+              # `>` into the existing .env keeps its inode and mode, but `mv`
+              # replaces both — so a .env an operator had restricted would come
+              # back at the remote umask. Carry the mode across rather than
+              # imposing one, since the app user may not be this SSH user; and
+              # abort rather than install a file whose intended mode is unknown.
+              if ! _mode="$(stat -c %a "$APP_PATH/.env")"; then
+                echo "::error::could not read $APP_PATH/.env's mode; leaving it untouched rather than replacing it at the default umask" >&2
+                rm -f "$APP_PATH/.env.next"
+                return 1
+              fi
+              chmod "$_mode" "$APP_PATH/.env.next"
+              mv "$APP_PATH/.env.next" "$APP_PATH/.env"
+              printf '%s=%s\n' "$_name" "$_value" >> "$APP_PATH/.env"
+              echo "  + $_name"
+            }
+
+            echo "Applying storage settings from their own secrets (names only, never values):"
+            append_env STORAGE_DRIVER "${STORAGE_DRIVER:-}"
+            append_env STORAGE_NEON_BUCKET "${STORAGE_NEON_BUCKET:-}"
+            append_env STORAGE_NEON_PUBLIC_BUCKET "${STORAGE_NEON_PUBLIC_BUCKET:-}"
+            append_env STORAGE_NEON_PUBLIC_PREFIXES "${STORAGE_NEON_PUBLIC_PREFIXES:-}"
+            append_env AWS_ENDPOINT_URL_S3 "${AWS_ENDPOINT_URL_S3:-}"
+            append_env AWS_REGION "${AWS_REGION:-}"
+            append_env AWS_ACCESS_KEY_ID "${AWS_ACCESS_KEY_ID:-}"
+            append_env AWS_SECRET_ACCESS_KEY "${AWS_SECRET_ACCESS_KEY:-}"
+            echo "(nothing listed above means those secrets are unset for this environment)"
         env:
           ENV_FILE: ${{ secrets.ENV_FILE }}
           APP_PATH: ${{ secrets.APP_PATH }}
+          # Optional: unset secrets arrive as empty strings and are skipped.
+          STORAGE_DRIVER: ${{ secrets.STORAGE_DRIVER }}
+          STORAGE_NEON_BUCKET: ${{ secrets.STORAGE_NEON_BUCKET }}
+          STORAGE_NEON_PUBLIC_BUCKET: ${{ secrets.STORAGE_NEON_PUBLIC_BUCKET }}
+          STORAGE_NEON_PUBLIC_PREFIXES: ${{ secrets.STORAGE_NEON_PUBLIC_PREFIXES }}
+          AWS_ENDPOINT_URL_S3: ${{ secrets.AWS_ENDPOINT_URL_S3 }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
       - name: Run post-deploy commands
         uses: appleboy/ssh-action@v1.0.3
@@ -460,7 +542,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          envs: APP_PATH,DEPLOY_ENV
+          envs: APP_PATH,DEPLOY_ENV,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT
           script: |
             # ssh-action runs the script as one blob and takes the LAST
             # command status as the step status, so without this a failed
@@ -495,6 +577,19 @@ jobs:
 
             cd "$APP_PATH"
 
+            # Written immediately before the PM2 replacement below, and read by
+            # the failure path to decide whether pm2 may be touched at all. A
+            # failure before this step ever runs (migrations, rsync, the .env
+            # write) must find no marker.
+            #
+            # Scoped to the ATTEMPT, not just the run: a re-run keeps the same
+            # GITHUB_RUN_ID, and the sweep below only executes once this step
+            # is reached. So after a successful attempt left its marker behind,
+            # a re-run failing EARLIER than this step would have found that
+            # marker and deleted a healthy app.
+            PM2_MARKER="/tmp/fetchit-deploy-pm2-touched-$DEPLOY_ENV-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            rm -f "/tmp/fetchit-deploy-pm2-touched-$DEPLOY_ENV-"* || true
+
             node -v
             pnpm -v
             pm2 -v
@@ -512,12 +607,95 @@ jobs:
             # this box has no outbound 5432.
             pnpm db:generate
 
+            # From here on the running process is being replaced, so the
+            # failure path is allowed to delete and resurrect. Everything above
+            # (install, db:generate) leaves the old process untouched, and a
+            # failure there must NOT take it down.
+            : > "$PM2_MARKER"
+
             # Reload (zero-downtime) or start the correct PM2 app for this env
             pm2 reload ecosystem.config.js --env "$DEPLOY_ENV" \
               || pm2 start ecosystem.config.js --env "$DEPLOY_ENV"
 
-            # Persist process list
-            pm2 save
+            # Verify the process we just reloaded is actually running FROM
+            # APP_PATH. `pm2 reload` keeps an existing app's original pm_cwd, so
+            # a process first started from another directory keeps serving that
+            # tree while every deploy rsyncs new code into APP_PATH — a deploy
+            # that reports green while shipping nothing. The health check cannot
+            # catch it, because the old build answers /health/readiness too.
+            APP_NAME="fetchit-be-$DEPLOY_ENV"
+            # Trailing slashes are stripped from both sides before comparing:
+            # APP_PATH comes from a secret and may well end in '/', while pm2
+            # reports cwd without one. A literal comparison would then look
+            # like a mismatch and delete a healthy process on every deploy.
+            # "/" must survive: stripping it to "" would make the check below
+            # treat a root-directory app as "cwd unknown" and skip silently.
+            # Strips EVERY trailing slash, not just one: APP_PATH comes from a
+            # secret and '/srv/fetchit//' would otherwise keep one and read as a
+            # mismatch against the pm_cwd pm2 reports, which has none. '/' is
+            # preserved, since reducing it to '' would make the check below
+            # treat a root-directory app as "cwd unknown" and skip silently.
+            strip_slash() {
+              _path="$1"
+              while [ "$_path" != "/" ] && [ "${_path%/}" != "$_path" ]; do
+                _path="${_path%/}"
+              done
+              printf '%s' "$_path"
+            }
+            # pwd -P, not APP_PATH: this script has already `cd`-ed into
+            # APP_PATH, and ecosystem.config.js anchors the app with
+            # `__dirname`, which Node resolves through symlinks. If APP_PATH is
+            # or traverses a symlink, pm_cwd comes back physical while APP_PATH
+            # is not — a mismatch that survives the delete-and-restart and so
+            # fails every single deploy.
+            WANT_CWD="$(strip_slash "$(pwd -P)")"
+            # Prints the app's pm_cwd, or nothing if that cannot be determined
+            # (app absent, or `pm2 jlist` emitting something other than JSON).
+            # Unknown must never fail the deploy on its own — this check exists
+            # to catch a real mismatch, not to add a new way for CI to break.
+            read_cwd() {
+              pm2 jlist 2>/dev/null | APP_NAME="$APP_NAME" node -e '
+                let raw = "";
+                process.stdin
+                  .on("data", (chunk) => (raw += chunk))
+                  .on("end", () => {
+                    try {
+                      const app = JSON.parse(raw).find((p) => p.name === process.env.APP_NAME);
+                      process.stdout.write(app ? app.pm2_env.pm_cwd || "" : "");
+                    } catch {
+                      process.stdout.write("");
+                    }
+                  });
+              ' || true
+            }
+
+            RUNNING_CWD="$(strip_slash "$(read_cwd || true)")"
+            if [ -z "$RUNNING_CWD" ]; then
+              echo "::warning::Could not read $APP_NAME's working directory from pm2, so the deployed-build check was skipped. Verify by hand: pm2 describe $APP_NAME | grep 'exec cwd'"
+            elif [ "$RUNNING_CWD" != "$WANT_CWD" ]; then
+              echo "::warning::$APP_NAME was running from '$RUNNING_CWD', not '$WANT_CWD' - recreating it so it serves the deployed build."
+              # Not zero-downtime, but this process is serving the wrong code,
+              # so a restart is the point rather than a cost.
+              pm2 delete "$APP_NAME" || true
+              pm2 start ecosystem.config.js --env "$DEPLOY_ENV"
+              RUNNING_CWD="$(strip_slash "$(read_cwd || true)")"
+
+              if [ "$RUNNING_CWD" != "$WANT_CWD" ]; then
+                echo "$APP_NAME runs from '$RUNNING_CWD' instead of '$WANT_CWD' and could not be re-anchored; it is serving a different build than this deploy shipped." >&2
+                exit 1
+              fi
+              echo "Re-anchored $APP_NAME to $WANT_CWD."
+            else
+              echo "Verified $APP_NAME is running from $WANT_CWD."
+            fi
+
+            # NOTE: `pm2 save` deliberately does NOT run here. The snapshot is
+            # written only after the health check passes (see the step below),
+            # so the failure path still has the PREVIOUS process list to
+            # resurrect. Saving here would overwrite that snapshot with the
+            # replacement this deploy just started — and since a re-anchor
+            # deletes the old process rather than reloading it, there would be
+            # nothing left to roll back to.
 
             echo "Deployed to $DEPLOY_ENV."
         env:
@@ -560,6 +738,31 @@ jobs:
           APP_PORT: ${{ secrets.APP_PORT }}
           DEPLOY_ENV: ${{ steps.ctx.outputs.env }}
 
+      # Only now is the running process known good, so this is when the
+      # snapshot is written. Before this point `dump.pm2` still describes the
+      # process list from BEFORE the deploy, which is what the failure path
+      # below needs in order to roll back to something that worked.
+      - name: Persist PM2 process list
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          envs: DEPLOY_ENV,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT
+          script: |
+            # The replacement has passed readiness, so the marker's job - letting
+            # the failure path delete a replacement that never came up healthy -
+            # is done. Clear it BEFORE `pm2 save`: if the save fails, the restore
+            # step must leave this verified process alone rather than delete it
+            # and resurrect the stale pre-deploy dump (which, after a pm_cwd
+            # re-anchor, would bring back the old tree). The step still fails,
+            # flagging that the snapshot on disk is out of date.
+            rm -f "/tmp/fetchit-deploy-pm2-touched-$DEPLOY_ENV-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            pm2 save
+        env:
+          DEPLOY_ENV: ${{ steps.ctx.outputs.env }}
+
       - name: Restore previous PM2 process list on failure
         if: failure()
         uses: appleboy/ssh-action@v1.0.3
@@ -568,6 +771,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
+          envs: DEPLOY_ENV,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT
           script: |
             [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
             [ -f "$HOME/.profile" ] && source "$HOME/.profile"
@@ -577,9 +781,47 @@ jobs:
             # back code (rsync has already overwritten dist/) or migrations
             # (prisma migrate deploy is forward-only). A failed deploy needs
             # manual attention; it is not automatically reverted.
-            echo "Restoring saved PM2 process list..."
-            npx pm2 resurrect || true
+            #
+            # The delete is GATED on the marker the post-deploy step writes
+            # immediately before it replaces the process. `if: failure()` also
+            # fires for migrations, rsync, the .env write, and for `pnpm
+            # install` / `pnpm db:generate` INSIDE the post-deploy step — all of
+            # which leave the running process untouched. Deleting then would
+            # stop a healthy app and hand its fate to `pm2 resurrect`, which is
+            # `|| true` and may not bring it back. Gating on the step's outcome
+            # would not be enough, since install and db:generate share the step
+            # with the reload.
+            #
+            # Once the marker exists the app was reloaded or recreated under the
+            # same name, and `pm2 resurrect` will not displace a running app, so
+            # the failed replacement has to go first or this restores nothing
+            # and leaves the broken process serving traffic.
+            PM2_MARKER="/tmp/fetchit-deploy-pm2-touched-${DEPLOY_ENV:-development}-${GITHUB_RUN_ID:-unknown}-${GITHUB_RUN_ATTEMPT:-unknown}"
+            if [ -f "$PM2_MARKER" ]; then
+              echo "Removing the failed replacement before restoring..."
+              npx pm2 delete "fetchit-be-${DEPLOY_ENV:-development}" || true
+              rm -f "$PM2_MARKER" || true
+              echo "Restoring saved PM2 process list..."
+              # A failed resurrect means the app is DOWN with nothing else
+              # coming to start it, so it must not pass silently the way the
+              # other `|| true` cleanups do.
+              if npx pm2 resurrect; then
+                echo "Restored."
+              else
+                echo "::error::pm2 resurrect FAILED after removing the failed replacement - fetchit-be-${DEPLOY_ENV:-development} is DOWN and needs manual attention: pm2 start ecosystem.config.js --env ${DEPLOY_ENV:-development}"
+              fi
+            else
+              echo "No replacement awaiting rollback - the deploy either never reached the PM2 replacement or it already passed readiness - leaving the running process alone."
+            fi
             echo "Check server logs; code and migrations are NOT reverted."
+        env:
+          # `envs:` only forwards variables that are already in THIS step's
+          # environment. Without this block DEPLOY_ENV was empty on the remote
+          # side and the delete fell back to 'fetchit-be-development' — which
+          # on a failed staging or production deploy means the wrong app name:
+          # the broken replacement survives and a healthy development process
+          # gets deleted instead.
+          DEPLOY_ENV: ${{ steps.ctx.outputs.env }}
 
       - name: Cleanup sensitive files
         if: always()

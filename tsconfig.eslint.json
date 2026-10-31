@@ -3,6 +3,8 @@
   "include": [
     "src/**/*.ts",
     "test/**/*.ts",
-    "prisma/**/*.ts"
+    "prisma/**/*.ts",
+    "scripts/**/*.ts",
+    "neon.ts"
   ]
 }

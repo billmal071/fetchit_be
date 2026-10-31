@@ -95,7 +95,7 @@ const baseEnvSchema = z.object({
   // Storage (pluggable object storage: 'local' or 's3-compatible').
   // Every entry is optional with a safe default so an existing deployment that
   // sets none of them still boots on the filesystem driver.
-  STORAGE_DRIVER: z.enum(['local', 's3-compatible', 'cloudinary']).default('local'),
+  STORAGE_DRIVER: z.enum(['local', 's3-compatible', 'cloudinary', 'neon']).default('local'),
   STORAGE_PUBLIC_BASE_URL: z.string().url().optional(),
   STORAGE_MAX_FILE_SIZE: z.coerce
     .number()
@@ -127,7 +127,46 @@ const baseEnvSchema = z.object({
   STORAGE_CLOUDINARY_CLOUD_NAME: z.string().optional(),
   STORAGE_CLOUDINARY_API_KEY: z.string().optional(),
   STORAGE_CLOUDINARY_API_SECRET: z.string().optional(),
+
+  // Neon Object Storage. S3-compatible (path-style + SigV4 only), so it runs
+  // on the same provider class as 's3-compatible' — but its credentials are
+  // injected under AWS-STANDARD names, not STORAGE_S3_*, because that is what
+  // Neon writes: `neon env pull` / `neon deploy` / `neon checkout` populate
+  // AWS_* in .env.local, and a deployed Neon Function gets them for free.
+  //
+  // They are declared here rather than mapped into STORAGE_S3_* on purpose.
+  // Neon credentials are BRANCH-scoped, so every branch switch rewrites AWS_*;
+  // a hand-copied STORAGE_S3_* pair would keep pointing at the old branch with
+  // nothing to indicate it had gone stale.
+  //
+  // Bucket is ours, not Neon's: it is declared in neon.ts and created by
+  // `neon deploy`, so Neon has no env var for it.
+  AWS_ENDPOINT_URL_S3: z.string().url().optional(),
+  AWS_REGION: z.string().optional(),
+  AWS_ACCESS_KEY_ID: z.string().optional(),
+  AWS_SECRET_ACCESS_KEY: z.string().optional(),
+  STORAGE_NEON_BUCKET: z.string().optional(),
+  // Second, public_read bucket for objects whose URL a client persists and
+  // re-reads later: avatars and receipts. `getUrl()` is synchronous and
+  // unsigned, so against the private bucket its address is refused, and
+  // signing instead would return a URL that expires while still stored.
+  //
+  // Optional: leave it unset and everything uses STORAGE_NEON_BUCKET, which
+  // is the behaviour before this existed. Identity documents never go here —
+  // they stay in the private bucket and are signed on every read.
+  STORAGE_NEON_PUBLIC_BUCKET: z.string().optional(),
+  // Comma-separated first path segments routed to the public bucket. Narrow
+  // it (e.g. just 'avatars') to keep receipts private; anything removed from
+  // here needs a read path that signs, or its URLs stop resolving.
+  STORAGE_NEON_PUBLIC_PREFIXES: z.string().default('avatars,receipts'),
 });
+
+/**
+ * First path segment of handyman KYC document keys, generated in
+ * `handyman.service.ts`. Named here because the public-bucket guard below has
+ * to reject it: it is the one prefix that must never become publicly readable.
+ */
+export const HANDYMAN_DOCUMENT_PREFIX = 'handyman-documents';
 
 /** Credentials each non-default driver cannot run without. */
 const REQUIRED_BY_DRIVER = {
@@ -141,6 +180,17 @@ const REQUIRED_BY_DRIVER = {
     'STORAGE_CLOUDINARY_API_KEY',
     'STORAGE_CLOUDINARY_API_SECRET',
   ],
+  // AWS_REGION is required rather than defaulted: SigV4 signs with the region,
+  // so a wrong one fails authentication at the first request instead of
+  // falling back to anything sensible. Neon injects it, so there is nothing to
+  // guess.
+  neon: [
+    'AWS_ENDPOINT_URL_S3',
+    'AWS_REGION',
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY',
+    'STORAGE_NEON_BUCKET',
+  ],
 } as const satisfies Record<string, readonly (keyof z.infer<typeof baseEnvSchema>)[]>;
 
 /**
@@ -149,11 +199,85 @@ const REQUIRED_BY_DRIVER = {
  * was explicitly selected, so the default `local` path stays credential-free.
  */
 export const envSchema = baseEnvSchema.superRefine((env, ctx) => {
+  // Checked before the early return below, so a misrouted prefix is caught
+  // whatever STORAGE_DRIVER is set to.
+  const publicPrefixes = env.STORAGE_NEON_PUBLIC_PREFIXES.split(',')
+    .map((prefix) => prefix.trim())
+    .filter(Boolean);
+
+  // `bucketFor()` compares the key's first path segment, so an entry written
+  // as 'avatars/' never matches anything: avatars would silently land in the
+  // private bucket and their URLs would be refused.
+  const withSlash = publicPrefixes.filter((prefix) => prefix.includes('/'));
+  if (withSlash.length > 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['STORAGE_NEON_PUBLIC_PREFIXES'],
+      message:
+        `entries must be single path segments without "/" — got ${withSlash.join(', ')}. ` +
+        'Routing matches the first path segment of a key, so a trailing slash never matches.',
+    });
+  }
+
+  // The private/public boundary enforced in code rather than left to the
+  // warning in .env.example. Listing this prefix would write handyman KYC
+  // documents into the public_read bucket, where anyone holding the URL can
+  // read them — the exact outcome the two-bucket split exists to prevent.
+  if (publicPrefixes.includes(HANDYMAN_DOCUMENT_PREFIX)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['STORAGE_NEON_PUBLIC_PREFIXES'],
+      message:
+        `'${HANDYMAN_DOCUMENT_PREFIX}' must never be listed here: identity documents have to ` +
+        'stay in the private bucket, where every read is signed and expires.',
+    });
+  }
+
+  // A public bucket nothing routes to is a dead setting: every object goes to
+  // the private bucket, so the URL POST /uploads returns is refused.
+  // STORAGE_PUBLIC_BASE_URL does not rescue it — that only rewrites the
+  // address, it does not move the object.
+  // Trimmed to match configuration.ts, which reads a blank value as unset.
+  // The two must agree: if this guard treated '   ' as a configured bucket
+  // while configuration() dropped it, the error would name a bucket the app
+  // was never going to use.
+  const publicBucket = env.STORAGE_NEON_PUBLIC_BUCKET?.trim();
+
+  // The split is two BUCKETS, not two prefixes inside one. Pointing both names
+  // at the same bucket makes `bucketFor()` return it for every key, so the
+  // separation silently collapses: if that bucket is public_read, every KYC
+  // document under `handyman-documents/` becomes readable by anyone holding
+  // its URL. Leave STORAGE_NEON_PUBLIC_BUCKET unset for single-bucket mode —
+  // that is the fail-safe direction, since everything then stays private.
+  if (publicBucket && publicBucket === env.STORAGE_NEON_BUCKET?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['STORAGE_NEON_PUBLIC_BUCKET'],
+      message:
+        `must not be the same bucket as STORAGE_NEON_BUCKET ('${publicBucket}'). The public/private ` +
+        'split needs two separate buckets; one bucket serving both would publish identity documents ' +
+        'if it is public_read. Unset this to use the single private bucket instead.',
+    });
+  }
+
+  if (publicBucket && publicPrefixes.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['STORAGE_NEON_PUBLIC_PREFIXES'],
+      message:
+        'must list at least one prefix when STORAGE_NEON_PUBLIC_BUCKET is set, otherwise no key ' +
+        'routes to that bucket and avatar/receipt URLs are refused.',
+    });
+  }
+
   const required = REQUIRED_BY_DRIVER[env.STORAGE_DRIVER as keyof typeof REQUIRED_BY_DRIVER];
   if (!required) return;
 
   for (const key of required) {
-    if (!env[key]) {
+    // Trimmed: a whitespace-only value is truthy, so `!env[key]` would accept
+    // it and hand " " to the S3/Cloudinary client, turning a boot-time
+    // misconfiguration into request-time auth failures.
+    if (!String(env[key] ?? '').trim()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: [key],

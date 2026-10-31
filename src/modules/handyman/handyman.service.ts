@@ -28,6 +28,7 @@ import { EVENTS, CACHE_TTL } from '@common/constants';
 import { IPaginatedResult, IUploadedFile, IDocumentWithSignedUrl } from '@common/interfaces';
 import { ALLOWED_UPLOAD_MIME_TYPES, sanitizeFileName, sniffFileType } from '@common/utils';
 import { StorageService } from '@/storage';
+import { HANDYMAN_DOCUMENT_PREFIX } from '@/config/env.validation';
 import { createPaginationMeta } from '@common/utils/pagination.util';
 import { PaginationDto } from '@common/dto/pagination.dto';
 import {
@@ -271,7 +272,9 @@ export class HandymanService {
       );
     }
 
-    const key = `handyman-documents/${profile.id}/${type.toLowerCase()}/${randomUUID()}.${sniffed.extension}`;
+    const key =
+      `${HANDYMAN_DOCUMENT_PREFIX}/${profile.id}/${type.toLowerCase()}/` +
+      `${randomUUID()}.${sniffed.extension}`;
 
     const stored = await this.storage.upload({
       key,
