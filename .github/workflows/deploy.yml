@@ -749,7 +749,19 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          script: pm2 save
+          envs: DEPLOY_ENV,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT
+          script: |
+            # The replacement has passed readiness, so the marker's job - letting
+            # the failure path delete a replacement that never came up healthy -
+            # is done. Clear it BEFORE `pm2 save`: if the save fails, the restore
+            # step must leave this verified process alone rather than delete it
+            # and resurrect the stale pre-deploy dump (which, after a pm_cwd
+            # re-anchor, would bring back the old tree). The step still fails,
+            # flagging that the snapshot on disk is out of date.
+            rm -f "/tmp/fetchit-deploy-pm2-touched-$DEPLOY_ENV-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            pm2 save
+        env:
+          DEPLOY_ENV: ${{ steps.ctx.outputs.env }}
 
       - name: Restore previous PM2 process list on failure
         if: failure()
@@ -799,7 +811,7 @@ jobs:
                 echo "::error::pm2 resurrect FAILED after removing the failed replacement - fetchit-be-${DEPLOY_ENV:-development} is DOWN and needs manual attention: pm2 start ecosystem.config.js --env ${DEPLOY_ENV:-development}"
               fi
             else
-              echo "This deploy never reached the PM2 replacement, so the running process was not touched - leaving it alone."
+              echo "No replacement awaiting rollback - the deploy either never reached the PM2 replacement or it already passed readiness - leaving the running process alone."
             fi
             echo "Check server logs; code and migrations are NOT reverted."
         env:
