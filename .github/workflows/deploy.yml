@@ -471,23 +471,42 @@ jobs:
               _name="$1"
               _value="$2"
               [ -n "$_value" ] || return 0
-              # grep exits 1 when -v selects nothing, which is normal here, but
-              # >1 means a real read/write error. A blanket `|| true` accepted
-              # both and would move an empty or truncated .env.next over .env,
-              # leaving the app to boot against missing configuration.
-              grep -v "^[[:space:]]*${_name}=" "$APP_PATH/.env" > "$APP_PATH/.env.next"
-              _status=$?
+              # This file takes credentials, so it must never exist at the
+              # remote umask even briefly: grep writes secrets into it before
+              # any later chmod could run. Created 0600 up front; the `>`
+              # below truncates in place and keeps that mode.
+              rm -f "$APP_PATH/.env.next"
+              (umask 077 && : > "$APP_PATH/.env.next")
+
+              # `if`, not `cmd` then `$?`: under `set -e` a nonzero grep exits
+              # the script before the status can be read — and status 1,
+              # "selected no lines", is a NORMAL outcome here (an empty .env,
+              # or one holding only this key). Only >1 is a real read/write
+              # error, and a blanket `|| true` used to accept that too, which
+              # could move a truncated .env.next over .env and leave the app
+              # booting against missing configuration.
+              if grep -v "^[[:space:]]*${_name}=" "$APP_PATH/.env" > "$APP_PATH/.env.next"; then
+                _status=0
+              else
+                _status=$?
+              fi
               if [ "$_status" -gt 1 ]; then
                 echo "::error::grep failed with status $_status while rewriting .env for $_name; leaving .env untouched" >&2
                 rm -f "$APP_PATH/.env.next"
                 return "$_status"
               fi
+
               # `>` into the existing .env keeps its inode and mode, but `mv`
               # replaces both — so a .env an operator had restricted would come
               # back at the remote umask. Carry the mode across rather than
-              # imposing one, since the app user may not be this SSH user.
-              _mode="$(stat -c %a "$APP_PATH/.env" 2>/dev/null || true)"
-              [ -n "$_mode" ] && chmod "$_mode" "$APP_PATH/.env.next"
+              # imposing one, since the app user may not be this SSH user; and
+              # abort rather than install a file whose intended mode is unknown.
+              if ! _mode="$(stat -c %a "$APP_PATH/.env")"; then
+                echo "::error::could not read $APP_PATH/.env's mode; leaving it untouched rather than replacing it at the default umask" >&2
+                rm -f "$APP_PATH/.env.next"
+                return 1
+              fi
+              chmod "$_mode" "$APP_PATH/.env.next"
               mv "$APP_PATH/.env.next" "$APP_PATH/.env"
               printf '%s=%s\n' "$_name" "$_value" >> "$APP_PATH/.env"
               echo "  + $_name"
