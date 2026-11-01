@@ -113,8 +113,11 @@ export class S3CompatibleStorageProvider implements IStorageProvider {
   /**
    * Which bucket holds this key. Derived from the key alone, so a key written
    * by `upload()` always resolves to the same bucket on read and delete.
+   *
+   * Public so tooling that talks to the bucket directly (the local-to-Neon
+   * migration in src/cli) routes by this exact rule rather than a copy of it.
    */
-  private bucketFor(key: string): string {
+  bucketFor(key: string): string {
     if (!this.publicBucket) {
       return this.bucket;
     }

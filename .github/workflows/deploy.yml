@@ -763,6 +763,33 @@ jobs:
         env:
           DEPLOY_ENV: ${{ steps.ctx.outputs.env }}
 
+      # Copies files the `local` driver left on disk into Neon and repoints
+      # stored avatar URLs (src/cli/migrate-local-storage.ts). Runs after every
+      # deploy because it is idempotent: keys already in Neon are skipped, so
+      # after the first pass this is a quick no-op. A no-op too on any driver
+      # other than `neon`.
+      #
+      # After the health check and the PM2 snapshot, so it only ever runs
+      # against a verified build, and `continue-on-error` so a file that will
+      # not copy is a visible warning on a deploy that otherwise worked - never
+      # a red deploy, and never a trigger for the PM2 restore below (which
+      # `if: failure()` does not see from a continue-on-error step).
+      - name: Migrate local uploads into Neon
+        continue-on-error: true
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          envs: APP_PATH
+          script: |
+            set -e
+            cd "$APP_PATH"
+            node dist/cli/migrate-local-storage.js --only-if-neon
+        env:
+          APP_PATH: ${{ secrets.APP_PATH }}
+
       - name: Restore previous PM2 process list on failure
         if: failure()
         uses: appleboy/ssh-action@v1.0.3
