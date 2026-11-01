@@ -609,7 +609,19 @@ jobs:
 
             # Install dependencies. Not --prod: the Prisma CLI used by the two
             # commands below is a devDependency.
-            pnpm install --frozen-lockfile
+            #
+            # Must be non-interactive. When node_modules was built by a
+            # different pnpm/store layout, pnpm asks "The modules directory
+            # will be removed and reinstalled from scratch. Proceed?"; with no
+            # TTY that prompt aborts or silently no-ops, leaving node_modules
+            # stale (a newly added dependency is then missing at boot).
+            # CI=true + confirmModulesPurge=false makes pnpm answer itself.
+            CI=true pnpm install --frozen-lockfile --config.confirmModulesPurge=false
+
+            # Fail loudly if the install did not actually deliver the
+            # runtime dependencies the new build needs.
+            node -e "require.resolve('@aws-sdk/s3-request-presigner')" \
+              || { echo "::error::pnpm install left node_modules stale"; exit 1; }
 
             # Generate Prisma client. No DB connection needed, unlike
             # `migrate deploy`, which runs on the runner (see above) because
