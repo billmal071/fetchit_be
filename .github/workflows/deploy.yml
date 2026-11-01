@@ -616,12 +616,26 @@ jobs:
             # TTY that prompt aborts or silently no-ops, leaving node_modules
             # stale (a newly added dependency is then missing at boot).
             # CI=true + confirmModulesPurge=false makes pnpm answer itself.
-            CI=true pnpm install --frozen-lockfile --config.confirmModulesPurge=false
+            #
+            # pnpm may purge the live node_modules before reinstalling, so keep
+            # a hard-linked copy (cheap: no data is copied) and put it back if
+            # the install fails or is interrupted. The running process keeps
+            # its loaded modules, but a later PM2 restart needs them intact.
+            rm -rf node_modules.prev
+            if [ -d node_modules ]; then cp -al node_modules node_modules.prev; fi
 
-            # Fail loudly if the install did not actually deliver the
-            # runtime dependencies the new build needs.
-            node -e "require.resolve('@aws-sdk/s3-request-presigner')" \
-              || { echo "::error::pnpm install left node_modules stale"; exit 1; }
+            # The guard fails loudly if the install did not actually deliver
+            # the runtime dependencies the new build needs.
+            if ! { CI=true pnpm install --frozen-lockfile --config.confirmModulesPurge=false \
+                   && node -e "require.resolve('@aws-sdk/s3-request-presigner')"; }; then
+              echo "::error::pnpm install failed or left node_modules stale"
+              if [ -d node_modules.prev ]; then
+                rm -rf node_modules
+                mv node_modules.prev node_modules
+              fi
+              exit 1
+            fi
+            rm -rf node_modules.prev
 
             # Generate Prisma client. No DB connection needed, unlike
             # `migrate deploy`, which runs on the runner (see above) because
