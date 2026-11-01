@@ -78,9 +78,18 @@ describe('migrateLocalStorage', () => {
         rows.flatMap((avatar, index) =>
           avatar !== null && likeSuffix(suffix).test(avatar) ? [{ id: `${index}`, avatar }] : [],
         ),
-      update: async (ids, url): Promise<number> => {
-        ids.forEach((id) => (rows[Number(id)] = url));
-        return ids.length;
+      // Compare-and-set, like the real update: only rows still holding the
+      // value `find` returned change.
+      update: async (targets, url): Promise<number> => {
+        let changed = 0;
+        for (const target of targets) {
+          const index = Number(target.id);
+          if (rows[index] === target.avatar) {
+            rows[index] = url;
+            changed += 1;
+          }
+        }
+        return changed;
       },
     };
   };
@@ -290,6 +299,25 @@ describe('migrateLocalStorage', () => {
       `https://neon.example/${PUBLIC}/avatars/u1/a_b.png`,
       'http://old/uploads/avatars/u1/a-b.png',
     ]);
+  });
+
+  it('leaves an avatar alone if it changed between being read and being rewritten', async () => {
+    put('avatars/u1/a.png', PNG);
+    const avatars = makeAvatars(['http://old/uploads/avatars/u1/a.png']);
+    const find = avatars.find;
+    // A Google sign-in links the account and replaces the avatar after the
+    // migration has read it but before it writes.
+    avatars.find = async (suffix): Promise<IAvatarRow[]> => {
+      const found = await find(suffix);
+      avatars.rows[0] = 'https://lh3.googleusercontent.com/a/new-picture';
+      return found;
+    };
+
+    const { result } = run({ avatars });
+    const outcome = await result;
+
+    expect(outcome.avatarRowsUpdated).toBe(0);
+    expect(avatars.rows).toEqual(['https://lh3.googleusercontent.com/a/new-picture']);
   });
 
   it('records an unreadable directory as a failure and still migrates everything else', async () => {

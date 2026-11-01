@@ -75,8 +75,13 @@ export interface IAvatarRows {
    * migrateLocalStorage re-checks each candidate exactly before touching it.
    */
   find(suffix: string): Promise<IAvatarRow[]>;
-  /** Point these rows at `url`; returns how many changed. */
-  update(ids: string[], url: string): Promise<number>;
+  /**
+   * Point each row at `url`, but only while its avatar still equals the value
+   * `find` read (`row.avatar`, compared exactly). A row changed in between,
+   * e.g. by a Google sign-in linking the account, is left alone. Returns how
+   * many changed.
+   */
+  update(rows: IAvatarRow[], url: string): Promise<number>;
 }
 
 export interface IMigrationOptions {
@@ -239,10 +244,11 @@ export async function migrateLocalStorage(options: IMigrationOptions): Promise<I
       // LIKE: a `_` in the key would otherwise match any character there and
       // repoint an unrelated user's avatar. Over-matching is harmless only
       // because this filter runs before anything is written.
-      const ids = (await avatars.find(suffix))
-        .filter((row) => row.avatar.endsWith(suffix) && row.avatar !== url)
-        .map((row) => row.id);
-      const changed = ids.length === 0 ? 0 : dryRun ? ids.length : await avatars.update(ids, url);
+      const rows = (await avatars.find(suffix)).filter(
+        (row) => row.avatar.endsWith(suffix) && row.avatar !== url,
+      );
+      const changed =
+        rows.length === 0 ? 0 : dryRun ? rows.length : await avatars.update(rows, url);
       result.avatarRowsUpdated += changed;
       if (changed > 0) {
         log(`  [user]  ${dryRun ? 'would point' : 'pointed'} ${changed} avatar(s) at ${url}`);
@@ -382,9 +388,19 @@ async function main(): Promise<number> {
               select: { id: true, avatar: true },
             })
           ).flatMap((row) => (row.avatar === null ? [] : [{ id: row.id, avatar: row.avatar }])),
-        update: async (ids, url) =>
-          (await prisma.user.updateMany({ where: { id: { in: ids } }, data: { avatar: url } }))
-            .count,
+        // Compare-and-set per row: `avatar: row.avatar` is an exact equality,
+        // not a LIKE, so a value changed since `find` simply matches nothing.
+        update: async (rows, url) =>
+          (
+            await prisma.$transaction(
+              rows.map((row) =>
+                prisma.user.updateMany({
+                  where: { id: row.id, avatar: row.avatar },
+                  data: { avatar: url },
+                }),
+              ),
+            )
+          ).reduce((sum, result) => sum + result.count, 0),
       },
     });
 
