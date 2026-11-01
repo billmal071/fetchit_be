@@ -619,8 +619,11 @@ jobs:
             #
             # pnpm may purge the live node_modules before reinstalling, so keep
             # a hard-linked copy (cheap: no data is copied) and put it back if
-            # the install fails or is interrupted. The running process keeps
-            # its loaded modules, but a later PM2 restart needs them intact.
+            # the install or the guard below FAILS. This does not cover the
+            # script itself being killed mid-install: the restore never runs
+            # and the next deploy's rsync --delete removes the stale copy.
+            # The running process keeps its loaded modules, but a later PM2
+            # restart needs them intact.
             rm -rf node_modules.prev
             if [ -d node_modules ]; then cp -al node_modules node_modules.prev; fi
 
