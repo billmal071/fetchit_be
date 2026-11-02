@@ -147,6 +147,11 @@ jobs:
       - name: Run linter
         run: pnpm lint
 
+      # `nest build` only compiles src/, and ESLint does not report type
+      # errors, so scripts/ and neon.ts were never type-checked anywhere.
+      - name: Type-check scripts
+        run: pnpm typecheck:scripts
+
       - name: Format code
         run: pnpm format 
 
