@@ -1,0 +1,19 @@
+{
+  // Type-check only. `nest build` compiles src/ alone (rootDir ./src), so the
+  // TypeScript outside it is never type-checked by the build: the one-off
+  // scripts and the Neon helper. ESLint parses them but does not report type
+  // errors. `pnpm typecheck:scripts` runs this in CI.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // neon.ts is loaded by the Neon CLI, not compiled by us, and
+    // @neon/config is ESM-only, which Node16/CommonJS resolution rejects
+    // (TS1479). Bundler resolution still type-checks every import.
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "incremental": false,
+    "rootDir": "."
+  },
+  "include": ["scripts/**/*.ts", "neon.ts"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -9,6 +9,8 @@ import {
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import {
+  createPrismaAvatarRows,
+  IAvatarPrisma,
   IAvatarRow,
   IAvatarRows,
   IMigrationOptions,
@@ -375,5 +377,90 @@ describe('listLocalKeys', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('createPrismaAvatarRows', () => {
+  /** A PrismaClient stand-in whose `$transaction` resolves each queued update. */
+  function makePrisma(
+    users: Array<{ id: string; avatar: string | null }>,
+    counts: (where: { id: string; avatar: string }) => number = (): number => 1,
+  ): {
+    prisma: IAvatarPrisma;
+    findMany: jest.Mock;
+    updateMany: jest.Mock;
+    $transaction: jest.Mock;
+  } {
+    const findMany = jest.fn().mockResolvedValue(users);
+    const updateMany = jest.fn((args: { where: { id: string; avatar: string } }) => ({
+      count: counts(args.where),
+    }));
+    const $transaction = jest.fn(async (operations: unknown[]) => operations);
+    const prisma = { user: { findMany, updateMany }, $transaction } as unknown as IAvatarPrisma;
+    return { prisma, findMany, updateMany, $transaction };
+  }
+
+  it('asks Prisma for avatars ending in the suffix and drops null avatars', async () => {
+    const { prisma, findMany } = makePrisma([
+      { id: 'u1', avatar: 'http://old/uploads/avatars/u1/a.png' },
+      { id: 'u2', avatar: null },
+    ]);
+
+    const rows = await createPrismaAvatarRows(prisma).find('/avatars/u1/a.png');
+
+    expect(findMany).toHaveBeenCalledWith({
+      where: { avatar: { endsWith: '/avatars/u1/a.png' } },
+      select: { id: true, avatar: true },
+    });
+    expect(rows).toEqual([{ id: 'u1', avatar: 'http://old/uploads/avatars/u1/a.png' }]);
+  });
+
+  it('updates each row only while its avatar still equals the value that was read', async () => {
+    const { prisma, updateMany, $transaction } = makePrisma([]);
+
+    await createPrismaAvatarRows(prisma).update(
+      [
+        { id: 'u1', avatar: 'old-1' },
+        { id: 'u2', avatar: 'old-2' },
+      ],
+      'https://neon.example/fetchit-public/avatars/new.png',
+    );
+
+    expect(updateMany).toHaveBeenCalledTimes(2);
+    expect(updateMany).toHaveBeenNthCalledWith(1, {
+      where: { id: 'u1', avatar: 'old-1' },
+      data: { avatar: 'https://neon.example/fetchit-public/avatars/new.png' },
+    });
+    expect(updateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: 'u2', avatar: 'old-2' },
+      data: { avatar: 'https://neon.example/fetchit-public/avatars/new.png' },
+    });
+    // Both updates go in one transaction.
+    expect($transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts only the rows that actually changed', async () => {
+    // u2 was changed by someone else after `find`, so its update matches nothing.
+    const { prisma } = makePrisma([], (where) => (where.id === 'u2' ? 0 : 1));
+
+    const changed = await createPrismaAvatarRows(prisma).update(
+      [
+        { id: 'u1', avatar: 'a' },
+        { id: 'u2', avatar: 'b' },
+        { id: 'u3', avatar: 'c' },
+      ],
+      'https://neon.example/x.png',
+    );
+
+    expect(changed).toBe(2);
+  });
+
+  it('changes nothing when there are no rows to update', async () => {
+    const { prisma, updateMany } = makePrisma([]);
+
+    const changed = await createPrismaAvatarRows(prisma).update([], 'https://neon.example/x.png');
+
+    expect(changed).toBe(0);
+    expect(updateMany).not.toHaveBeenCalled();
   });
 });

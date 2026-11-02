@@ -84,6 +84,44 @@ export interface IAvatarRows {
   update(rows: IAvatarRow[], url: string): Promise<number>;
 }
 
+/** The slice of PrismaClient the avatar adapter uses, so tests can mock it. */
+export interface IAvatarPrisma {
+  user: {
+    findMany(args: {
+      where: { avatar: { endsWith: string } };
+      select: { id: true; avatar: true };
+    }): Promise<Array<{ id: string; avatar: string | null }>>;
+    updateMany(args: { where: { id: string; avatar: string }; data: { avatar: string } }): unknown;
+  };
+  $transaction(operations: unknown[]): Promise<Array<{ count: number }>>;
+}
+
+/** `users.avatar` access for migrateLocalStorage, backed by Prisma. */
+export function createPrismaAvatarRows(prisma: IAvatarPrisma): IAvatarRows {
+  return {
+    find: async (suffix) =>
+      (
+        await prisma.user.findMany({
+          where: { avatar: { endsWith: suffix } },
+          select: { id: true, avatar: true },
+        })
+      ).flatMap((row) => (row.avatar === null ? [] : [{ id: row.id, avatar: row.avatar }])),
+    // Compare-and-set per row: `avatar: row.avatar` is an exact equality,
+    // not a LIKE, so a value changed since `find` simply matches nothing.
+    update: async (rows, url) =>
+      (
+        await prisma.$transaction(
+          rows.map((row) =>
+            prisma.user.updateMany({
+              where: { id: row.id, avatar: row.avatar },
+              data: { avatar: url },
+            }),
+          ),
+        )
+      ).reduce((sum, result) => sum + result.count, 0),
+  };
+}
+
 export interface IMigrationOptions {
   /** STORAGE_LOCAL_ROOT, resolved. */
   root: string;
@@ -380,28 +418,7 @@ async function main(): Promise<number> {
       isPubliclyReadable: (key) =>
         Boolean(storage.publicBaseUrl) ||
         (neon.publicBucket !== undefined && provider.bucketFor(key) === neon.publicBucket),
-      avatars: {
-        find: async (suffix) =>
-          (
-            await prisma.user.findMany({
-              where: { avatar: { endsWith: suffix } },
-              select: { id: true, avatar: true },
-            })
-          ).flatMap((row) => (row.avatar === null ? [] : [{ id: row.id, avatar: row.avatar }])),
-        // Compare-and-set per row: `avatar: row.avatar` is an exact equality,
-        // not a LIKE, so a value changed since `find` simply matches nothing.
-        update: async (rows, url) =>
-          (
-            await prisma.$transaction(
-              rows.map((row) =>
-                prisma.user.updateMany({
-                  where: { id: row.id, avatar: row.avatar },
-                  data: { avatar: url },
-                }),
-              ),
-            )
-          ).reduce((sum, result) => sum + result.count, 0),
-      },
+      avatars: createPrismaAvatarRows(prisma),
     });
 
     const failed = result.failed.length + result.conflicts.length;
