@@ -392,10 +392,11 @@ describe('createPrismaAvatarRows', () => {
     $transaction: jest.Mock;
   } {
     const findMany = jest.fn().mockResolvedValue(users);
-    const updateMany = jest.fn((args: { where: { id: string; avatar: string } }) => ({
-      count: counts(args.where),
-    }));
-    const $transaction = jest.fn(async (operations: unknown[]) => operations);
+    // Promises, as Prisma's are: they stay pending until `$transaction` runs them.
+    const updateMany = jest.fn((args: { where: { id: string; avatar: string } }) =>
+      Promise.resolve({ count: counts(args.where) }),
+    );
+    const $transaction = jest.fn((operations: unknown[]) => Promise.all(operations));
     const prisma = { user: { findMany, updateMany }, $transaction } as unknown as IAvatarPrisma;
     return { prisma, findMany, updateMany, $transaction };
   }
@@ -435,8 +436,13 @@ describe('createPrismaAvatarRows', () => {
       where: { id: 'u2', avatar: 'old-2' },
       data: { avatar: 'https://neon.example/fetchit-public/avatars/new.png' },
     });
-    // Both updates go in one transaction.
+    // Both updates go in one transaction, as the pending queries themselves:
+    // an adapter that awaited each update first would run them outside it.
     expect($transaction).toHaveBeenCalledTimes(1);
+    const operations = $transaction.mock.calls[0][0] as unknown[];
+    expect(operations).toHaveLength(2);
+    expect(operations[0]).toBe(updateMany.mock.results[0].value);
+    expect(operations[1]).toBe(updateMany.mock.results[1].value);
   });
 
   it('counts only the rows that actually changed', async () => {
