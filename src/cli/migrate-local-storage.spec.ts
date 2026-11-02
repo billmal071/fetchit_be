@@ -392,11 +392,23 @@ describe('createPrismaAvatarRows', () => {
     $transaction: jest.Mock;
   } {
     const findMany = jest.fn().mockResolvedValue(users);
-    // Promises, as Prisma's are: they stay pending until `$transaction` runs them.
-    const updateMany = jest.fn((args: { where: { id: string; avatar: string } }) =>
-      Promise.resolve({ count: counts(args.where) }),
-    );
-    const $transaction = jest.fn((operations: unknown[]) => Promise.all(operations));
+    // Lazy, as Prisma's queries are: one runs only when it is awaited, and
+    // awaiting it starts it as its own statement, outside any transaction.
+    const queriesRun: Array<{ id: string; avatar: string }> = [];
+    const updateMany = jest.fn((args: { where: { id: string; avatar: string } }) => ({
+      then: (
+        resolve: (value: { count: number }) => unknown,
+        reject?: (reason: unknown) => unknown,
+      ): Promise<unknown> => {
+        queriesRun.push(args.where);
+        return Promise.resolve({ count: counts(args.where) }).then(resolve, reject);
+      },
+    }));
+    const $transaction = jest.fn((operations: unknown[]) => {
+      // Fails if an adapter awaited any update before entering the transaction.
+      expect(queriesRun).toEqual([]);
+      return Promise.all(operations);
+    });
     const prisma = { user: { findMany, updateMany }, $transaction } as unknown as IAvatarPrisma;
     return { prisma, findMany, updateMany, $transaction };
   }
