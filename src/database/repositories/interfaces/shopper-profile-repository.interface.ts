@@ -1,4 +1,4 @@
-import { Prisma, Weekday } from '@prisma/client';
+import { Prisma, ShopperAccountState, Weekday } from '@prisma/client';
 
 /** Relations every shopper-profile read returns, so all callers see the same shape. */
 export const shopperProfileInclude = {
@@ -11,6 +11,20 @@ export const shopperProfileInclude = {
 
 export type ShopperProfileWithDetails = Prisma.ShopperProfileGetPayload<{
   include: typeof shopperProfileInclude;
+}>;
+
+/**
+ * A profile as an admin reviews it: the same relations a shopper sees, plus the
+ * account holder's contact details. Kept separate so none of this can leak
+ * into the shopper-facing responses.
+ */
+export const shopperApplicationInclude = {
+  ...shopperProfileInclude,
+  user: { select: { id: true, username: true, email: true, phone: true, avatar: true } },
+} satisfies Prisma.ShopperProfileInclude;
+
+export type ShopperApplication = Prisma.ShopperProfileGetPayload<{
+  include: typeof shopperApplicationInclude;
 }>;
 
 export interface IAvailabilityInput {
@@ -63,6 +77,29 @@ export interface IShopperProfileRepository {
   ): Promise<ShopperProfileWithDetails>;
 
   setOnline(id: string, isOnline: boolean): Promise<ShopperProfileWithDetails>;
+
+  /** Profiles in `state`, oldest submission first, with the total for paging. */
+  findApplications(
+    state: ShopperAccountState,
+    skip: number,
+    take: number,
+  ): Promise<{ rows: ShopperApplication[]; total: number }>;
+
+  findApplicationById(id: string): Promise<ShopperApplication | null>;
+
+  /**
+   * Move a profile from `from` to `to`, recording who reviewed it and why.
+   * The state check is part of the UPDATE itself, so two reviewers, or a
+   * reviewer racing the shopper's resubmission, cannot both win. Returns false
+   * when the profile was no longer in `from` (or does not exist).
+   */
+  transitionState(
+    id: string,
+    from: ShopperAccountState,
+    to: ShopperAccountState,
+    reviewerId: string,
+    rejectionReason: string | null,
+  ): Promise<boolean>;
 }
 
 export const SHOPPER_PROFILE_REPOSITORY = Symbol('SHOPPER_PROFILE_REPOSITORY');

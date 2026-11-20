@@ -4,7 +4,9 @@ import { PrismaService } from '../prisma.service';
 import {
   IShopperProfileInput,
   IShopperProfileRepository,
+  ShopperApplication,
   ShopperProfileWithDetails,
+  shopperApplicationInclude,
   shopperProfileInclude,
 } from './interfaces';
 
@@ -73,6 +75,53 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
       data: { isOnline },
       include: shopperProfileInclude,
     });
+  }
+
+  async findApplications(
+    state: ShopperAccountState,
+    skip: number,
+    take: number,
+  ): Promise<{ rows: ShopperApplication[]; total: number }> {
+    const where = { accountState: state };
+    const [rows, total] = await Promise.all([
+      this.prisma.shopperProfile.findMany({
+        where,
+        include: shopperApplicationInclude,
+        // Oldest submission first: the queue is worked in the order it arrived.
+        // `id` breaks ties so a page boundary never repeats or skips a row.
+        orderBy: [{ submittedAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        skip,
+        take,
+      }),
+      this.prisma.shopperProfile.count({ where }),
+    ]);
+    return { rows, total };
+  }
+
+  async findApplicationById(id: string): Promise<ShopperApplication | null> {
+    return this.prisma.shopperProfile.findUnique({
+      where: { id },
+      include: shopperApplicationInclude,
+    });
+  }
+
+  async transitionState(
+    id: string,
+    from: ShopperAccountState,
+    to: ShopperAccountState,
+    reviewerId: string,
+    rejectionReason: string | null,
+  ): Promise<boolean> {
+    const { count } = await this.prisma.shopperProfile.updateMany({
+      where: { id, accountState: from },
+      data: {
+        accountState: to,
+        reviewedById: reviewerId,
+        reviewedAt: new Date(),
+        rejectionReason,
+      },
+    });
+    return count === 1;
   }
 
   /**

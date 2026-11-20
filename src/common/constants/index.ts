@@ -75,6 +75,8 @@ export const SUCCESS_MESSAGES = {
   SERVICE_REQUEST_COMPLETION_SUBMITTED: 'Marked complete — awaiting customer confirmation',
   HANDYMAN_APPROVED: 'Handyman approved successfully',
   HANDYMAN_REJECTED: 'Handyman rejected',
+  SHOPPER_APPROVED: 'Shopper approved successfully',
+  SHOPPER_REJECTED: 'Shopper application sent back for an update',
   CATEGORY_CREATED: 'Category created successfully',
   CATEGORY_UPDATED: 'Category updated successfully',
   CATEGORY_DELETED: 'Category deactivated successfully',
@@ -142,6 +144,8 @@ export const EVENTS = {
 export const AUDIT_ACTIONS = {
   HANDYMAN_APPROVE: 'HANDYMAN_APPROVE',
   HANDYMAN_REJECT: 'HANDYMAN_REJECT',
+  SHOPPER_APPROVE: 'SHOPPER_APPROVE',
+  SHOPPER_REJECT: 'SHOPPER_REJECT',
   DOCUMENT_REVIEW: 'DOCUMENT_REVIEW',
   // A signed URL was issued for an identity document (bug #17's doc requires
   // logging every access to these, not just the review decision).

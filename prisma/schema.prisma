@@ -62,6 +62,7 @@ model User {
   refreshSessions     RefreshSession[]
   handymanProfile     HandymanProfile?
   shopperProfile      ShopperProfile?
+  reviewedShoppers    ShopperProfile[]    @relation("ShopperReviewedByAdmin")
   reviewedHandymen    HandymanProfile[]   @relation("ReviewedByAdmin")
   reviewedDocuments   HandymanDocument[]  @relation("DocumentReviewedBy")
   customerServiceRequests ServiceRequest[] @relation("CustomerRequests")
@@ -472,10 +473,13 @@ model ShopperProfile {
   payoutAccountVerified Boolean             @default(false) @map("payout_account_verified")
   rejectionReason       String?             @map("rejection_reason") @db.Text
   submittedAt           DateTime?           @map("submitted_at")
+  reviewedById          String?             @map("reviewed_by_id")
+  reviewedAt            DateTime?           @map("reviewed_at")
   createdAt             DateTime            @default(now()) @map("created_at")
   updatedAt             DateTime            @updatedAt @map("updated_at")
 
   user         User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy   User?                    @relation("ShopperReviewedByAdmin", fields: [reviewedById], references: [id])
   categories   ShopperProfileCategory[]
   locations    ShopperProfileLocation[]
   services     ShopperProfileService[]
