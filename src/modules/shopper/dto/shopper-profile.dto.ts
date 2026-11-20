@@ -28,13 +28,18 @@ export class AvailabilitySlotDto {
   @IsEnum(Weekday)
   weekday: Weekday;
 
+  // An explicit null means "no time", the same as leaving the field out. Without
+  // this, @IsOptional() lets null through and it would count as a value in the
+  // start/end pairing check.
   @ApiPropertyOptional({ description: 'HH:mm, 24-hour', example: '08:00' })
   @IsOptional()
+  @Transform(({ value }: { value: unknown }) => (value === null ? undefined : value))
   @Matches(HH_MM, { message: 'startTime must be HH:mm (24-hour)' })
   startTime?: string;
 
   @ApiPropertyOptional({ description: 'HH:mm, 24-hour', example: '18:00' })
   @IsOptional()
+  @Transform(({ value }: { value: unknown }) => (value === null ? undefined : value))
   @Matches(HH_MM, { message: 'endTime must be HH:mm (24-hour)' })
   endTime?: string;
 }
@@ -49,14 +54,20 @@ class ShopperProfileFieldsDto {
   @Type(() => Number)
   yearsOfExperience?: number;
 
-  @ApiPropertyOptional({ type: [String], description: 'Extra-service ids (optional)' })
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Extra-service ids (optional). Send [] to stop offering extra services.',
+  })
   @IsOptional()
   @IsArray()
   @ArrayUnique()
   @IsUUID('4', { each: true })
   serviceIds?: string[];
 
-  @ApiPropertyOptional({ type: [AvailabilitySlotDto], description: 'At most one slot per day' })
+  @ApiPropertyOptional({
+    type: [AvailabilitySlotDto],
+    description: 'At most one slot per day. Send [] to clear the working days.',
+  })
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(7)
@@ -136,7 +147,12 @@ export class UpdateShopperProfileDto extends ShopperProfileFieldsDto {
 }
 
 export class SetAvailabilityDto {
+  // The global pipe turns on implicit conversion, which would run Boolean() on
+  // the raw value first: "false" becomes true and the shopper goes ONLINE.
+  // Reading the original body value means @IsBoolean() sees what was sent, so
+  // only a real JSON true / false is accepted.
   @ApiProperty({ example: true })
+  @Transform(({ obj }: { obj: Record<string, unknown> }) => obj.isOnline)
   @IsBoolean()
   isOnline: boolean;
 }

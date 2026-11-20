@@ -326,6 +326,23 @@ describe('ShopperService', () => {
       expect(reference.findActiveLocationIds).not.toHaveBeenCalled();
     });
 
+    it('passes an empty serviceIds / availability through, which clears them, without lookups', async () => {
+      profiles.ensureByUserId.mockResolvedValue(
+        makeProfile({ accountState: ShopperAccountState.APPROVED }),
+      );
+
+      await service.updateProfile(userId, {
+        serviceIds: [],
+        availability: [],
+      } as UpdateShopperProfileDto);
+
+      expect(profiles.update).toHaveBeenCalledWith('profile-1', {
+        serviceIds: [],
+        availability: [],
+      });
+      expect(reference.findActiveServiceIds).not.toHaveBeenCalled();
+    });
+
     it('validates a replacement set before writing it', async () => {
       reference.findActiveCategoryIds.mockResolvedValue([]);
 

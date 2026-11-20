@@ -42,7 +42,10 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
   }
 
   async update(id: string, input: IShopperProfileInput): Promise<ShopperProfileWithDetails> {
-    return this.prisma.$transaction((tx) => this.write(tx, id, input, {}));
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockProfile(tx, id);
+      return this.write(tx, id, input, {});
+    });
   }
 
   async submitApplication(
@@ -52,6 +55,7 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
     phone?: string,
   ): Promise<ShopperProfileWithDetails> {
     return this.prisma.$transaction(async (tx) => {
+      await this.lockProfile(tx, id);
       if (phone !== undefined) {
         await tx.user.update({ where: { id: userId }, data: { phone } });
       }
@@ -71,7 +75,21 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
     });
   }
 
-  /** Profile row + every relation set that was given, inside the caller's transaction. */
+  /**
+   * Lock the profile row until the surrounding transaction commits. Every write
+   * path takes this FIRST, before touching the user row or any child table.
+   *
+   * A relation set is replaced by delete-then-insert. At Read Committed, two
+   * concurrent replacements would each delete before either inserts, both
+   * commit, and the profile ends up with the UNION of the two sets. With the
+   * lock, the second waits for the first to commit and its delete then sees the
+   * first one's rows.
+   */
+  private async lockProfile(tx: Prisma.TransactionClient, id: string): Promise<void> {
+    await tx.$queryRaw`SELECT id FROM shopper_profiles WHERE id = ${id} FOR UPDATE`;
+  }
+
+  /** Profile row + every relation set that was given, inside a transaction that holds the lock. */
   private async write(
     tx: Prisma.TransactionClient,
     id: string,
