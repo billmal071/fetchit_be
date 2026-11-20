@@ -1,20 +1,18 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ShopperAccountState } from '@prisma/client';
-import type { ExtraService, ShoppingCategory, ShoppingLocation } from '@prisma/client';
 import {
   SHOPPER_PROFILE_REPOSITORY,
   SHOPPING_REFERENCE_REPOSITORY,
   IShopperProfileRepository,
   IShoppingReferenceRepository,
-  ShopperProfileWithDetails,
 } from '@/database/repositories';
 import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
 } from '@common/exceptions/base.exception';
+import { toCategory, toLocation, toProfile, toService } from './shopper.mapper';
 import {
-  AvailabilityResponseDto,
   ExtraServiceResponseDto,
   OnboardShopperDto,
   SetAvailabilityDto,
@@ -36,12 +34,6 @@ const FROZEN_STATES: ShopperAccountState[] = [
   ShopperAccountState.SUSPENDED,
   ShopperAccountState.DEACTIVATED,
 ];
-
-/**
- * The contract omits a field to mean "not applicable", so nulls are dropped
- * rather than sent: the UI treats a missing field differently from a real 0.
- */
-const orUndefined = <T>(value: T | null): T | undefined => (value === null ? undefined : value);
 
 @Injectable()
 export class ShopperService {
@@ -188,61 +180,4 @@ function assertAvailability(
       throw new BadRequestException(`${slot.weekday}: startTime must be before endTime`);
     }
   }
-}
-
-function toCategory(row: ShoppingCategory): ShoppingCategoryResponseDto {
-  return {
-    id: row.id,
-    name: row.name,
-    slug: row.slug,
-    icon: orUndefined(row.icon),
-  };
-}
-
-function toLocation(row: ShoppingLocation): ShoppingLocationResponseDto {
-  return {
-    id: row.id,
-    name: row.name,
-    city: orUndefined(row.city),
-    state: orUndefined(row.state),
-  };
-}
-
-function toService(row: ExtraService): ExtraServiceResponseDto {
-  return {
-    id: row.id,
-    name: row.name,
-    description: orUndefined(row.description),
-    fee: orUndefined(row.fee),
-  };
-}
-
-function toProfile(profile: ShopperProfileWithDetails): ShopperProfileResponseDto {
-  const availability: AvailabilityResponseDto[] = profile.availability.map((slot) => ({
-    weekday: slot.weekday,
-    startTime: orUndefined(slot.startTime),
-    endTime: orUndefined(slot.endTime),
-  }));
-
-  return {
-    id: profile.id,
-    userId: profile.userId,
-    accountState: profile.accountState,
-    displayName: orUndefined(profile.displayName),
-    bio: orUndefined(profile.bio),
-    yearsOfExperience: orUndefined(profile.yearsOfExperience),
-    avatarUrl: orUndefined(profile.user.avatar),
-    isOnline: profile.isOnline,
-    categories: profile.categories.map((row) => toCategory(row.category)),
-    locations: profile.locations.map((row) => toLocation(row.location)),
-    services: profile.services.map((row) => toService(row.service)),
-    availability,
-    rating: profile.rating === null ? undefined : Number(profile.rating),
-    completedOrders: profile.completedOrders,
-    completionRate: profile.completionRate === null ? undefined : Number(profile.completionRate),
-    payoutAccountVerified: profile.payoutAccountVerified,
-    rejectionReason: orUndefined(profile.rejectionReason),
-    createdAt: profile.createdAt.toISOString(),
-    updatedAt: profile.updatedAt.toISOString(),
-  };
 }

@@ -49,3 +49,19 @@ export class ShopperProfileResponseDto {
   @ApiProperty() createdAt: string;
   @ApiProperty() updatedAt: string;
 }
+
+export class ApplicationUserResponseDto {
+  @ApiProperty() id: string;
+  @ApiProperty() username: string;
+  @ApiProperty() email: string;
+  @ApiPropertyOptional() phone?: string;
+}
+
+/** A shopper profile as an admin reviews it: the profile plus who applied. */
+export class ShopperApplicationResponseDto extends ShopperProfileResponseDto {
+  @ApiProperty({ type: ApplicationUserResponseDto }) user: ApplicationUserResponseDto;
+  @ApiPropertyOptional({ description: 'When the application was last submitted' })
+  submittedAt?: string;
+  @ApiPropertyOptional({ description: 'When an admin last reviewed it' }) reviewedAt?: string;
+  @ApiPropertyOptional({ description: 'The admin who last reviewed it' }) reviewedById?: string;
+}
