@@ -12,3 +12,5 @@ export { ServiceCategoryRepository } from './service-category.repository';
 export { ServiceRequestRepository } from './service-request.repository';
 export { ServiceRequestApplicationRepository } from './service-request-application.repository';
 export { RefreshSessionRepository } from './refresh-session.repository';
+export { ShopperProfileRepository } from './shopper-profile.repository';
+export { ShoppingReferenceRepository } from './shopping-reference.repository';

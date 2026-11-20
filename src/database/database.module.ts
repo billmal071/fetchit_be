@@ -11,6 +11,8 @@ import {
   ServiceRequestRepository,
   ServiceRequestApplicationRepository,
   RefreshSessionRepository,
+  ShopperProfileRepository,
+  ShoppingReferenceRepository,
   USER_REPOSITORY,
   WAITLIST_REPOSITORY,
   PASSWORD_RESET_REPOSITORY,
@@ -21,6 +23,8 @@ import {
   SERVICE_REQUEST_REPOSITORY,
   SERVICE_REQUEST_APPLICATION_REPOSITORY,
   REFRESH_SESSION_REPOSITORY,
+  SHOPPER_PROFILE_REPOSITORY,
+  SHOPPING_REFERENCE_REPOSITORY,
 } from './repositories';
 
 @Global()
@@ -67,6 +71,14 @@ import {
       provide: REFRESH_SESSION_REPOSITORY,
       useClass: RefreshSessionRepository,
     },
+    {
+      provide: SHOPPER_PROFILE_REPOSITORY,
+      useClass: ShopperProfileRepository,
+    },
+    {
+      provide: SHOPPING_REFERENCE_REPOSITORY,
+      useClass: ShoppingReferenceRepository,
+    },
   ],
   exports: [
     PrismaService,
@@ -80,6 +92,8 @@ import {
     SERVICE_REQUEST_REPOSITORY,
     SERVICE_REQUEST_APPLICATION_REPOSITORY,
     REFRESH_SESSION_REPOSITORY,
+    SHOPPER_PROFILE_REPOSITORY,
+    SHOPPING_REFERENCE_REPOSITORY,
   ],
 })
 export class DatabaseModule {}

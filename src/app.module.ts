@@ -20,6 +20,7 @@ import { HandymanModule } from '@/modules/handyman/handyman.module';
 import { UploadsModule } from '@/modules/uploads/uploads.module';
 import { ServiceRequestsModule } from '@/modules/service-requests/service-requests.module';
 import { AdminModule } from '@/modules/admin/admin.module';
+import { ShopperModule } from '@/modules/shopper/shopper.module';
 import { JobsModule } from '@/jobs/jobs.module';
 import { GatewaysModule } from '@/gateways/gateways.module';
 
@@ -81,6 +82,9 @@ import { RolesGuard } from '@/common/guards';
     HandymanModule,
     ServiceRequestsModule,
     AdminModule,
+
+    // Feature Modules - Personal Shopper
+    ShopperModule,
 
     // Background Jobs (resilient to Redis failures)
     JobsModule,
