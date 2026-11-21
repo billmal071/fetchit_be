@@ -2,6 +2,9 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { Prisma, ShopperAccountState, Weekday } from '@prisma/client';
 import { ShopperService } from './shopper.service';
 import {
+  ApplicationLockedError,
+  applicationLockedMessage,
+  ProfileEditBlockedError,
   SHOPPER_PROFILE_REPOSITORY,
   SHOPPING_REFERENCE_REPOSITORY,
   ShopperProfileWithDetails,
@@ -199,7 +202,6 @@ describe('ShopperService', () => {
     it.each([
       ShopperAccountState.REGISTERED,
       ShopperAccountState.ONBOARDING,
-      ShopperAccountState.VERIFICATION_PENDING,
       ShopperAccountState.VERIFICATION_REQUIRES_UPDATE,
     ])('allows (re)submitting from %s', async (accountState) => {
       profiles.ensureByUserId.mockResolvedValue(makeProfile({ accountState }));
@@ -208,6 +210,7 @@ describe('ShopperService', () => {
     });
 
     it.each([
+      ShopperAccountState.VERIFICATION_PENDING,
       ShopperAccountState.APPROVED,
       ShopperAccountState.SUSPENDED,
       ShopperAccountState.DEACTIVATED,
@@ -218,6 +221,28 @@ describe('ShopperService', () => {
         ConflictException,
       );
       expect(profiles.submitApplication).not.toHaveBeenCalled();
+    });
+
+    it('tells a pending applicant the application is under review', async () => {
+      profiles.ensureByUserId.mockResolvedValue(
+        makeProfile({ accountState: ShopperAccountState.VERIFICATION_PENDING }),
+      );
+
+      await expect(service.submitOnboarding(userId, onboardDto())).rejects.toThrow(
+        /already under review and can be edited again only if it is sent back/,
+      );
+    });
+
+    it('maps a locked state found under the repository lock to the same 409', async () => {
+      // The precheck saw a still-pending profile; an admin approved it before the lock.
+      profiles.submitApplication.mockRejectedValue(
+        new ApplicationLockedError(ShopperAccountState.APPROVED),
+      );
+
+      const attempt = service.submitOnboarding(userId, onboardDto());
+
+      await expect(attempt).rejects.toThrow(ConflictException);
+      await expect(attempt).rejects.toThrow(applicationLockedMessage(ShopperAccountState.APPROVED));
     });
 
     it.each([
@@ -311,6 +336,31 @@ describe('ShopperService', () => {
         expect(profiles.update).not.toHaveBeenCalled();
       },
     );
+
+    it('is rejected with 409 while the application is under review, and writes nothing', async () => {
+      profiles.ensureByUserId.mockResolvedValue(
+        makeProfile({ accountState: ShopperAccountState.VERIFICATION_PENDING }),
+      );
+
+      await expect(
+        service.updateProfile(userId, { displayName: 'New' } as UpdateShopperProfileDto),
+      ).rejects.toThrow(ConflictException);
+      expect(profiles.update).not.toHaveBeenCalled();
+    });
+
+    it('maps a block found under the repository lock: 409 under review, 403 frozen', async () => {
+      // The precheck saw a sent-back profile; it was resubmitted / suspended before the lock.
+      const dto = { displayName: 'New' } as UpdateShopperProfileDto;
+      profiles.update.mockRejectedValueOnce(
+        new ProfileEditBlockedError(ShopperAccountState.VERIFICATION_PENDING),
+      );
+      await expect(service.updateProfile(userId, dto)).rejects.toThrow(ConflictException);
+
+      profiles.update.mockRejectedValueOnce(
+        new ProfileEditBlockedError(ShopperAccountState.SUSPENDED),
+      );
+      await expect(service.updateProfile(userId, dto)).rejects.toThrow(ForbiddenException);
+    });
 
     it('is allowed for an approved shopper and passes only what was sent', async () => {
       profiles.ensureByUserId.mockResolvedValue(
