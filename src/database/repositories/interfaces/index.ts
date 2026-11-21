@@ -11,3 +11,4 @@ export * from './service-request-application-repository.interface';
 export * from './refresh-session-repository.interface';
 export * from './shopper-profile-repository.interface';
 export * from './shopping-reference-repository.interface';
+export * from './push-subscription-repository.interface';
