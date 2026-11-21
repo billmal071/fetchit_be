@@ -67,6 +67,8 @@ model User {
   reviewedDocuments   HandymanDocument[]  @relation("DocumentReviewedBy")
   customerServiceRequests ServiceRequest[] @relation("CustomerRequests")
   auditLogs               AuditLog[]
+  pushSubscriptions       PushSubscription[]
+  notifications           Notification[]
 
   @@map("users")
 }
@@ -533,4 +535,38 @@ model ShopperAvailability {
 
   @@unique([shopperProfileId, weekday])
   @@map("shopper_availability")
+}
+
+model PushSubscription {
+  id         String    @id @default(uuid())
+  userId     String    @map("user_id")
+  endpoint   String    @unique @db.VarChar(2048)
+  p256dh     String    @db.VarChar(255)
+  auth       String    @db.VarChar(255)
+  userAgent  String?   @map("user_agent") @db.VarChar(512)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastUsedAt DateTime? @map("last_used_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+model Notification {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  type      String    @db.VarChar(64)
+  title     String    @db.VarChar(255)
+  body      String?   @db.Text
+  href      String?   @db.VarChar(512)
+  data      Json?
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([userId, readAt])
+  @@map("notifications")
 }

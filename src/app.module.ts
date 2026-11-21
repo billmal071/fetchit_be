@@ -14,6 +14,8 @@ import { StorageModule } from '@/storage';
 import { AuthModule } from '@/modules/auth/auth.module';
 import { UsersModule } from '@/modules/users/users.module';
 import { HealthModule } from '@/modules/health/health.module';
+import { NotificationsModule } from '@/modules/notifications/notifications.module';
+import { PushModule } from '@/modules/push/push.module';
 import { WaitlistModule } from '@/modules/waitlist/waitlist.module';
 import { ServiceCategoriesModule } from '@/modules/service-categories/service-categories.module';
 import { HandymanModule } from '@/modules/handyman/handyman.module';
@@ -76,6 +78,8 @@ import { RolesGuard } from '@/common/guards';
     HealthModule,
     WaitlistModule,
     UploadsModule,
+    PushModule,
+    NotificationsModule,
 
     // Feature Modules - Handyman Dashboard
     ServiceCategoriesModule,
