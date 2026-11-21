@@ -68,6 +68,7 @@ model User {
   customerServiceRequests ServiceRequest[] @relation("CustomerRequests")
   auditLogs               AuditLog[]
   pushSubscriptions       PushSubscription[]
+  notifications           Notification[]
 
   @@map("users")
 }
@@ -550,4 +551,22 @@ model PushSubscription {
 
   @@index([userId])
   @@map("push_subscriptions")
+}
+
+model Notification {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  type      String    @db.VarChar(64)
+  title     String    @db.VarChar(255)
+  body      String?   @db.Text
+  href      String?   @db.VarChar(512)
+  data      Json?
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([userId, readAt])
+  @@map("notifications")
 }

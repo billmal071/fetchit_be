@@ -13,8 +13,10 @@ import {
   ServiceRequestEventsListener,
   ShopperEventsListener,
   ShopperPushListener,
+  ShopperNotificationListener,
 } from './listeners';
 import { PushModule } from '@/modules/push/push.module';
+import { NotificationsModule } from '@/modules/notifications/notifications.module';
 
 const logger = new Logger('JobsModule');
 
@@ -22,6 +24,7 @@ const logger = new Logger('JobsModule');
 @Module({
   imports: [
     PushModule,
+    NotificationsModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -75,6 +78,7 @@ const logger = new Logger('JobsModule');
     ServiceRequestEventsListener,
     ShopperEventsListener,
     ShopperPushListener,
+    ShopperNotificationListener,
     {
       provide: 'EMAIL_PROVIDER',
       useExisting: ResendEmailProvider,
