@@ -125,6 +125,10 @@ export const EVENTS = {
   HANDYMAN_VERIFIED: 'handyman.verified',
   HANDYMAN_REJECTED: 'handyman.rejected',
 
+  // Shopper application review events
+  SHOPPER_APPROVED: 'shopper.approved',
+  SHOPPER_SENT_BACK: 'shopper.sent-back',
+
   // Service request events
   SERVICE_REQUEST_CREATED: 'service-request.created',
   SERVICE_REQUEST_APPLICATION_RECEIVED: 'service-request.application.received',

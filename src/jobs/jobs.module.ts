@@ -11,6 +11,7 @@ import {
   UserEventsListener,
   HandymanEventsListener,
   ServiceRequestEventsListener,
+  ShopperEventsListener,
 } from './listeners';
 
 const logger = new Logger('JobsModule');
@@ -69,6 +70,7 @@ const logger = new Logger('JobsModule');
     UserEventsListener,
     HandymanEventsListener,
     ServiceRequestEventsListener,
+    ShopperEventsListener,
     {
       provide: 'EMAIL_PROVIDER',
       useExisting: ResendEmailProvider,

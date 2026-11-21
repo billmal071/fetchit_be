@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ShopperAccountState } from '@prisma/client';
 import {
   IShopperProfileRepository,
@@ -6,7 +7,8 @@ import {
   ShopperApplication,
 } from '@/database/repositories';
 import { AuditService } from '@common/services/audit.service';
-import { AUDIT_ACTIONS } from '@common/constants';
+import { AUDIT_ACTIONS, EVENTS } from '@common/constants';
+import { ShopperApprovedEvent, ShopperSentBackEvent } from '@common/events';
 import { createPaginationMeta } from '@common/utils/pagination.util';
 import type { IPaginatedResult } from '@common/interfaces';
 import {
@@ -32,6 +34,7 @@ export class AdminShopperVerificationService {
     @Inject(SHOPPER_PROFILE_REPOSITORY)
     private readonly profiles: IShopperProfileRepository,
     private readonly auditService: AuditService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async list(
@@ -51,8 +54,17 @@ export class AdminShopperVerificationService {
   }
 
   async approve(id: string, adminUserId: string): Promise<ShopperApplicationResponseDto> {
-    await this.transition(id, ShopperAccountState.APPROVED, adminUserId, null);
+    const application = await this.transition(id, ShopperAccountState.APPROVED, adminUserId, null);
 
+    this.notify(
+      EVENTS.SHOPPER_APPROVED,
+      new ShopperApprovedEvent(
+        application.userId,
+        id,
+        application.user.email,
+        application.user.username,
+      ),
+    );
     await this.audit(adminUserId, AUDIT_ACTIONS.SHOPPER_APPROVE, id);
     return toApplication(await this.find(id));
   }
@@ -62,11 +74,22 @@ export class AdminShopperVerificationService {
     adminUserId: string,
     dto: RejectShopperDto,
   ): Promise<ShopperApplicationResponseDto> {
-    await this.transition(
+    const application = await this.transition(
       id,
       ShopperAccountState.VERIFICATION_REQUIRES_UPDATE,
       adminUserId,
       dto.reason,
+    );
+
+    this.notify(
+      EVENTS.SHOPPER_SENT_BACK,
+      new ShopperSentBackEvent(
+        application.userId,
+        id,
+        application.user.email,
+        application.user.username,
+        dto.reason,
+      ),
     );
 
     await this.audit(adminUserId, AUDIT_ACTIONS.SHOPPER_REJECT, id, { reason: dto.reason });
@@ -84,7 +107,7 @@ export class AdminShopperVerificationService {
     to: ShopperAccountState,
     adminUserId: string,
     rejectionReason: string | null,
-  ): Promise<void> {
+  ): Promise<ShopperApplication> {
     const current = await this.find(id);
 
     if (current.accountState !== ShopperAccountState.VERIFICATION_PENDING) {
@@ -104,6 +127,8 @@ export class AdminShopperVerificationService {
       const latest = await this.find(id);
       throw new InvalidVerificationTransitionException(latest.accountState, to);
     }
+
+    return current;
   }
 
   private async find(id: string): Promise<ShopperApplication> {
@@ -112,6 +137,21 @@ export class AdminShopperVerificationService {
       throw new ResourceNotFoundException('ShopperProfile', id);
     }
     return application;
+  }
+
+  /**
+   * Tells the shopper (email, via the event listener) once the decision is
+   * committed. Best-effort for the same reason as the audit row: the
+   * transition already happened, so a failure here must not fail the request.
+   */
+  private notify(event: string, payload: ShopperApprovedEvent | ShopperSentBackEvent): void {
+    try {
+      this.eventEmitter.emit(event, payload);
+    } catch (error) {
+      this.logger.error(
+        `Failed to emit ${event} for shopper profile ${payload.shopperProfileId}: ${error}`,
+      );
+    }
   }
 
   /**
