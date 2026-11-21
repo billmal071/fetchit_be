@@ -1,3 +1,4 @@
+import { parseAllowedHosts } from '@/common/utils/push-endpoint.util';
 import type { IStorageConfig, StorageDriver } from '@/storage/interfaces';
 
 const STORAGE_DRIVERS: readonly StorageDriver[] = ['local', 's3-compatible', 'cloudinary', 'neon'];
@@ -58,6 +59,14 @@ export interface IResendConfig {
   fromName: string;
 }
 
+export interface IPushConfig {
+  vapidPublicKey: string;
+  vapidPrivateKey: string;
+  vapidSubject: string;
+  /** Replaces the built-in endpoint host allowlist when non-empty. */
+  allowedHosts: string[];
+}
+
 export interface IConfiguration {
   app: IAppConfig;
   jwt: IJwtConfig;
@@ -68,6 +77,7 @@ export interface IConfiguration {
   google: IGoogleConfig;
   resend: IResendConfig;
   storage: IStorageConfig;
+  push: IPushConfig;
 }
 
 export default (): IConfiguration => ({
@@ -115,6 +125,12 @@ export default (): IConfiguration => ({
     from: process.env.RESEND_FROM || '',
     fromEmail: process.env.RESEND_FROM_EMAIL || '',
     fromName: process.env.RESEND_FROM_NAME || '',
+  },
+  push: {
+    vapidPublicKey: process.env.VAPID_PUBLIC_KEY?.trim() || '',
+    vapidPrivateKey: process.env.VAPID_PRIVATE_KEY?.trim() || '',
+    vapidSubject: process.env.VAPID_SUBJECT?.trim() || '',
+    allowedHosts: parseAllowedHosts(process.env.PUSH_ALLOWED_HOSTS),
   },
   storage: {
     driver: resolveStorageDriver(process.env.STORAGE_DRIVER),
