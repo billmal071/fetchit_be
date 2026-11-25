@@ -45,7 +45,8 @@ export class HandymanApplicationServiceRequestDto {
   @ApiProperty() title: string;
   @ApiProperty() description: string;
   @ApiProperty({
-    description: 'Empty once the request went to someone else and this application is no longer PENDING/ACCEPTED',
+    description:
+      'Empty once the request went to someone else and this application is no longer PENDING/ACCEPTED',
   })
   location: string;
   @ApiProperty({ nullable: true, type: Number }) latitude: number | null;
