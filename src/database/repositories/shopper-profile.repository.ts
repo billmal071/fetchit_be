@@ -14,6 +14,12 @@ import {
   shopperProfileInclude,
 } from './interfaces';
 
+/** `now`, but strictly after the previous submission time (millisecond precision). */
+export function nextSubmissionTime(previous: Date | null, now: Date = new Date()): Date {
+  if (!previous || now.getTime() > previous.getTime()) return now;
+  return new Date(previous.getTime() + 1);
+}
+
 @Injectable()
 export class ShopperProfileRepository implements IShopperProfileRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -68,7 +74,7 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
       await this.lockProfile(tx, id);
       // The caller's earlier read may be stale: an admin can approve between it
       // and this lock. The lock serialises us with that write, so this read is final.
-      const state = await this.stateUnderLock(tx, id);
+      const { accountState: state, submittedAt: previous } = await this.submissionUnderLock(tx, id);
       if (APPLICATION_LOCKED_STATES.includes(state)) {
         throw new ApplicationLockedError(state);
       }
@@ -77,7 +83,10 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
       }
       return this.write(tx, id, input, {
         accountState: ShopperAccountState.VERIFICATION_PENDING,
-        submittedAt: new Date(),
+        // Review decisions are bound to this value, so it must differ from every
+        // earlier submission of this profile even if the clock repeats a
+        // millisecond or steps back.
+        submittedAt: nextSubmissionTime(previous),
         rejectionReason: null,
       });
     });
@@ -158,11 +167,19 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
     tx: Prisma.TransactionClient,
     id: string,
   ): Promise<ShopperAccountState> {
-    const { accountState } = await tx.shopperProfile.findUniqueOrThrow({
+    return (await this.submissionUnderLock(tx, id)).accountState;
+  }
+
+  /** State and last submission time, read under the lock. */
+  private async submissionUnderLock(
+    tx: Prisma.TransactionClient,
+    id: string,
+  ): Promise<{ accountState: ShopperAccountState; submittedAt: Date | null }> {
+    const { accountState, submittedAt } = await tx.shopperProfile.findUniqueOrThrow({
       where: { id },
-      select: { accountState: true },
+      select: { accountState: true, submittedAt: true },
     });
-    return accountState;
+    return { accountState, submittedAt: submittedAt ?? null };
   }
 
   /** Profile row + every relation set that was given, inside a transaction that holds the lock. */
