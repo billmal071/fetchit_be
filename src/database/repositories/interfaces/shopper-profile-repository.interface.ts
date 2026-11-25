@@ -152,8 +152,14 @@ export interface IShopperProfileRepository {
   /**
    * Move a profile from `from` to `to`, recording who reviewed it and why.
    * The state check is part of the UPDATE itself, so two reviewers, or a
-   * reviewer racing the shopper's resubmission, cannot both win. Returns false
-   * when the profile was no longer in `from` (or does not exist).
+   * reviewer racing the shopper's resubmission, cannot both win.
+   *
+   * The UPDATE is also conditional on `submittedAt` still being
+   * `expectedSubmittedAt`, the submission the reviewer actually looked at. A
+   * profile that was sent back, edited and resubmitted is pending again but
+   * with a new `submittedAt`, so a decision on the earlier view cannot land on
+   * data the reviewer never saw. Returns false when either condition no longer
+   * holds (or the profile does not exist).
    */
   transitionState(
     id: string,
@@ -161,6 +167,7 @@ export interface IShopperProfileRepository {
     to: ShopperAccountState,
     reviewerId: string,
     rejectionReason: string | null,
+    expectedSubmittedAt: Date,
   ): Promise<boolean>;
 }
 

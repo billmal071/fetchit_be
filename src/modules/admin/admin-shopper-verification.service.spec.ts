@@ -7,8 +7,9 @@ import { AUDIT_ACTIONS } from '@common/constants';
 import {
   InvalidVerificationTransitionException,
   ResourceNotFoundException,
+  StaleVerificationSubmissionException,
 } from '@common/exceptions/domain.exception';
-import { RejectShopperDto, ShopperApplicationQueryDto } from './dto';
+import { ApproveShopperDto, RejectShopperDto, ShopperApplicationQueryDto } from './dto';
 
 const { VERIFICATION_PENDING, APPROVED, VERIFICATION_REQUIRES_UPDATE } = ShopperAccountState;
 
@@ -19,6 +20,8 @@ describe('AdminShopperVerificationService', () => {
 
   const adminId = 'admin-1';
   const profileId = 'profile-1';
+  const loadedAt = '2026-11-20T10:00:00.000Z';
+  const approveDto = { submittedAt: loadedAt } as ApproveShopperDto;
 
   const makeApplication = (overrides: Partial<ShopperApplication> = {}): ShopperApplication =>
     ({
@@ -120,7 +123,7 @@ describe('AdminShopperVerificationService', () => {
         }),
       );
 
-      const result = await service.approve(profileId, adminId);
+      const result = await service.approve(profileId, adminId, approveDto);
 
       expect(profiles.transitionState).toHaveBeenCalledWith(
         profileId,
@@ -128,6 +131,7 @@ describe('AdminShopperVerificationService', () => {
         APPROVED,
         adminId,
         null,
+        new Date(loadedAt),
       );
       expect(result.accountState).toBe(APPROVED);
       expect(result.reviewedById).toBe(adminId);
@@ -143,7 +147,9 @@ describe('AdminShopperVerificationService', () => {
     it('is a 404 for an unknown id and changes nothing', async () => {
       profiles.findApplicationById.mockResolvedValue(null);
 
-      await expect(service.approve('nope', adminId)).rejects.toThrow(ResourceNotFoundException);
+      await expect(service.approve('nope', adminId, approveDto)).rejects.toThrow(
+        ResourceNotFoundException,
+      );
       expect(profiles.transitionState).not.toHaveBeenCalled();
       expect(audit.log).not.toHaveBeenCalled();
     });
@@ -160,7 +166,7 @@ describe('AdminShopperVerificationService', () => {
       // approvable, and neither may one already decided, suspended or closed.
       profiles.findApplicationById.mockResolvedValue(makeApplication({ accountState }));
 
-      await expect(service.approve(profileId, adminId)).rejects.toThrow(
+      await expect(service.approve(profileId, adminId, approveDto)).rejects.toThrow(
         InvalidVerificationTransitionException,
       );
       expect(profiles.transitionState).not.toHaveBeenCalled();
@@ -175,22 +181,57 @@ describe('AdminShopperVerificationService', () => {
         .mockResolvedValueOnce(makeApplication())
         .mockResolvedValueOnce(makeApplication({ accountState: VERIFICATION_REQUIRES_UPDATE }));
 
-      await expect(service.approve(profileId, adminId)).rejects.toThrow(
+      await expect(service.approve(profileId, adminId, approveDto)).rejects.toThrow(
         'Cannot transition from VERIFICATION_REQUIRES_UPDATE to APPROVED',
       );
+      expect(audit.log).not.toHaveBeenCalled();
+    });
+
+    it('refuses a stale approve after send-back and resubmit: 409, nothing changes, no event', async () => {
+      // Admin A loaded the application at `loadedAt`. Admin B sent it back, the
+      // shopper edited and resubmitted: pending again, but a NEW submittedAt.
+      const resubmitted = makeApplication({ submittedAt: new Date('2026-11-21T08:30:00.000Z') });
+      profiles.findApplicationById.mockResolvedValue(resubmitted);
+
+      const attempt = service.approve(profileId, adminId, approveDto);
+
+      await expect(attempt).rejects.toThrow(StaleVerificationSubmissionException);
+      await expect(attempt).rejects.toMatchObject({ response: { statusCode: 409 } });
+      await expect(attempt).rejects.toThrow(/resubmitted/);
+      expect(profiles.transitionState).not.toHaveBeenCalled();
+      expect(audit.log).not.toHaveBeenCalled();
+      expect(resubmitted.accountState).toBe(VERIFICATION_PENDING);
+    });
+
+    it('reports a resubmission, not an invalid transition, when the resubmit lands mid-decision', async () => {
+      // Read saw the loaded submission; the shopper resubmitted before the UPDATE.
+      profiles.transitionState.mockResolvedValue(false);
+      profiles.findApplicationById
+        .mockResolvedValueOnce(makeApplication())
+        .mockResolvedValueOnce(
+          makeApplication({ submittedAt: new Date('2026-11-21T08:30:00.000Z') }),
+        );
+
+      const attempt = service.approve(profileId, adminId, approveDto);
+
+      await expect(attempt).rejects.toThrow(StaleVerificationSubmissionException);
+      await expect(attempt).rejects.not.toThrow(/Cannot transition/);
       expect(audit.log).not.toHaveBeenCalled();
     });
 
     it('still succeeds when the audit write fails: the decision is already committed', async () => {
       audit.log.mockRejectedValue(new Error('audit table unavailable'));
 
-      await expect(service.approve(profileId, adminId)).resolves.toBeDefined();
+      await expect(service.approve(profileId, adminId, approveDto)).resolves.toBeDefined();
       expect(profiles.transitionState).toHaveBeenCalled();
     });
   });
 
   describe('reject', () => {
-    const dto = { reason: 'Please add a market you know well.' } as RejectShopperDto;
+    const dto = {
+      reason: 'Please add a market you know well.',
+      submittedAt: loadedAt,
+    } as RejectShopperDto;
 
     it('sends a pending application back with the reason, and audits it', async () => {
       await service.reject(profileId, adminId, dto);
@@ -201,6 +242,7 @@ describe('AdminShopperVerificationService', () => {
         VERIFICATION_REQUIRES_UPDATE,
         adminId,
         'Please add a market you know well.',
+        new Date(loadedAt),
       );
       expect(audit.log).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -221,6 +263,18 @@ describe('AdminShopperVerificationService', () => {
         expect(profiles.transitionState).not.toHaveBeenCalled();
       },
     );
+
+    it('refuses to send back a resubmitted application the reviewer never saw', async () => {
+      profiles.findApplicationById.mockResolvedValue(
+        makeApplication({ submittedAt: new Date('2026-11-21T08:30:00.000Z') }),
+      );
+
+      await expect(service.reject(profileId, adminId, dto)).rejects.toThrow(
+        StaleVerificationSubmissionException,
+      );
+      expect(profiles.transitionState).not.toHaveBeenCalled();
+      expect(audit.log).not.toHaveBeenCalled();
+    });
 
     it('is a 404 for an unknown id', async () => {
       profiles.findApplicationById.mockResolvedValue(null);

@@ -12,10 +12,11 @@ import type { IPaginatedResult } from '@common/interfaces';
 import {
   InvalidVerificationTransitionException,
   ResourceNotFoundException,
+  StaleVerificationSubmissionException,
 } from '@common/exceptions/domain.exception';
 import { ShopperApplicationResponseDto } from '@modules/shopper/dto';
 import { toApplication } from '@modules/shopper/shopper.mapper';
-import { RejectShopperDto, ShopperApplicationQueryDto } from './dto';
+import { ApproveShopperDto, RejectShopperDto, ShopperApplicationQueryDto } from './dto';
 
 /**
  * Admin review of shopper applications. An application is "pending" once the
@@ -50,8 +51,18 @@ export class AdminShopperVerificationService {
     return toApplication(await this.find(id));
   }
 
-  async approve(id: string, adminUserId: string): Promise<ShopperApplicationResponseDto> {
-    await this.transition(id, ShopperAccountState.APPROVED, adminUserId, null);
+  async approve(
+    id: string,
+    adminUserId: string,
+    dto: ApproveShopperDto,
+  ): Promise<ShopperApplicationResponseDto> {
+    await this.transition(
+      id,
+      ShopperAccountState.APPROVED,
+      adminUserId,
+      null,
+      new Date(dto.submittedAt),
+    );
 
     await this.audit(adminUserId, AUDIT_ACTIONS.SHOPPER_APPROVE, id);
     return toApplication(await this.find(id));
@@ -67,6 +78,7 @@ export class AdminShopperVerificationService {
       ShopperAccountState.VERIFICATION_REQUIRES_UPDATE,
       adminUserId,
       dto.reason,
+      new Date(dto.submittedAt),
     );
 
     await this.audit(adminUserId, AUDIT_ACTIONS.SHOPPER_REJECT, id, { reason: dto.reason });
@@ -77,18 +89,24 @@ export class AdminShopperVerificationService {
    * Only a pending application can be reviewed. The state check is repeated
    * inside the UPDATE, so if two admins act at once, or the shopper resubmits
    * while one is deciding, exactly one wins and the rest are told the state
-   * they found.
+   * they found. The decision is also bound to the submission the reviewer
+   * loaded (`submittedAt`): an application that was sent back and resubmitted
+   * is pending again, but it is not what they reviewed.
    */
   private async transition(
     id: string,
     to: ShopperAccountState,
     adminUserId: string,
     rejectionReason: string | null,
+    expectedSubmittedAt: Date,
   ): Promise<void> {
     const current = await this.find(id);
 
     if (current.accountState !== ShopperAccountState.VERIFICATION_PENDING) {
       throw new InvalidVerificationTransitionException(current.accountState, to);
+    }
+    if (current.submittedAt?.getTime() !== expectedSubmittedAt.getTime()) {
+      throw new StaleVerificationSubmissionException();
     }
 
     const moved = await this.profiles.transitionState(
@@ -97,11 +115,16 @@ export class AdminShopperVerificationService {
       to,
       adminUserId,
       rejectionReason,
+      expectedSubmittedAt,
     );
 
     if (!moved) {
       // Lost a race: say what it is now, not what it was a moment ago.
       const latest = await this.find(id);
+      if (latest.accountState === ShopperAccountState.VERIFICATION_PENDING) {
+        // Still pending, so it was resubmitted: a different submission.
+        throw new StaleVerificationSubmissionException();
+      }
       throw new InvalidVerificationTransitionException(latest.accountState, to);
     }
   }

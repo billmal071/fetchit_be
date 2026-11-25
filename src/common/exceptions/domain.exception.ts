@@ -131,6 +131,20 @@ export class InvalidVerificationTransitionException extends DomainException {
   }
 }
 
+/**
+ * The application is still pending, but it is not the submission the reviewer
+ * loaded: the shopper was sent back, edited and resubmitted in between.
+ */
+export class StaleVerificationSubmissionException extends DomainException {
+  constructor() {
+    super(
+      'This application was resubmitted after you loaded it. Reload it and review the latest submission.',
+      'VERIFICATION_SUBMISSION_STALE',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 export class DuplicateApplicationException extends DomainException {
   constructor() {
     super(
