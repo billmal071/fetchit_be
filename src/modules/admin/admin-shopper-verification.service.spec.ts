@@ -1,9 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ShopperAccountState } from '@prisma/client';
 import { AdminShopperVerificationService } from './admin-shopper-verification.service';
 import { SHOPPER_PROFILE_REPOSITORY, ShopperApplication } from '@/database/repositories';
 import { AuditService } from '@common/services/audit.service';
-import { AUDIT_ACTIONS } from '@common/constants';
+import { AUDIT_ACTIONS, EVENTS } from '@common/constants';
+import { ShopperApprovedEvent, ShopperSentBackEvent } from '@common/events';
 import {
   InvalidVerificationTransitionException,
   ResourceNotFoundException,
@@ -17,6 +19,7 @@ describe('AdminShopperVerificationService', () => {
   let service: AdminShopperVerificationService;
   let profiles: Record<string, jest.Mock>;
   let audit: { log: jest.Mock };
+  let emitter: { emit: jest.Mock };
 
   const adminId = 'admin-1';
   const profileId = 'profile-1';
@@ -63,12 +66,14 @@ describe('AdminShopperVerificationService', () => {
       transitionState: jest.fn().mockResolvedValue(true),
     };
     audit = { log: jest.fn().mockResolvedValue(undefined) };
+    emitter = { emit: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AdminShopperVerificationService,
         { provide: SHOPPER_PROFILE_REPOSITORY, useValue: profiles },
         { provide: AuditService, useValue: audit },
+        { provide: EventEmitter2, useValue: emitter },
       ],
     }).compile();
 
@@ -144,12 +149,35 @@ describe('AdminShopperVerificationService', () => {
       });
     });
 
+    it('notifies the shopper once, after the transition', async () => {
+      await service.approve(profileId, adminId, approveDto);
+
+      expect(emitter.emit).toHaveBeenCalledTimes(1);
+      expect(emitter.emit).toHaveBeenCalledWith(
+        EVENTS.SHOPPER_APPROVED,
+        new ShopperApprovedEvent('user-1', profileId, 'amaka@example.com', 'amaka'),
+      );
+      expect(profiles.transitionState.mock.invocationCallOrder[0]).toBeLessThan(
+        emitter.emit.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('still succeeds when notifying the shopper throws', async () => {
+      emitter.emit.mockImplementation(() => {
+        throw new Error('emitter down');
+      });
+
+      await expect(service.approve(profileId, adminId, approveDto)).resolves.toBeDefined();
+      expect(audit.log).toHaveBeenCalled();
+    });
+
     it('is a 404 for an unknown id and changes nothing', async () => {
       profiles.findApplicationById.mockResolvedValue(null);
 
       await expect(service.approve('nope', adminId, approveDto)).rejects.toThrow(
         ResourceNotFoundException,
       );
+      expect(emitter.emit).not.toHaveBeenCalled();
       expect(profiles.transitionState).not.toHaveBeenCalled();
       expect(audit.log).not.toHaveBeenCalled();
     });
@@ -171,6 +199,7 @@ describe('AdminShopperVerificationService', () => {
       );
       expect(profiles.transitionState).not.toHaveBeenCalled();
       expect(audit.log).not.toHaveBeenCalled();
+      expect(emitter.emit).not.toHaveBeenCalled();
     });
 
     it('reports the state it found when it loses a race, not the one it read first', async () => {
@@ -185,6 +214,7 @@ describe('AdminShopperVerificationService', () => {
         'Cannot transition from VERIFICATION_REQUIRES_UPDATE to APPROVED',
       );
       expect(audit.log).not.toHaveBeenCalled();
+      expect(emitter.emit).not.toHaveBeenCalled();
     });
 
     it('refuses a stale approve after send-back and resubmit: 409, nothing changes, no event', async () => {
@@ -252,6 +282,52 @@ describe('AdminShopperVerificationService', () => {
       );
     });
 
+    it('notifies the shopper once with the admin reason, after the transition', async () => {
+      await service.reject(profileId, adminId, dto);
+
+      expect(emitter.emit).toHaveBeenCalledTimes(1);
+      expect(emitter.emit).toHaveBeenCalledWith(
+        EVENTS.SHOPPER_SENT_BACK,
+        new ShopperSentBackEvent(
+          'user-1',
+          profileId,
+          'amaka@example.com',
+          'amaka',
+          'Please add a market you know well.',
+        ),
+      );
+    });
+
+    it('still succeeds when notifying the shopper throws', async () => {
+      emitter.emit.mockImplementation(() => {
+        throw new Error('emitter down');
+      });
+
+      await expect(service.reject(profileId, adminId, dto)).resolves.toBeDefined();
+    });
+
+    it('does not notify when another admin decides first', async () => {
+      profiles.transitionState.mockResolvedValue(false);
+      profiles.findApplicationById
+        .mockResolvedValueOnce(makeApplication())
+        .mockResolvedValueOnce(makeApplication({ accountState: ShopperAccountState.APPROVED }));
+
+      await expect(service.reject(profileId, adminId, dto)).rejects.toThrow(
+        InvalidVerificationTransitionException,
+      );
+      expect(emitter.emit).not.toHaveBeenCalled();
+    });
+
+    it('does not notify when the shopper resubmits mid-decision', async () => {
+      // The update loses, and the re-read is still pending: a new submission.
+      profiles.transitionState.mockResolvedValue(false);
+
+      await expect(service.reject(profileId, adminId, dto)).rejects.toThrow(
+        StaleVerificationSubmissionException,
+      );
+      expect(emitter.emit).not.toHaveBeenCalled();
+    });
+
     it.each([ShopperAccountState.APPROVED, ShopperAccountState.REGISTERED])(
       'refuses to send back an application that is %s',
       async (accountState) => {
@@ -261,6 +337,7 @@ describe('AdminShopperVerificationService', () => {
           InvalidVerificationTransitionException,
         );
         expect(profiles.transitionState).not.toHaveBeenCalled();
+        expect(emitter.emit).not.toHaveBeenCalled();
       },
     );
 
@@ -280,6 +357,7 @@ describe('AdminShopperVerificationService', () => {
       profiles.findApplicationById.mockResolvedValue(null);
 
       await expect(service.reject('nope', adminId, dto)).rejects.toThrow(ResourceNotFoundException);
+      expect(emitter.emit).not.toHaveBeenCalled();
     });
   });
 });

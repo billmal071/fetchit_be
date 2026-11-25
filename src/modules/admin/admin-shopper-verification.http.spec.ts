@@ -19,6 +19,7 @@ import { RolesGuard } from '@/common/guards';
 import { SHOPPER_PROFILE_REPOSITORY } from '@/database/repositories';
 import { AuditService } from '@common/services/audit.service';
 import { AdminShopperVerificationController } from './admin-shopper-verification.controller';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AdminShopperVerificationService } from './admin-shopper-verification.service';
 
 const application = (accountState: ShopperAccountState): Record<string, unknown> => ({
@@ -61,6 +62,7 @@ const audit = { log: jest.fn() };
     AdminShopperVerificationService,
     { provide: SHOPPER_PROFILE_REPOSITORY, useValue: repo },
     { provide: AuditService, useValue: audit },
+    { provide: EventEmitter2, useValue: { emit: jest.fn() } },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],
 })
