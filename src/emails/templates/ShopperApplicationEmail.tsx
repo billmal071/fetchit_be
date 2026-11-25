@@ -31,7 +31,7 @@ export function ShopperApplicationEmail({
           <Container className="mx-auto my-0 max-w-[600px] px-6 py-8">
             <Section className="rounded-t-xl bg-primary px-6 py-6 text-center">
               <Text className="m-0 text-2xl font-bold text-white">
-                {approved ? 'You&apos;re Approved!' : 'Application Update Needed'}
+                {approved ? "You're Approved!" : 'Application Update Needed'}
               </Text>
             </Section>
             <Section className="bg-white px-6 py-6">
