@@ -2,6 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { Prisma, ShopperAccountState } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import {
+  APPLICATION_LOCKED_STATES,
+  ApplicationLockedError,
+  PROFILE_EDIT_BLOCKED_STATES,
+  ProfileEditBlockedError,
   IShopperProfileInput,
   IShopperProfileRepository,
   ShopperApplication,
@@ -46,6 +50,10 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
   async update(id: string, input: IShopperProfileInput): Promise<ShopperProfileWithDetails> {
     return this.prisma.$transaction(async (tx) => {
       await this.lockProfile(tx, id);
+      const state = await this.stateUnderLock(tx, id);
+      if (PROFILE_EDIT_BLOCKED_STATES.includes(state)) {
+        throw new ProfileEditBlockedError(state);
+      }
       return this.write(tx, id, input, {});
     });
   }
@@ -58,6 +66,12 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
   ): Promise<ShopperProfileWithDetails> {
     return this.prisma.$transaction(async (tx) => {
       await this.lockProfile(tx, id);
+      // The caller's earlier read may be stale: an admin can approve between it
+      // and this lock. The lock serialises us with that write, so this read is final.
+      const state = await this.stateUnderLock(tx, id);
+      if (APPLICATION_LOCKED_STATES.includes(state)) {
+        throw new ApplicationLockedError(state);
+      }
       if (phone !== undefined) {
         await tx.user.update({ where: { id: userId }, data: { phone } });
       }
@@ -136,6 +150,18 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
    */
   private async lockProfile(tx: Prisma.TransactionClient, id: string): Promise<void> {
     await tx.$queryRaw`SELECT id FROM shopper_profiles WHERE id = ${id} FOR UPDATE`;
+  }
+
+  /** Current state; only authoritative once `lockProfile` has been taken in this transaction. */
+  private async stateUnderLock(
+    tx: Prisma.TransactionClient,
+    id: string,
+  ): Promise<ShopperAccountState> {
+    const { accountState } = await tx.shopperProfile.findUniqueOrThrow({
+      where: { id },
+      select: { accountState: true },
+    });
+    return accountState;
   }
 
   /** Profile row + every relation set that was given, inside a transaction that holds the lock. */

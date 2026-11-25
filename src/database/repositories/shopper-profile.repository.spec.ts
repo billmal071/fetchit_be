@@ -1,4 +1,10 @@
+import { ShopperAccountState } from '@prisma/client';
 import { ShopperProfileRepository } from './shopper-profile.repository';
+import {
+  ApplicationLockedError,
+  ProfileEditBlockedError,
+  applicationLockedMessage,
+} from './interfaces';
 import { PrismaService } from '../prisma.service';
 
 describe('ShopperProfileRepository', () => {
@@ -10,7 +16,9 @@ describe('ShopperProfileRepository', () => {
    * so this guards the ordering that prevents it.
    */
   describe('replacing relation sets', () => {
-    const makeRepo = (): { repo: ShopperProfileRepository; calls: string[] } => {
+    const makeRepo = (
+      accountState: ShopperAccountState = ShopperAccountState.VERIFICATION_REQUIRES_UPDATE,
+    ): { repo: ShopperProfileRepository; calls: string[] } => {
       const calls: string[] = [];
       const record = (name: string) => async (): Promise<unknown> => {
         calls.push(name);
@@ -38,7 +46,13 @@ describe('ShopperProfileRepository', () => {
           deleteMany: record('availability.delete'),
           createMany: record('availability.create'),
         },
-        shopperProfile: { update: record('profile.update') },
+        shopperProfile: {
+          update: record('profile.update'),
+          findUniqueOrThrow: async (): Promise<unknown> => {
+            calls.push('profile.readState');
+            return { accountState };
+          },
+        },
       };
       const prisma = {
         $transaction: jest.fn(async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx)),
@@ -79,6 +93,92 @@ describe('ShopperProfileRepository', () => {
       ]) {
         expect(calls.indexOf(write)).toBeGreaterThan(lock);
       }
+    });
+
+    /**
+     * The service checks the state BEFORE the transaction, so an admin can approve
+     * the profile in between. The state must be re-read under the row lock.
+     */
+    describe('submitApplication state check under the lock', () => {
+      it('reads the state after the lock and before any write', async () => {
+        const { repo, calls } = makeRepo();
+
+        await repo.submitApplication('profile-1', 'user-1', everySet, '+2348012345678');
+
+        const lock = calls.findIndex((call) => call.startsWith('lock:'));
+        const read = calls.indexOf('profile.readState');
+        expect(read).toBeGreaterThan(lock);
+        expect(calls.indexOf('user.update')).toBeGreaterThan(read);
+        expect(calls.indexOf('profile.update')).toBeGreaterThan(read);
+      });
+
+      it.each([
+        ShopperAccountState.VERIFICATION_PENDING,
+        ShopperAccountState.APPROVED,
+        ShopperAccountState.SUSPENDED,
+        ShopperAccountState.DEACTIVATED,
+      ])(
+        'rejects inside the transaction when the state is %s, and writes nothing',
+        async (state) => {
+          const { repo, calls } = makeRepo(state);
+
+          const attempt = repo.submitApplication('profile-1', 'user-1', everySet, '+2348012345678');
+
+          await expect(attempt).rejects.toBeInstanceOf(ApplicationLockedError);
+          await expect(attempt).rejects.toThrow(applicationLockedMessage(state));
+          expect(calls.filter((call) => call.startsWith('lock:'))).toHaveLength(1);
+          expect(
+            calls.filter((call) => call !== 'profile.readState' && !call.startsWith('lock:')),
+          ).toEqual([]);
+        },
+      );
+
+      it.each([
+        ShopperAccountState.REGISTERED,
+        ShopperAccountState.ONBOARDING,
+        ShopperAccountState.VERIFICATION_REQUIRES_UPDATE,
+      ])('still submits from %s', async (state) => {
+        const { repo, calls } = makeRepo(state);
+
+        await repo.submitApplication('profile-1', 'user-1', everySet);
+
+        expect(calls).toContain('profile.update');
+      });
+    });
+
+    describe('update', () => {
+      it.each([
+        ShopperAccountState.VERIFICATION_PENDING,
+        ShopperAccountState.SUSPENDED,
+        ShopperAccountState.DEACTIVATED,
+      ])(
+        'rejects inside the transaction when the state is %s, and writes nothing',
+        async (state) => {
+          const { repo, calls } = makeRepo(state);
+
+          await expect(repo.update('profile-1', everySet)).rejects.toBeInstanceOf(
+            ProfileEditBlockedError,
+          );
+          expect(
+            calls.filter((call) => call !== 'profile.readState' && !call.startsWith('lock:')),
+          ).toEqual([]);
+        },
+      );
+
+      it.each([
+        ShopperAccountState.REGISTERED,
+        ShopperAccountState.ONBOARDING,
+        ShopperAccountState.VERIFICATION_REQUIRES_UPDATE,
+        ShopperAccountState.APPROVED,
+      ])('still writes from %s, after the lock and the state read', async (state) => {
+        const { repo, calls } = makeRepo(state);
+
+        await repo.update('profile-1', everySet);
+
+        expect(calls.findIndex((c) => c.startsWith('lock:'))).toBe(0);
+        expect(calls.indexOf('profile.readState')).toBe(1);
+        expect(calls).toContain('profile.update');
+      });
     });
   });
 });
