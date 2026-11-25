@@ -1,6 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsDefined, IsOptional, IsString, IsUrl, MaxLength, ValidateNested } from 'class-validator';
+import {
+  IsDefined,
+  IsObject,
+  IsOptional,
+  IsString,
+  IsUrl,
+  MaxLength,
+  ValidateNested,
+} from 'class-validator';
 import { IsBase64UrlBytes } from './base64url-bytes.validator';
 
 export class PushKeysDto {
@@ -29,6 +37,9 @@ export class SubscribePushDto {
 
   @ApiProperty({ type: PushKeysDto })
   @IsDefined()
+  // ValidateNested validates the elements of an array, and an empty array has
+  // none, so `keys: []` used to pass and reach the service with no keys.
+  @IsObject()
   @ValidateNested()
   @Type(() => PushKeysDto)
   keys: PushKeysDto;
