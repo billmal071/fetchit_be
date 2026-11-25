@@ -466,3 +466,45 @@ describe('configuration() storage.neon mapping', () => {
     expect(storage.neon.publicBucket).toBeUndefined();
   });
 });
+
+describe('VAPID environment configuration', () => {
+  it('boots with no VAPID variables and push config is empty', () => {
+    const config = validateEnv({ ...baseEnv });
+    expect(config.VAPID_PUBLIC_KEY).toBe('');
+    expect(config.VAPID_SUBJECT).toBe('');
+  });
+
+  it('accepts mailto: and https subjects', () => {
+    expect(validateEnv({ ...baseEnv, VAPID_SUBJECT: 'mailto:ops@example.com' }).VAPID_SUBJECT).toBe(
+      'mailto:ops@example.com',
+    );
+    expect(validateEnv({ ...baseEnv, VAPID_SUBJECT: 'https://example.com' }).VAPID_SUBJECT).toBe(
+      'https://example.com',
+    );
+  });
+
+  it('rejects a malformed subject', () => {
+    expect(() => validateEnv({ ...baseEnv, VAPID_SUBJECT: 'ops@example.com' })).toThrow(
+      /VAPID_SUBJECT must be a mailto: address or an https:\/\/ URL/,
+    );
+  });
+});
+
+describe('PUSH_ALLOWED_HOSTS environment configuration', () => {
+  it('defaults to empty (built-in list)', () => {
+    expect(validateEnv({ ...baseEnv }).PUSH_ALLOWED_HOSTS).toBe('');
+  });
+
+  it('accepts hostnames and .suffix entries', () => {
+    expect(
+      validateEnv({ ...baseEnv, PUSH_ALLOWED_HOSTS: 'push.example.com, .corp.example.org' })
+        .PUSH_ALLOWED_HOSTS,
+    ).toBe('push.example.com, .corp.example.org');
+  });
+
+  it.each(['127.0.0.1', 'https://a.com', 'a.com:443', 'localhost'])('rejects %s', (value) => {
+    expect(() => validateEnv({ ...baseEnv, PUSH_ALLOWED_HOSTS: value })).toThrow(
+      /PUSH_ALLOWED_HOSTS/,
+    );
+  });
+});

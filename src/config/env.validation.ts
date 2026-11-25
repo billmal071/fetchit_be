@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidAllowedHostEntry, parseAllowedHosts } from '@/common/utils/push-endpoint.util';
 
 /**
  * EVERY environment variable the app reads must be declared here, even the
@@ -75,6 +76,31 @@ const baseEnvSchema = z.object({
   RESEND_FROM: z.string().optional().default(''),
   RESEND_FROM_EMAIL: z.string().optional().default(''),
   RESEND_FROM_NAME: z.string().optional().default(''),
+
+  // Web Push (VAPID). Optional: leave all three unset and push notifications
+  // are simply disabled. Setting only some of them is a misconfiguration that
+  // PushService logs at boot and treats as disabled. Generate a pair with
+  // `npx web-push generate-vapid-keys`.
+  VAPID_PUBLIC_KEY: z.string().optional().default(''),
+  VAPID_PRIVATE_KEY: z.string().optional().default(''),
+  VAPID_SUBJECT: z
+    .string()
+    .optional()
+    .default('')
+    .refine((value) => value === '' || /^(mailto:|https:\/\/)\S+$/.test(value), {
+      message: 'VAPID_SUBJECT must be a mailto: address or an https:// URL',
+    }),
+
+  // Optional comma-separated hostnames or '.suffix' entries that REPLACE the
+  // built-in Web Push endpoint allowlist (SSRF guard). Unset = built-in list.
+  PUSH_ALLOWED_HOSTS: z
+    .string()
+    .optional()
+    .default('')
+    .refine((value) => parseAllowedHosts(value).every(isValidAllowedHostEntry), {
+      message:
+        "PUSH_ALLOWED_HOSTS must be comma-separated hostnames or '.suffix' entries (no IPs, schemes, ports or paths)",
+    }),
 
   // Rate Limiting
   THROTTLE_TTL: z.coerce.number().default(60),

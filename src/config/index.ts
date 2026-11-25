@@ -8,6 +8,7 @@ export type {
   ISwaggerConfig,
   IGoogleConfig,
   IResendConfig,
+  IPushConfig,
 } from './configuration';
 export { envSchema, validateEnv } from './env.validation';
 export type { EnvConfig } from './env.validation';

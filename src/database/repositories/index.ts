@@ -14,3 +14,4 @@ export { ServiceRequestApplicationRepository } from './service-request-applicati
 export { RefreshSessionRepository } from './refresh-session.repository';
 export { ShopperProfileRepository } from './shopper-profile.repository';
 export { ShoppingReferenceRepository } from './shopping-reference.repository';
+export { PushSubscriptionRepository } from './push-subscription.repository';

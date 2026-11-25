@@ -12,13 +12,16 @@ import {
   HandymanEventsListener,
   ServiceRequestEventsListener,
   ShopperEventsListener,
+  ShopperPushListener,
 } from './listeners';
+import { PushModule } from '@/modules/push/push.module';
 
 const logger = new Logger('JobsModule');
 
 @Global()
 @Module({
   imports: [
+    PushModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -71,6 +74,7 @@ const logger = new Logger('JobsModule');
     HandymanEventsListener,
     ServiceRequestEventsListener,
     ShopperEventsListener,
+    ShopperPushListener,
     {
       provide: 'EMAIL_PROVIDER',
       useExisting: ResendEmailProvider,
