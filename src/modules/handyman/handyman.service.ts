@@ -578,7 +578,28 @@ export class HandymanService {
     // list rather than 404.
     const profile = await this.profileRepo.ensureByUserId(userId);
 
-    return this.applicationRepo.findByHandymanProfileId(profile.id);
+    const applications = await this.applicationRepo.findByHandymanProfileId(profile.id);
+
+    // A rejected/withdrawn handyman must not keep seeing where a job is, or
+    // who got it, once it has gone to someone else. While the request is OPEN
+    // again it is in the public browse feed, so nothing is hidden then.
+    return applications.map((application) => {
+      const { serviceRequest } = application;
+      const stillInvolved = ['PENDING', 'ACCEPTED'].includes(application.status);
+      if (stillInvolved || serviceRequest.status === 'OPEN') {
+        return application;
+      }
+      return {
+        ...application,
+        serviceRequest: {
+          ...serviceRequest,
+          location: '',
+          latitude: null,
+          longitude: null,
+          assignedHandymanId: null,
+        },
+      };
+    });
   }
 
   // Bug #11: ApplicationStatus.WITHDRAWN existed but nothing could ever set

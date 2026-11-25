@@ -291,8 +291,43 @@ describe('HandymanService', () => {
 
       const result = await service.getApplications(userId);
 
-      expect(result).toBe(applications);
+      expect(result).toEqual(applications);
       expect(result.map((a) => a.serviceRequest.status)).toEqual(['ASSIGNED', 'OPEN']);
+    });
+
+    it('getApplications hides location and the winner once the job went to someone else', async () => {
+      const request = (status: string) => ({
+        id: 'req',
+        status,
+        location: '12 Marina, Lagos',
+        latitude: 6.5,
+        longitude: 3.4,
+        assignedHandymanId: 'rival-profile',
+      });
+      const applications = [
+        { id: 'rejected-assigned', status: 'REJECTED', serviceRequest: request('ASSIGNED') },
+        { id: 'withdrawn-done', status: 'WITHDRAWN', serviceRequest: request('COMPLETED') },
+        { id: 'rejected-reopened', status: 'REJECTED', serviceRequest: request('OPEN') },
+        { id: 'pending-open', status: 'PENDING', serviceRequest: request('OPEN') },
+        { id: 'accepted', status: 'ACCEPTED', serviceRequest: request('ASSIGNED') },
+      ];
+      mockProfileRepo.ensureByUserId.mockResolvedValue(defaultProfile);
+      mockApplicationRepo.findByHandymanProfileId.mockResolvedValue(applications);
+
+      const [a, b, c, d, e] = await service.getApplications(userId);
+
+      for (const hidden of [a, b]) {
+        expect(hidden.serviceRequest).toMatchObject({
+          location: '',
+          latitude: null,
+          longitude: null,
+          assignedHandymanId: null,
+        });
+      }
+      for (const visible of [c, d, e]) {
+        expect(visible.serviceRequest.location).toBe('12 Marina, Lagos');
+      }
+      expect(e.serviceRequest.assignedHandymanId).toBe('rival-profile');
     });
 
     it('getServiceRequests returns an empty page instead of 404', async () => {
