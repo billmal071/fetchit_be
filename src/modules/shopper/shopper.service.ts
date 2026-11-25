@@ -1,6 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ShopperAccountState } from '@prisma/client';
 import {
+  APPLICATION_LOCKED_STATES,
+  ApplicationLockedError,
+  PROFILE_EDIT_BLOCKED_STATES,
+  PROFILE_FROZEN_STATES,
+  ProfileEditBlockedError,
+  applicationLockedMessage,
   SHOPPER_PROFILE_REPOSITORY,
   SHOPPING_REFERENCE_REPOSITORY,
   IShopperProfileRepository,
@@ -21,19 +27,6 @@ import {
   ShoppingLocationResponseDto,
   UpdateShopperProfileDto,
 } from './dto';
-
-/** States in which the application can no longer be (re)submitted. */
-const LOCKED_STATES: ShopperAccountState[] = [
-  ShopperAccountState.APPROVED,
-  ShopperAccountState.SUSPENDED,
-  ShopperAccountState.DEACTIVATED,
-];
-
-/** States in which a shopper cannot edit their own profile at all. */
-const FROZEN_STATES: ShopperAccountState[] = [
-  ShopperAccountState.SUSPENDED,
-  ShopperAccountState.DEACTIVATED,
-];
 
 @Injectable()
 export class ShopperService {
@@ -75,17 +68,24 @@ export class ShopperService {
   ): Promise<ShopperProfileResponseDto> {
     const profile = await this.profiles.ensureByUserId(userId);
 
-    if (LOCKED_STATES.includes(profile.accountState)) {
-      throw new ConflictException(
-        `This account is ${profile.accountState.toLowerCase().replace(/_/g, ' ')} and can no longer submit an application`,
-      );
+    if (APPLICATION_LOCKED_STATES.includes(profile.accountState)) {
+      throw new ConflictException(applicationLockedMessage(profile.accountState));
     }
 
     await this.assertReferences(dto);
     assertAvailability(dto.availability);
 
     const { phone, ...input } = dto;
-    return toProfile(await this.profiles.submitApplication(profile.id, userId, input, phone));
+    try {
+      return toProfile(await this.profiles.submitApplication(profile.id, userId, input, phone));
+    } catch (error) {
+      // The precheck above read the state before the repository's lock; this is
+      // the same rule re-checked under it.
+      if (error instanceof ApplicationLockedError) {
+        throw new ConflictException(error.message);
+      }
+      throw error;
+    }
   }
 
   async updateProfile(
@@ -94,14 +94,22 @@ export class ShopperService {
   ): Promise<ShopperProfileResponseDto> {
     const profile = await this.profiles.ensureByUserId(userId);
 
-    if (FROZEN_STATES.includes(profile.accountState)) {
-      throw new ForbiddenException('This account is not allowed to edit its profile');
+    if (PROFILE_EDIT_BLOCKED_STATES.includes(profile.accountState)) {
+      throw editBlocked(profile.accountState);
     }
 
     await this.assertReferences(dto);
     assertAvailability(dto.availability);
 
-    return toProfile(await this.profiles.update(profile.id, dto));
+    try {
+      return toProfile(await this.profiles.update(profile.id, dto));
+    } catch (error) {
+      // Same rule, re-checked under the repository's row lock.
+      if (error instanceof ProfileEditBlockedError) {
+        throw editBlocked(error.accountState);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -180,4 +188,11 @@ function assertAvailability(
       throw new BadRequestException(`${slot.weekday}: startTime must be before endTime`);
     }
   }
+}
+
+/** Frozen accounts get 403; an application under review gets 409 (it can be edited again once sent back). */
+function editBlocked(state: ShopperAccountState): ForbiddenException | ConflictException {
+  return PROFILE_FROZEN_STATES.includes(state)
+    ? new ForbiddenException('This account is not allowed to edit its profile')
+    : new ConflictException(applicationLockedMessage(state));
 }
