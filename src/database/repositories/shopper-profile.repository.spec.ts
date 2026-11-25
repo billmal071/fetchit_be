@@ -1,5 +1,5 @@
 import { ShopperAccountState } from '@prisma/client';
-import { ShopperProfileRepository } from './shopper-profile.repository';
+import { ShopperProfileRepository, nextSubmissionTime } from './shopper-profile.repository';
 import {
   ApplicationLockedError,
   ProfileEditBlockedError,
@@ -179,6 +179,36 @@ describe('ShopperProfileRepository', () => {
         expect(calls.indexOf('profile.readState')).toBe(1);
         expect(calls).toContain('profile.update');
       });
+    });
+  });
+
+  /**
+   * Review decisions are bound to submittedAt, so two submissions of one
+   * profile must never share a value, even if the clock repeats or steps back.
+   */
+  describe('nextSubmissionTime', () => {
+    const at = (iso: string): Date => new Date(iso);
+
+    it('uses the clock for a first submission', () => {
+      const now = at('2026-11-20T10:00:00.000Z');
+      expect(nextSubmissionTime(null, now)).toEqual(now);
+    });
+
+    it('uses the clock when it is after the previous submission', () => {
+      const now = at('2026-11-20T10:00:00.001Z');
+      expect(nextSubmissionTime(at('2026-11-20T10:00:00.000Z'), now)).toEqual(now);
+    });
+
+    it('moves one millisecond past a previous submission at the same instant', () => {
+      const same = at('2026-11-20T10:00:00.000Z');
+      expect(nextSubmissionTime(same, same)).toEqual(at('2026-11-20T10:00:00.001Z'));
+    });
+
+    it('moves past a previous submission when the clock stepped back', () => {
+      const previous = at('2026-11-20T10:00:05.000Z');
+      expect(nextSubmissionTime(previous, at('2026-11-20T10:00:01.000Z'))).toEqual(
+        at('2026-11-20T10:00:05.001Z'),
+      );
     });
   });
 });
