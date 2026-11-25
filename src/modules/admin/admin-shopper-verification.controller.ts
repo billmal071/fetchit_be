@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Patch, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { AdminShopperVerificationService } from './admin-shopper-verification.service';
-import { RejectShopperDto, ShopperApplicationQueryDto } from './dto';
+import { ApproveShopperDto, RejectShopperDto, ShopperApplicationQueryDto } from './dto';
 import { Roles } from '@common/decorators/roles.decorator';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import { ApiErrorResponses, ApiPaginatedResponse, ApiSuccessResponse } from '@/common/decorators';
@@ -49,6 +49,8 @@ export class AdminShopperVerificationController {
     summary: 'Approve a shopper application',
     description:
       'VERIFICATION_PENDING → APPROVED. Only a pending application can be approved (400 otherwise). ' +
+      'Send the `submittedAt` you loaded: if the shopper resubmitted since, the approval is refused with 409 ' +
+      'and the application must be reviewed again. ' +
       'This is what lets the shopper go online and see the request feed.',
   })
   @ApiParam({ name: 'id', description: 'Shopper profile UUID' })
@@ -56,10 +58,11 @@ export class AdminShopperVerificationController {
   @ApiErrorResponses()
   async approve(
     @Param('id') id: string,
+    @Body() dto: ApproveShopperDto,
     @CurrentUser() user: IRequestUser,
   ): Promise<{ data: ShopperApplicationResponseDto; message: string }> {
     return {
-      data: await this.service.approve(id, user.id),
+      data: await this.service.approve(id, user.id, dto),
       message: SUCCESS_MESSAGES.SHOPPER_APPROVED,
     };
   }
@@ -69,7 +72,8 @@ export class AdminShopperVerificationController {
     summary: 'Send a shopper application back for an update',
     description:
       'VERIFICATION_PENDING → VERIFICATION_REQUIRES_UPDATE, with a reason the shopper sees. ' +
-      'The shopper can resubmit. Only a pending application can be sent back (400 otherwise).',
+      'The shopper can resubmit. Only a pending application can be sent back (400 otherwise). ' +
+      'Send the `submittedAt` you loaded: if the shopper resubmitted since, this is refused with 409.',
   })
   @ApiParam({ name: 'id', description: 'Shopper profile UUID' })
   @ApiSuccessResponse(ShopperApplicationResponseDto)

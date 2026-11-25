@@ -1,8 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { ApproveShopperDto } from './approve-shopper.dto';
 
-export class RejectShopperDto {
+export class RejectShopperDto extends ApproveShopperDto {
   @ApiProperty({
     description: 'What the shopper needs to fix. Shown to them; they can then resubmit.',
     example: 'Please add at least one market you know well.',

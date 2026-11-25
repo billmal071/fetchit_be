@@ -125,9 +125,10 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
     to: ShopperAccountState,
     reviewerId: string,
     rejectionReason: string | null,
+    expectedSubmittedAt: Date,
   ): Promise<boolean> {
     const { count } = await this.prisma.shopperProfile.updateMany({
-      where: { id, accountState: from },
+      where: { id, accountState: from, submittedAt: expectedSubmittedAt },
       data: {
         accountState: to,
         reviewedById: reviewerId,
