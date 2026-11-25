@@ -1,7 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { ServiceRequestApplication, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
-import { IServiceRequestApplicationRepository } from './interfaces';
+import {
+  IServiceRequestApplicationRepository,
+  ApplicationWithServiceRequest,
+  HANDYMAN_APPLICATION_INCLUDE,
+} from './interfaces';
 
 @Injectable()
 export class ServiceRequestApplicationRepository implements IServiceRequestApplicationRepository {
@@ -25,9 +29,12 @@ export class ServiceRequestApplicationRepository implements IServiceRequestAppli
     });
   }
 
-  async findByHandymanProfileId(handymanProfileId: string): Promise<ServiceRequestApplication[]> {
+  async findByHandymanProfileId(
+    handymanProfileId: string,
+  ): Promise<ApplicationWithServiceRequest[]> {
     return this.prisma.serviceRequestApplication.findMany({
       where: { handymanProfileId },
+      include: HANDYMAN_APPLICATION_INCLUDE,
     });
   }
 

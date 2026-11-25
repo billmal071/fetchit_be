@@ -273,6 +273,28 @@ describe('HandymanService', () => {
       expect(result).toEqual([]);
     });
 
+    it('getApplications returns applications with their service request attached', async () => {
+      const applications = [
+        {
+          id: 'app-1',
+          status: 'ACCEPTED',
+          serviceRequest: {
+            id: 'req-1',
+            status: 'ASSIGNED',
+            customer: { id: 'c1', username: 'cust', avatar: null },
+          },
+        },
+        { id: 'app-2', status: 'REJECTED', serviceRequest: { id: 'req-2', status: 'OPEN' } },
+      ];
+      mockProfileRepo.ensureByUserId.mockResolvedValue(defaultProfile);
+      mockApplicationRepo.findByHandymanProfileId.mockResolvedValue(applications);
+
+      const result = await service.getApplications(userId);
+
+      expect(result).toBe(applications);
+      expect(result.map((a) => a.serviceRequest.status)).toEqual(['ASSIGNED', 'OPEN']);
+    });
+
     it('getServiceRequests returns an empty page instead of 404', async () => {
       mockProfileRepo.ensureByUserId.mockResolvedValue(defaultProfile);
       mockPrisma.serviceRequest.findMany.mockResolvedValue([]);

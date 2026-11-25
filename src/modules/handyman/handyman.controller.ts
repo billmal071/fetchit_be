@@ -22,6 +22,7 @@ import {
 import { UserRole } from '@prisma/client';
 import type { HandymanProfile, ServiceRequest, ServiceRequestApplication } from '@prisma/client';
 import type { IDocumentWithSignedUrl } from '@common/interfaces';
+import type { ApplicationWithServiceRequest } from '@/database/repositories';
 import { HandymanService } from './handyman.service';
 import {
   CompleteProfileDto,
@@ -31,6 +32,7 @@ import {
   HandymanServiceRequestQueryDto,
   HandymanProfileResponseDto,
   HandymanDocumentResponseDto,
+  HandymanApplicationResponseDto,
 } from './dto';
 import { Roles } from '@common/decorators/roles.decorator';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
@@ -235,13 +237,14 @@ export class HandymanController {
   @Get('applications')
   @ApiOperation({
     summary: 'Get all applications by this handyman',
-    description: 'List all your applications to service requests.',
+    description:
+      'List all your applications to service requests. Each application includes its service request (status, category, location, budget, restricted customer info).',
   })
-  @ApiSuccessResponse(ApplicationResponseDto, true)
+  @ApiSuccessResponse(HandymanApplicationResponseDto, true)
   @ApiErrorResponses()
   async getApplications(
     @CurrentUser() user: IRequestUser,
-  ): Promise<{ data: ServiceRequestApplication[] }> {
+  ): Promise<{ data: ApplicationWithServiceRequest[] }> {
     const data = await this.handymanService.getApplications(user.id);
     return { data };
   }

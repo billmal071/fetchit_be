@@ -22,6 +22,7 @@ import {
   IHandymanDocumentRepository,
   IServiceRequestRepository,
   IServiceRequestApplicationRepository,
+  ApplicationWithServiceRequest,
 } from '@/database/repositories';
 import { PrismaService } from '@/database/prisma.service';
 import { EVENTS, CACHE_TTL } from '@common/constants';
@@ -572,7 +573,7 @@ export class HandymanService {
     });
   }
 
-  async getApplications(userId: string): Promise<ServiceRequestApplication[]> {
+  async getApplications(userId: string): Promise<ApplicationWithServiceRequest[]> {
     // Read endpoint: no profile yet means no applications — return an empty
     // list rather than 404.
     const profile = await this.profileRepo.ensureByUserId(userId);
