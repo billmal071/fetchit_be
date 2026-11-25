@@ -2,11 +2,23 @@ import { Injectable } from '@nestjs/common';
 import { Prisma, ShopperAccountState } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import {
+  APPLICATION_LOCKED_STATES,
+  ApplicationLockedError,
+  PROFILE_EDIT_BLOCKED_STATES,
+  ProfileEditBlockedError,
   IShopperProfileInput,
   IShopperProfileRepository,
+  ShopperApplication,
   ShopperProfileWithDetails,
+  shopperApplicationInclude,
   shopperProfileInclude,
 } from './interfaces';
+
+/** `now`, but strictly after the previous submission time (millisecond precision). */
+export function nextSubmissionTime(previous: Date | null, now: Date = new Date()): Date {
+  if (!previous || now.getTime() > previous.getTime()) return now;
+  return new Date(previous.getTime() + 1);
+}
 
 @Injectable()
 export class ShopperProfileRepository implements IShopperProfileRepository {
@@ -44,6 +56,10 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
   async update(id: string, input: IShopperProfileInput): Promise<ShopperProfileWithDetails> {
     return this.prisma.$transaction(async (tx) => {
       await this.lockProfile(tx, id);
+      const state = await this.stateUnderLock(tx, id);
+      if (PROFILE_EDIT_BLOCKED_STATES.includes(state)) {
+        throw new ProfileEditBlockedError(state);
+      }
       return this.write(tx, id, input, {});
     });
   }
@@ -56,12 +72,21 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
   ): Promise<ShopperProfileWithDetails> {
     return this.prisma.$transaction(async (tx) => {
       await this.lockProfile(tx, id);
+      // The caller's earlier read may be stale: an admin can approve between it
+      // and this lock. The lock serialises us with that write, so this read is final.
+      const { accountState: state, submittedAt: previous } = await this.submissionUnderLock(tx, id);
+      if (APPLICATION_LOCKED_STATES.includes(state)) {
+        throw new ApplicationLockedError(state);
+      }
       if (phone !== undefined) {
         await tx.user.update({ where: { id: userId }, data: { phone } });
       }
       return this.write(tx, id, input, {
         accountState: ShopperAccountState.VERIFICATION_PENDING,
-        submittedAt: new Date(),
+        // Review decisions are bound to this value, so it must differ from every
+        // earlier submission of this profile even if the clock repeats a
+        // millisecond or steps back.
+        submittedAt: nextSubmissionTime(previous),
         rejectionReason: null,
       });
     });
@@ -73,6 +98,54 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
       data: { isOnline },
       include: shopperProfileInclude,
     });
+  }
+
+  async findApplications(
+    state: ShopperAccountState,
+    skip: number,
+    take: number,
+  ): Promise<{ rows: ShopperApplication[]; total: number }> {
+    const where = { accountState: state };
+    const [rows, total] = await Promise.all([
+      this.prisma.shopperProfile.findMany({
+        where,
+        include: shopperApplicationInclude,
+        // Oldest submission first: the queue is worked in the order it arrived.
+        // `id` breaks ties so a page boundary never repeats or skips a row.
+        orderBy: [{ submittedAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        skip,
+        take,
+      }),
+      this.prisma.shopperProfile.count({ where }),
+    ]);
+    return { rows, total };
+  }
+
+  async findApplicationById(id: string): Promise<ShopperApplication | null> {
+    return this.prisma.shopperProfile.findUnique({
+      where: { id },
+      include: shopperApplicationInclude,
+    });
+  }
+
+  async transitionState(
+    id: string,
+    from: ShopperAccountState,
+    to: ShopperAccountState,
+    reviewerId: string,
+    rejectionReason: string | null,
+    expectedSubmittedAt: Date,
+  ): Promise<boolean> {
+    const { count } = await this.prisma.shopperProfile.updateMany({
+      where: { id, accountState: from, submittedAt: expectedSubmittedAt },
+      data: {
+        accountState: to,
+        reviewedById: reviewerId,
+        reviewedAt: new Date(),
+        rejectionReason,
+      },
+    });
+    return count === 1;
   }
 
   /**
@@ -87,6 +160,26 @@ export class ShopperProfileRepository implements IShopperProfileRepository {
    */
   private async lockProfile(tx: Prisma.TransactionClient, id: string): Promise<void> {
     await tx.$queryRaw`SELECT id FROM shopper_profiles WHERE id = ${id} FOR UPDATE`;
+  }
+
+  /** Current state; only authoritative once `lockProfile` has been taken in this transaction. */
+  private async stateUnderLock(
+    tx: Prisma.TransactionClient,
+    id: string,
+  ): Promise<ShopperAccountState> {
+    return (await this.submissionUnderLock(tx, id)).accountState;
+  }
+
+  /** State and last submission time, read under the lock. */
+  private async submissionUnderLock(
+    tx: Prisma.TransactionClient,
+    id: string,
+  ): Promise<{ accountState: ShopperAccountState; submittedAt: Date | null }> {
+    const { accountState, submittedAt } = await tx.shopperProfile.findUniqueOrThrow({
+      where: { id },
+      select: { accountState: true, submittedAt: true },
+    });
+    return { accountState, submittedAt: submittedAt ?? null };
   }
 
   /** Profile row + every relation set that was given, inside a transaction that holds the lock. */

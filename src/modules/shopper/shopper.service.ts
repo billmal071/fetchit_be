@@ -1,20 +1,24 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ShopperAccountState } from '@prisma/client';
-import type { ExtraService, ShoppingCategory, ShoppingLocation } from '@prisma/client';
 import {
+  APPLICATION_LOCKED_STATES,
+  ApplicationLockedError,
+  PROFILE_EDIT_BLOCKED_STATES,
+  PROFILE_FROZEN_STATES,
+  ProfileEditBlockedError,
+  applicationLockedMessage,
   SHOPPER_PROFILE_REPOSITORY,
   SHOPPING_REFERENCE_REPOSITORY,
   IShopperProfileRepository,
   IShoppingReferenceRepository,
-  ShopperProfileWithDetails,
 } from '@/database/repositories';
 import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
 } from '@common/exceptions/base.exception';
+import { toCategory, toLocation, toProfile, toService } from './shopper.mapper';
 import {
-  AvailabilityResponseDto,
   ExtraServiceResponseDto,
   OnboardShopperDto,
   SetAvailabilityDto,
@@ -23,25 +27,6 @@ import {
   ShoppingLocationResponseDto,
   UpdateShopperProfileDto,
 } from './dto';
-
-/** States in which the application can no longer be (re)submitted. */
-const LOCKED_STATES: ShopperAccountState[] = [
-  ShopperAccountState.APPROVED,
-  ShopperAccountState.SUSPENDED,
-  ShopperAccountState.DEACTIVATED,
-];
-
-/** States in which a shopper cannot edit their own profile at all. */
-const FROZEN_STATES: ShopperAccountState[] = [
-  ShopperAccountState.SUSPENDED,
-  ShopperAccountState.DEACTIVATED,
-];
-
-/**
- * The contract omits a field to mean "not applicable", so nulls are dropped
- * rather than sent: the UI treats a missing field differently from a real 0.
- */
-const orUndefined = <T>(value: T | null): T | undefined => (value === null ? undefined : value);
 
 @Injectable()
 export class ShopperService {
@@ -83,17 +68,24 @@ export class ShopperService {
   ): Promise<ShopperProfileResponseDto> {
     const profile = await this.profiles.ensureByUserId(userId);
 
-    if (LOCKED_STATES.includes(profile.accountState)) {
-      throw new ConflictException(
-        `This account is ${profile.accountState.toLowerCase().replace(/_/g, ' ')} and can no longer submit an application`,
-      );
+    if (APPLICATION_LOCKED_STATES.includes(profile.accountState)) {
+      throw new ConflictException(applicationLockedMessage(profile.accountState));
     }
 
     await this.assertReferences(dto);
     assertAvailability(dto.availability);
 
     const { phone, ...input } = dto;
-    return toProfile(await this.profiles.submitApplication(profile.id, userId, input, phone));
+    try {
+      return toProfile(await this.profiles.submitApplication(profile.id, userId, input, phone));
+    } catch (error) {
+      // The precheck above read the state before the repository's lock; this is
+      // the same rule re-checked under it.
+      if (error instanceof ApplicationLockedError) {
+        throw new ConflictException(error.message);
+      }
+      throw error;
+    }
   }
 
   async updateProfile(
@@ -102,14 +94,22 @@ export class ShopperService {
   ): Promise<ShopperProfileResponseDto> {
     const profile = await this.profiles.ensureByUserId(userId);
 
-    if (FROZEN_STATES.includes(profile.accountState)) {
-      throw new ForbiddenException('This account is not allowed to edit its profile');
+    if (PROFILE_EDIT_BLOCKED_STATES.includes(profile.accountState)) {
+      throw editBlocked(profile.accountState);
     }
 
     await this.assertReferences(dto);
     assertAvailability(dto.availability);
 
-    return toProfile(await this.profiles.update(profile.id, dto));
+    try {
+      return toProfile(await this.profiles.update(profile.id, dto));
+    } catch (error) {
+      // Same rule, re-checked under the repository's row lock.
+      if (error instanceof ProfileEditBlockedError) {
+        throw editBlocked(error.accountState);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -190,59 +190,9 @@ function assertAvailability(
   }
 }
 
-function toCategory(row: ShoppingCategory): ShoppingCategoryResponseDto {
-  return {
-    id: row.id,
-    name: row.name,
-    slug: row.slug,
-    icon: orUndefined(row.icon),
-  };
-}
-
-function toLocation(row: ShoppingLocation): ShoppingLocationResponseDto {
-  return {
-    id: row.id,
-    name: row.name,
-    city: orUndefined(row.city),
-    state: orUndefined(row.state),
-  };
-}
-
-function toService(row: ExtraService): ExtraServiceResponseDto {
-  return {
-    id: row.id,
-    name: row.name,
-    description: orUndefined(row.description),
-    fee: orUndefined(row.fee),
-  };
-}
-
-function toProfile(profile: ShopperProfileWithDetails): ShopperProfileResponseDto {
-  const availability: AvailabilityResponseDto[] = profile.availability.map((slot) => ({
-    weekday: slot.weekday,
-    startTime: orUndefined(slot.startTime),
-    endTime: orUndefined(slot.endTime),
-  }));
-
-  return {
-    id: profile.id,
-    userId: profile.userId,
-    accountState: profile.accountState,
-    displayName: orUndefined(profile.displayName),
-    bio: orUndefined(profile.bio),
-    yearsOfExperience: orUndefined(profile.yearsOfExperience),
-    avatarUrl: orUndefined(profile.user.avatar),
-    isOnline: profile.isOnline,
-    categories: profile.categories.map((row) => toCategory(row.category)),
-    locations: profile.locations.map((row) => toLocation(row.location)),
-    services: profile.services.map((row) => toService(row.service)),
-    availability,
-    rating: profile.rating === null ? undefined : Number(profile.rating),
-    completedOrders: profile.completedOrders,
-    completionRate: profile.completionRate === null ? undefined : Number(profile.completionRate),
-    payoutAccountVerified: profile.payoutAccountVerified,
-    rejectionReason: orUndefined(profile.rejectionReason),
-    createdAt: profile.createdAt.toISOString(),
-    updatedAt: profile.updatedAt.toISOString(),
-  };
+/** Frozen accounts get 403; an application under review gets 409 (it can be edited again once sent back). */
+function editBlocked(state: ShopperAccountState): ForbiddenException | ConflictException {
+  return PROFILE_FROZEN_STATES.includes(state)
+    ? new ForbiddenException('This account is not allowed to edit its profile')
+    : new ConflictException(applicationLockedMessage(state));
 }
