@@ -28,8 +28,9 @@ export class ShopperController {
   @ApiOperation({
     summary: 'Submit the shopper application',
     description:
-      'Moves the account to VERIFICATION_PENDING. Can be resubmitted until the account is approved; ' +
-      'returns 409 once it is approved, suspended or deactivated. Reference data is sent as ids from ' +
+      'Moves the account to VERIFICATION_PENDING. Can be submitted from REGISTERED, ONBOARDING or ' +
+      'VERIFICATION_REQUIRES_UPDATE; returns 409 while it is under review (VERIFICATION_PENDING) and once it is ' +
+      'approved, suspended or deactivated. Reference data is sent as ids from ' +
       'GET /shopper/categories, /locations and /services.',
   })
   @ApiCreatedSuccessResponse(ShopperProfileResponseDto)
@@ -58,7 +59,7 @@ export class ShopperController {
   @ApiOperation({
     summary: 'Update the shopper profile',
     description:
-      'Partial update. A relation set that is sent replaces the stored one. Suspended or deactivated accounts get 403.',
+      'Partial update. A relation set that is sent replaces the stored one. Suspended or deactivated accounts get 403; an application under review (VERIFICATION_PENDING) gets 409.',
   })
   @ApiSuccessResponse(ShopperProfileResponseDto)
   @ApiErrorResponses()
