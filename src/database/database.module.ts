@@ -15,6 +15,9 @@ import {
   ShoppingReferenceRepository,
   PushSubscriptionRepository,
   NotificationRepository,
+  ShoppingConfigRepository,
+  ShoppingRequestRepository,
+  ShoppingOfferRepository,
   USER_REPOSITORY,
   WAITLIST_REPOSITORY,
   PASSWORD_RESET_REPOSITORY,
@@ -29,6 +32,9 @@ import {
   SHOPPING_REFERENCE_REPOSITORY,
   PUSH_SUBSCRIPTION_REPOSITORY,
   NOTIFICATION_REPOSITORY,
+  SHOPPING_CONFIG_REPOSITORY,
+  SHOPPING_REQUEST_REPOSITORY,
+  SHOPPING_OFFER_REPOSITORY,
 } from './repositories';
 
 @Global()
@@ -91,6 +97,18 @@ import {
       provide: NOTIFICATION_REPOSITORY,
       useClass: NotificationRepository,
     },
+    {
+      provide: SHOPPING_CONFIG_REPOSITORY,
+      useClass: ShoppingConfigRepository,
+    },
+    {
+      provide: SHOPPING_REQUEST_REPOSITORY,
+      useClass: ShoppingRequestRepository,
+    },
+    {
+      provide: SHOPPING_OFFER_REPOSITORY,
+      useClass: ShoppingOfferRepository,
+    },
   ],
   exports: [
     PrismaService,
@@ -108,6 +126,9 @@ import {
     SHOPPING_REFERENCE_REPOSITORY,
     PUSH_SUBSCRIPTION_REPOSITORY,
     NOTIFICATION_REPOSITORY,
+    SHOPPING_CONFIG_REPOSITORY,
+    SHOPPING_REQUEST_REPOSITORY,
+    SHOPPING_OFFER_REPOSITORY,
   ],
 })
 export class DatabaseModule {}

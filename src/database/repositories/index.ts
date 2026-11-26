@@ -16,3 +16,6 @@ export { ShopperProfileRepository } from './shopper-profile.repository';
 export { ShoppingReferenceRepository } from './shopping-reference.repository';
 export { PushSubscriptionRepository } from './push-subscription.repository';
 export { NotificationRepository } from './notification.repository';
+export { ShoppingConfigRepository } from './shopping-config.repository';
+export { ShoppingRequestRepository } from './shopping-request.repository';
+export { ShoppingOfferRepository } from './shopping-offer.repository';

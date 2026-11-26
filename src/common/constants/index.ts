@@ -77,6 +77,10 @@ export const SUCCESS_MESSAGES = {
   HANDYMAN_REJECTED: 'Handyman rejected',
   SHOPPER_APPROVED: 'Shopper approved successfully',
   SHOPPER_REJECTED: 'Shopper application sent back for an update',
+  SHOPPING_REQUEST_CREATED: 'Shopping request created successfully',
+  SHOPPING_REQUEST_CANCELLED: 'Shopping request cancelled',
+  SHOPPING_OFFER_SUBMITTED: 'Offer submitted successfully',
+  SHOPPING_OFFER_WITHDRAWN: 'Offer withdrawn',
   CATEGORY_CREATED: 'Category created successfully',
   CATEGORY_UPDATED: 'Category updated successfully',
   CATEGORY_DELETED: 'Category deactivated successfully',
@@ -128,6 +132,9 @@ export const EVENTS = {
   // Shopper application review events
   SHOPPER_APPROVED: 'shopper.approved',
   SHOPPER_SENT_BACK: 'shopper.sent-back',
+
+  // Shopping request / offer events
+  SHOPPING_OFFER_SUBMITTED: 'shopping.offer.submitted',
 
   // Service request events
   SERVICE_REQUEST_CREATED: 'service-request.created',
