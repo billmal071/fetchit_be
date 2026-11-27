@@ -135,7 +135,15 @@ describe('ShoppingRequestRepository', () => {
       include: { _count: unknown };
     };
     expect(args.include._count).toEqual({
-      select: { offers: { where: { state: 'PENDING', expiresAt: { gt: NOW } } } },
+      select: {
+        offers: {
+          where: {
+            state: 'PENDING',
+            expiresAt: { gt: NOW },
+            shopperProfile: { accountState: 'APPROVED' },
+          },
+        },
+      },
     });
   });
 

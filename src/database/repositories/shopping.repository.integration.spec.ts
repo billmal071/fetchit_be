@@ -13,10 +13,13 @@ import { PrismaService } from '../prisma.service';
 import { ShoppingConfigRepository } from './shopping-config.repository';
 import { ShoppingOfferRepository } from './shopping-offer.repository';
 import { ShoppingRequestRepository } from './shopping-request.repository';
+import { ShopperOrderRepository } from './shopper-order.repository';
 import { ShopperProfileRepository } from './shopper-profile.repository';
 import { ShoppingReferenceRepository } from './shopping-reference.repository';
 import { ShoppingConfigService } from '../../modules/shopping-requests/shopping-config.service';
 import { ShoppingRequestsService } from '../../modules/shopping-requests/shopping-requests.service';
+import { ShopperOrdersService } from '../../modules/shopping-requests/shopper-orders.service';
+import { ShoppingOrdersService } from '../../modules/shopping-requests/shopping-orders.service';
 import { ShopperBiddingService } from '../../modules/shopping-requests/shopper-bidding.service';
 import { DuplicateActiveOfferError, OfferRequestClosedError } from './interfaces';
 
@@ -113,6 +116,8 @@ suite('shopping repositories (real Postgres)', () => {
   });
 
   afterAll(async () => {
+    // Orders keep their request, offer and users alive (no cascade): remove them first.
+    await db.shopperOrder.deleteMany({ where: { customerId: { in: userIds } } });
     await db.user.deleteMany({ where: { id: { in: userIds } } }); // cascades requests, items, offers, profiles
     await db.shoppingLocation.deleteMany({ where: { id: { in: [loc1, loc2] } } });
     await db.shoppingCategory.deleteMany({ where: { id: { in: [cat1, cat2] } } });
@@ -430,6 +435,508 @@ suite('shopping repositories (real Postgres)', () => {
       ).rejects.toMatchObject({ status: 409 });
       await expect(customerSvc.cancel(customerId, created.id)).rejects.toMatchObject({
         status: 409,
+      });
+    });
+  });
+
+  describe('orders: accepting an offer', () => {
+    const orderRepo = new ShopperOrderRepository(prisma);
+    const extraShoppers: string[] = [];
+
+    const shoppersNeeded = async (n: number): Promise<string[]> => {
+      while (extraShoppers.length < n) {
+        extraShoppers.push(await makeShopper(`os-${extraShoppers.length}`, loc1, cat1));
+      }
+      return extraShoppers.slice(0, n);
+    };
+
+    /** A request with one PENDING offer from each given shopper. */
+    const offered = async (shoppers: string[], deadlineOffsetMs = 30 * 60_000) => {
+      const { id: requestId } = await makeRequest(loc1, [cat1], deadlineOffsetMs);
+      const placed = [];
+      for (const [i, shopperId] of shoppers.entries()) {
+        placed.push(
+          await offers.submit({
+            requestId,
+            shopperProfileId: shopperId,
+            shopperFee: 1000 + i,
+            etaMinutes: 30,
+            financials: { shopperFee: 1000 + i, customerTotal: 12171 + i },
+          }),
+        );
+      }
+      return { requestId, offers: placed };
+    };
+    const accept = (requestId: string, offerId: string, by = customerId) =>
+      orderRepo.acceptOffer({ requestId, offerId, customerId: by });
+
+    it('creates one UNPAID order from the offer, rejects the other bids, and assigns the request', async () => {
+      const { requestId, offers: placed } = await offered([shopperA, shopperB]);
+      const [winning, losing] = placed;
+
+      const result = await accept(requestId, winning.id);
+      if (result.outcome !== 'accepted')
+        throw new Error(`expected accepted, got ${result.outcome}`);
+
+      expect(result.order).toMatchObject({
+        requestId,
+        offerId: winning.id,
+        customerId,
+        shopperProfileId: shopperA,
+        state: 'ASSIGNED',
+        shoppingLocationId: loc1,
+      });
+      expect(result.order.reference).toMatch(/^SO-[A-HJ-NP-Z2-9]{8}$/);
+      // Money is copied from the offer exactly as stored, not recomputed.
+      expect(result.order.financials).toEqual(winning.financials);
+      expect(result.order.items).toHaveLength(1);
+      expect(result.order.items[0]).toMatchObject({
+        name: 'Milk',
+        quantity: 2,
+        customerEstimatedPrice: 4500,
+        state: 'PENDING',
+        actualPurchasePrice: null,
+        approvedPrice: null,
+        finalPurchasePrice: null,
+      });
+      expect(result.rejected.map((r) => r.offerId)).toEqual([losing.id]);
+
+      const states = await db.shoppingOffer.findMany({
+        where: { requestId },
+        select: { id: true, state: true },
+      });
+      expect(Object.fromEntries(states.map((o) => [o.id, o.state]))).toEqual({
+        [winning.id]: 'ACCEPTED',
+        [losing.id]: 'REJECTED',
+      });
+      expect(
+        (await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } })).status,
+      ).toBe('ASSIGNED');
+      const events = await db.orderEvent.findMany({ where: { orderId: result.order.id } });
+      expect(events.map((e) => e.type)).toEqual(['OFFER_ACCEPTED']);
+    });
+
+    it('then refuses every further accept, and a cancel, with a state conflict', async () => {
+      const { requestId, offers: placed } = await offered([shopperA, shopperB]);
+      await accept(requestId, placed[0].id);
+
+      expect(await accept(requestId, placed[1].id)).toEqual({
+        outcome: 'request_not_open',
+        status: 'ASSIGNED',
+      });
+      // A retry of the winning accept is not a conflict: it returns the same order.
+      expect((await accept(requestId, placed[0].id)).outcome).toBe('already_accepted');
+      expect(await requests.cancel(requestId, customerId, new Date())).toEqual({
+        outcome: 'not_open',
+        status: 'ASSIGNED',
+      });
+      expect(await db.shopperOrder.count({ where: { requestId } })).toBe(1);
+    });
+
+    it('treats a request that is not the caller own, or an offer from another request, as not found', async () => {
+      const { requestId, offers: placed } = await offered([shopperA]);
+      const other = await offered([shopperB]);
+      expect(await accept(requestId, placed[0].id, shopperA)).toEqual({ outcome: 'not_found' });
+      expect(await accept(requestId, other.offers[0].id)).toEqual({ outcome: 'not_found' });
+      expect(await db.shopperOrder.count({ where: { requestId } })).toBe(0);
+    });
+
+    it('refuses a withdrawn offer and an offer past its deadline, creating nothing', async () => {
+      const { requestId, offers: placed } = await offered([shopperA]);
+      await offers.withdraw(placed[0].id, shopperA);
+      expect(await accept(requestId, placed[0].id)).toEqual({
+        outcome: 'offer_not_pending',
+        state: 'WITHDRAWN',
+      });
+
+      const late = await offered([shopperA], 300);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(await accept(late.requestId, late.offers[0].id)).toEqual({ outcome: 'offer_expired' });
+      expect(
+        await db.shopperOrder.count({ where: { requestId: { in: [requestId, late.requestId] } } }),
+      ).toBe(0);
+      expect(
+        (await db.shoppingRequest.findUniqueOrThrow({ where: { id: late.requestId } })).status,
+      ).toBe('OPEN');
+    });
+
+    it('yields exactly one order when 8 shoppers offers are accepted concurrently', async () => {
+      const shoppers = await shoppersNeeded(8);
+      const { requestId, offers: placed } = await offered(shoppers);
+
+      const results = await Promise.all(placed.map((o) => accept(requestId, o.id)));
+
+      expect(results.filter((r) => r.outcome === 'accepted')).toHaveLength(1);
+      expect(results.filter((r) => r.outcome === 'request_not_open')).toHaveLength(7);
+      expect(await db.shopperOrder.count({ where: { requestId } })).toBe(1);
+      expect(await db.shoppingOffer.count({ where: { requestId, state: 'ACCEPTED' } })).toBe(1);
+      expect(await db.shoppingOffer.count({ where: { requestId, state: 'REJECTED' } })).toBe(7);
+      expect(await db.shoppingOffer.count({ where: { requestId, state: 'PENDING' } })).toBe(0);
+      const winner = results.find((r) => r.outcome === 'accepted');
+      const order = await db.shopperOrder.findFirstOrThrow({ where: { requestId } });
+      expect(winner?.outcome === 'accepted' && winner.order.id).toBe(order.id);
+      expect(await db.orderEvent.count({ where: { orderId: order.id } })).toBe(1);
+    });
+
+    it('never leaves both an order and a cancelled request when accept races cancel', async () => {
+      for (let i = 0; i < 15; i++) {
+        const { requestId, offers: placed } = await offered([shopperA]);
+        const [acceptResult, cancelResult] = await Promise.all([
+          accept(requestId, placed[0].id),
+          requests.cancel(requestId, customerId, new Date()),
+        ]);
+        const request = await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } });
+        const orderCount = await db.shopperOrder.count({ where: { requestId } });
+        if (acceptResult.outcome === 'accepted') {
+          expect(cancelResult.outcome).toBe('not_open');
+          expect(request.status).toBe('ASSIGNED');
+          expect(orderCount).toBe(1);
+        } else {
+          expect(acceptResult.outcome).toBe('request_not_open');
+          expect(cancelResult.outcome).toBe('cancelled');
+          expect(request.status).toBe('CANCELLED');
+          expect(orderCount).toBe(0);
+          expect(await db.shoppingOffer.count({ where: { requestId, state: 'ACCEPTED' } })).toBe(0);
+        }
+      }
+    });
+
+    it('never accepts a withdrawn offer when accept races the shopper withdrawing it', async () => {
+      for (let i = 0; i < 15; i++) {
+        const { requestId, offers: placed } = await offered([shopperA]);
+        const [acceptResult, withdrawn] = await Promise.all([
+          accept(requestId, placed[0].id),
+          offers.withdraw(placed[0].id, shopperA),
+        ]);
+        const offer = await db.shoppingOffer.findUniqueOrThrow({ where: { id: placed[0].id } });
+        const orderCount = await db.shopperOrder.count({ where: { requestId } });
+        if (acceptResult.outcome === 'accepted') {
+          expect(withdrawn).toBe(false);
+          expect(offer.state).toBe('ACCEPTED');
+          expect(orderCount).toBe(1);
+        } else {
+          expect(acceptResult).toEqual({ outcome: 'offer_not_pending', state: 'WITHDRAWN' });
+          expect(offer.state).toBe('WITHDRAWN');
+          expect(orderCount).toBe(0);
+          expect(
+            (await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } })).status,
+          ).toBe('OPEN');
+        }
+      }
+    });
+
+    it('refuses an offer from a shopper suspended between the bid and the accept, changing nothing', async () => {
+      const [suspended] = await shoppersNeeded(1);
+      const { requestId, offers: placed } = await offered([suspended, shopperB]);
+      await db.shopperProfile.update({
+        where: { id: suspended },
+        data: { accountState: 'SUSPENDED' },
+      });
+      try {
+        expect(await accept(requestId, placed[0].id)).toEqual({ outcome: 'shopper_unavailable' });
+        expect(await db.shopperOrder.count({ where: { requestId } })).toBe(0);
+        expect(
+          (await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } })).status,
+        ).toBe('OPEN');
+        expect(await db.shoppingOffer.count({ where: { requestId, state: 'PENDING' } })).toBe(2);
+        // The customer's other offer is still acceptable.
+        expect((await accept(requestId, placed[1].id)).outcome).toBe('accepted');
+      } finally {
+        await db.shopperProfile.update({
+          where: { id: suspended },
+          data: { accountState: 'APPROVED' },
+        });
+      }
+    });
+
+    it('does not let a suspension race the accept: either it is accepted before, or refused after', async () => {
+      const [target] = await shoppersNeeded(1);
+      for (let i = 0; i < 10; i++) {
+        const { requestId, offers: placed } = await offered([target]);
+        const [result] = await Promise.all([
+          accept(requestId, placed[0].id),
+          db.shopperProfile.update({ where: { id: target }, data: { accountState: 'SUSPENDED' } }),
+        ]);
+        const orders_ = await db.shopperOrder.count({ where: { requestId } });
+        expect(['accepted', 'shopper_unavailable']).toContain(result.outcome);
+        expect(orders_).toBe(result.outcome === 'accepted' ? 1 : 0);
+        await db.shopperProfile.update({
+          where: { id: target },
+          data: { accountState: 'APPROVED' },
+        });
+      }
+    });
+
+    it('hides PENDING offers from non-APPROVED shoppers from the customer, and does not count them', async () => {
+      const [target] = await shoppersNeeded(1);
+      const { requestId, offers: placed } = await offered([target, shopperB]);
+      await db.shopperProfile.update({
+        where: { id: target },
+        data: { accountState: 'SUSPENDED' },
+      });
+      try {
+        expect((await offers.listForRequest(requestId)).map((o) => o.id)).toEqual([placed[1].id]);
+        const row = (await requests.listForCustomer(customerId, 0, 100)).rows.find(
+          (r) => r.id === requestId,
+        );
+        expect(row?._count.offers).toBe(1);
+      } finally {
+        await db.shopperProfile.update({
+          where: { id: target },
+          data: { accountState: 'APPROVED' },
+        });
+      }
+    });
+
+    it('returns the existing order when the same offer is accepted again, and refuses a different one', async () => {
+      const { requestId, offers: placed } = await offered([shopperA, shopperB]);
+      const first = await accept(requestId, placed[0].id);
+      if (first.outcome !== 'accepted') throw new Error('expected accepted');
+
+      const again = await accept(requestId, placed[0].id);
+      expect(again.outcome).toBe('already_accepted');
+      expect(again.outcome === 'already_accepted' && again.order.id).toBe(first.order.id);
+      expect(await accept(requestId, placed[1].id)).toEqual({
+        outcome: 'request_not_open',
+        status: 'ASSIGNED',
+      });
+      expect(await accept(requestId, placed[0].id, shopperA)).toEqual({ outcome: 'not_found' }); // another user
+      expect(await db.shopperOrder.count({ where: { requestId } })).toBe(1);
+      expect(await db.orderEvent.count({ where: { orderId: first.order.id } })).toBe(1);
+    });
+
+    it('lets concurrent retries of the winning accept all succeed with one order', async () => {
+      const { requestId, offers: placed } = await offered([shopperA]);
+      const results = await Promise.all(
+        Array.from({ length: 6 }, () => accept(requestId, placed[0].id)),
+      );
+      expect(results.filter((r) => r.outcome === 'accepted')).toHaveLength(1);
+      expect(results.filter((r) => r.outcome === 'already_accepted')).toHaveLength(5);
+      expect(await db.shopperOrder.count({ where: { requestId } })).toBe(1);
+    });
+
+    it('a non-owner locks nothing: their accept returns at once while the owner row lock is held', async () => {
+      const { requestId, offers: placed } = await offered([shopperA]);
+      const holder = db.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT id FROM shopping_requests WHERE id = ${requestId} FOR UPDATE`;
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+        },
+        { timeout: 5000 },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const started = Date.now();
+      const result = await accept(requestId, placed[0].id, shopperA); // not the owner
+      const elapsed = Date.now() - started;
+      await holder;
+      expect(result).toEqual({ outcome: 'not_found' });
+      expect(elapsed).toBeLessThan(800);
+    });
+
+    it('allows only one order per request and per offer at the database level', async () => {
+      const { requestId, offers: placed } = await offered([shopperA]);
+      const result = await accept(requestId, placed[0].id);
+      if (result.outcome !== 'accepted') throw new Error('expected accepted');
+      await expect(
+        db.shopperOrder.create({
+          data: {
+            reference: 'SO-DUPLICAT',
+            requestId,
+            offerId: placed[0].id,
+            customerId,
+            shopperProfileId: shopperA,
+            shoppingLocationId: loc1,
+            financials: {},
+          },
+        }),
+      ).rejects.toMatchObject({ code: 'P2002' });
+    });
+
+    describe('shopper transitions', () => {
+      const newOrder = async (shopperId = shopperA): Promise<string> => {
+        const { requestId, offers: placed } = await offered([shopperId]);
+        const result = await accept(requestId, placed[0].id);
+        if (result.outcome !== 'accepted') throw new Error('expected accepted');
+        return result.order.id;
+      };
+      const move = (id: string, by: string, from: 'ASSIGNED' | 'SHOPPER_ACCEPTED') =>
+        orderRepo.transition({
+          id,
+          shopperProfileId: by,
+          actorId: 'actor',
+          from,
+          to: from === 'ASSIGNED' ? 'SHOPPER_ACCEPTED' : 'SHOPPING_STARTED',
+          eventType: from === 'ASSIGNED' ? 'SHOPPER_ACCEPTED' : 'SHOPPING_STARTED',
+          stamp: from === 'ASSIGNED' ? 'shopperAcceptedAt' : 'shoppingStartedAt',
+        });
+
+      it('lets exactly one of 8 concurrent accepts win and records one event', async () => {
+        const id = await newOrder();
+        const results = await Promise.all(
+          Array.from({ length: 8 }, () => move(id, shopperA, 'ASSIGNED')),
+        );
+
+        expect(results.filter((r) => r.outcome === 'transitioned')).toHaveLength(1);
+        expect(results.filter((r) => r.outcome === 'conflict')).toHaveLength(7);
+        const types = (await orderRepo.listEvents(id, 'asc')).map((e) => e.type);
+        expect(types).toEqual(['OFFER_ACCEPTED', 'SHOPPER_ACCEPTED']);
+        expect(
+          (await db.shopperOrder.findUniqueOrThrow({ where: { id } })).shopperAcceptedAt,
+        ).not.toBeNull();
+      });
+
+      it('refuses start before accept, then lets exactly one concurrent start win', async () => {
+        const id = await newOrder();
+        expect(await move(id, shopperA, 'SHOPPER_ACCEPTED')).toEqual({
+          outcome: 'conflict',
+          state: 'ASSIGNED',
+        });
+        await move(id, shopperA, 'ASSIGNED');
+
+        const results = await Promise.all(
+          Array.from({ length: 8 }, () => move(id, shopperA, 'SHOPPER_ACCEPTED')),
+        );
+        expect(results.filter((r) => r.outcome === 'transitioned')).toHaveLength(1);
+        expect((await db.shopperOrder.findUniqueOrThrow({ where: { id } })).state).toBe(
+          'SHOPPING_STARTED',
+        );
+        expect((await orderRepo.listEvents(id, 'desc')).map((e) => e.type)).toEqual([
+          'SHOPPING_STARTED',
+          'SHOPPER_ACCEPTED',
+          'OFFER_ACCEPTED',
+        ]);
+      });
+
+      it('treats another shopper order as not found and changes nothing', async () => {
+        const id = await newOrder(shopperA);
+        expect(await move(id, shopperB, 'ASSIGNED')).toEqual({ outcome: 'not_found' });
+        expect(await move('00000000-0000-4000-8000-000000000000', shopperA, 'ASSIGNED')).toEqual({
+          outcome: 'not_found',
+        });
+        expect((await db.shopperOrder.findUniqueOrThrow({ where: { id } })).state).toBe('ASSIGNED');
+        expect(await db.orderEvent.count({ where: { orderId: id } })).toBe(1);
+      });
+    });
+
+    it('lists orders by filter, scoped to the customer and to the shopper', async () => {
+      const { requestId, offers: placed } = await offered([shopperA]);
+      const result = await accept(requestId, placed[0].id);
+      if (result.outcome !== 'accepted') throw new Error('expected accepted');
+
+      const ids = async (filter?: 'active' | 'completed' | 'cancelled') =>
+        (await orderRepo.listForCustomer(customerId, 0, 100, filter)).rows.map((o) => o.id);
+      expect(await ids('active')).toContain(result.order.id);
+      expect(await ids()).toContain(result.order.id);
+      expect(await ids('completed')).not.toContain(result.order.id);
+      expect(await ids('cancelled')).not.toContain(result.order.id);
+
+      await db.shopperOrder.update({
+        where: { id: result.order.id },
+        data: { state: 'COMPLETED' },
+      });
+      expect(await ids('completed')).toContain(result.order.id);
+      expect(await ids('active')).not.toContain(result.order.id);
+
+      expect((await orderRepo.listForCustomer(shopperA, 0, 10)).total).toBe(0);
+      expect(
+        (await orderRepo.listForShopper(shopperA, 0, 100, 'completed')).rows.map((o) => o.id),
+      ).toContain(result.order.id);
+      expect(
+        (await orderRepo.listForShopper(shopperB, 0, 100)).rows.map((o) => o.id),
+      ).not.toContain(result.order.id);
+    });
+
+    it('end to end through the services: privacy, financials, events, and the cancel conflict', async () => {
+      const config = new ShoppingConfigService(new ShoppingConfigRepository(prisma));
+      const audit = { log: jest.fn() };
+      const emit = jest.fn();
+      const bidding = new ShopperBiddingService(
+        new ShopperProfileRepository(prisma),
+        requests,
+        offers,
+        config,
+        { emit } as never,
+        audit as never,
+      );
+      const customerOrders = new ShoppingOrdersService(
+        orderRepo,
+        { emit } as never,
+        audit as never,
+      );
+      const shopperOrders = new ShopperOrdersService(
+        new ShopperProfileRepository(prisma),
+        orderRepo,
+        audit as never,
+      );
+      const shopperUser = (await db.shopperProfile.findUniqueOrThrow({ where: { id: shopperA } }))
+        .userId;
+      const otherUser = (await db.shopperProfile.findUniqueOrThrow({ where: { id: shopperB } }))
+        .userId;
+      const fee = (await config.getRules()).minShopperFee;
+
+      const { id: requestId } = await makeRequest(loc1, [cat1]);
+      await db.shoppingRequest.update({
+        where: { id: requestId },
+        data: { note: 'call me on 08030000000', deliveryAddress: '99 Secret Close' },
+      });
+      const bid = await bidding.submit(shopperUser, requestId, { shopperFee: fee, etaMinutes: 20 });
+
+      const { data: order } = await customerOrders.acceptOffer(
+        customerId,
+        requestId,
+        bid.id as string,
+      );
+      expect(order.financials).toEqual({
+        ...bid.financials,
+        shopperGrossEarnings: undefined,
+      });
+      expect(order.deliveryAddress.text).toBe('99 Secret Close'); // the customer sees their own address
+      expect(emit).toHaveBeenLastCalledWith(
+        'shopping.offer.accepted',
+        expect.objectContaining({ orderId: order.id, winnerUserId: shopperUser }),
+      );
+
+      const seen = await shopperOrders.findOne(shopperUser, order.id);
+      expect(seen.financials).toMatchObject({
+        customerTotal: order.financials.customerTotal,
+        shopperGrossEarnings: fee,
+      });
+      expect(JSON.stringify(seen)).not.toMatch(/Secret Close|08030000000|latitude|deliveryAddress/);
+      await expect(shopperOrders.findOne(otherUser, order.id)).rejects.toMatchObject({
+        status: 404,
+      });
+      await expect(customerOrders.findOne(shopperUser, order.id)).rejects.toMatchObject({
+        status: 404,
+      });
+
+      await expect(shopperOrders.start(shopperUser, order.id)).rejects.toMatchObject({
+        status: 409,
+      });
+      expect((await shopperOrders.accept(shopperUser, order.id)).state).toBe('SHOPPER_ACCEPTED');
+      await expect(shopperOrders.accept(shopperUser, order.id)).rejects.toMatchObject({
+        status: 409,
+      });
+      expect((await shopperOrders.start(shopperUser, order.id)).state).toBe('SHOPPING_STARTED');
+
+      const detail = await customerOrders.findOne(customerId, order.id);
+      expect(detail.state).toBe('SHOPPING_STARTED');
+      expect(detail.events.map((e) => e.type)).toEqual([
+        'SHOPPING_STARTED',
+        'SHOPPER_ACCEPTED',
+        'OFFER_ACCEPTED',
+      ]);
+      expect(JSON.stringify(detail)).not.toMatch(/actorId|@example\.test/);
+
+      const requestsService = new ShoppingRequestsService(
+        requests,
+        offers,
+        new ShoppingReferenceRepository(prisma),
+        config,
+        audit as never,
+      );
+      await expect(requestsService.cancel(customerId, requestId)).rejects.toMatchObject({
+        status: 409,
+        message: 'Only an open request can be cancelled; this one is assigned',
       });
     });
   });

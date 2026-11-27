@@ -19,17 +19,17 @@ const REFERENCE_ATTEMPTS = 5;
 // No 0/O/1/I: references are read out and typed by people.
 const REFERENCE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-/** `SR-` plus 8 random characters, e.g. SR-K7M2QX9D. */
-export function generateReference(): string {
+/** `<prefix>-` plus 8 random characters, e.g. SR-K7M2QX9D (requests) or SO-K7M2QX9D (orders). */
+export function generateReference(prefix = 'SR'): string {
   const bytes = randomBytes(8);
-  let out = 'SR-';
+  let out = `${prefix}-`;
   for (const byte of bytes) {
     out += REFERENCE_ALPHABET[byte % REFERENCE_ALPHABET.length];
   }
   return out;
 }
 
-const isUniqueViolation = (error: unknown, field?: string): boolean => {
+export const isUniqueViolation = (error: unknown, field?: string): boolean => {
   if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
     return false;
   }

@@ -14,7 +14,17 @@ export type ShoppingRequestWithItems = Prisma.ShoppingRequestGetPayload<{
 export const shoppingRequestListInclude = (now: Date) =>
   ({
     ...shoppingRequestInclude,
-    _count: { select: { offers: { where: { state: 'PENDING', expiresAt: { gt: now } } } } },
+    _count: {
+      select: {
+        offers: {
+          where: {
+            state: 'PENDING',
+            expiresAt: { gt: now },
+            shopperProfile: { accountState: 'APPROVED' },
+          },
+        },
+      },
+    },
   }) satisfies Prisma.ShoppingRequestInclude;
 
 export type ShoppingRequestListRow = Prisma.ShoppingRequestGetPayload<{

@@ -19,6 +19,7 @@ import { ResponseInterceptor } from '@/common/interceptors';
 import { AuditService } from '@common/services/audit.service';
 import {
   DuplicateActiveOfferError,
+  SHOPPER_ORDER_REPOSITORY,
   SHOPPER_PROFILE_REPOSITORY,
   SHOPPING_CONFIG_REPOSITORY,
   SHOPPING_OFFER_REPOSITORY,
@@ -63,6 +64,7 @@ const audit = { log: jest.fn() };
 @Module({
   providers: [
     { provide: SHOPPER_PROFILE_REPOSITORY, useValue: profiles },
+    { provide: SHOPPER_ORDER_REPOSITORY, useValue: {} },
     { provide: SHOPPING_REQUEST_REPOSITORY, useValue: requests },
     { provide: SHOPPING_OFFER_REPOSITORY, useValue: offers },
     { provide: SHOPPING_REFERENCE_REPOSITORY, useValue: reference },
@@ -71,6 +73,7 @@ const audit = { log: jest.fn() };
   ],
   exports: [
     SHOPPER_PROFILE_REPOSITORY,
+    SHOPPER_ORDER_REPOSITORY,
     SHOPPING_REQUEST_REPOSITORY,
     SHOPPING_OFFER_REPOSITORY,
     SHOPPING_REFERENCE_REPOSITORY,

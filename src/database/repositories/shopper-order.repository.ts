@@ -1,0 +1,297 @@
+import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import type { OrderEvent, OrderState } from '@prisma/client';
+import { PrismaService } from '../prisma.service';
+import {
+  AcceptOfferResult,
+  CustomerOrder,
+  IAcceptOfferInput,
+  IShopperOrderRepository,
+  ORDER_EVENT_TYPES,
+  OrderListFilter,
+  OrderTransitionResult,
+  ShopperOrderForShopper,
+  customerOrderInclude,
+  orderStatesFor,
+  shopperOrderInclude,
+} from './interfaces';
+import { generateReference, isUniqueViolation } from './shopping-request.repository';
+
+const REFERENCE_ATTEMPTS = 5;
+
+@Injectable()
+export class ShopperOrderRepository implements IShopperOrderRepository {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async acceptOffer(input: IAcceptOfferInput): Promise<AcceptOfferResult> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.acceptOnce(input);
+      } catch (error) {
+        // A reference collision aborts the transaction; retry it whole.
+        if (attempt < REFERENCE_ATTEMPTS && isUniqueViolation(error, 'reference')) {
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  private acceptOnce(input: IAcceptOfferInput): Promise<AcceptOfferResult> {
+    return this.prisma.$transaction(async (tx): Promise<AcceptOfferResult> => {
+      // FOR UPDATE: serialises with every other accept, with a cancel, and with
+      // an offer being submitted (which takes FOR SHARE). Whoever gets here
+      // second reads the first one's committed result.
+      // Filtering on the owner in the lock query means a customer who merely
+      // knows a request id locks nothing: not theirs reads the same as missing.
+      const locked = await tx.$queryRaw<Array<{ status: string }>>`
+        SELECT status::text AS status
+        FROM shopping_requests
+        WHERE id = ${input.requestId} AND customer_id = ${input.customerId}
+        FOR UPDATE`;
+      const request = locked[0];
+      if (!request) {
+        return { outcome: 'not_found' };
+      }
+      if (request.status === 'ASSIGNED') {
+        // A retry of an accept that already went through (a lost response, a
+        // double tap) gets the same order back. Any other offer stays a conflict.
+        const existing = await tx.shopperOrder.findFirst({
+          where: {
+            requestId: input.requestId,
+            offerId: input.offerId,
+            customerId: input.customerId,
+          },
+          include: customerOrderInclude,
+        });
+        if (existing) {
+          return { outcome: 'already_accepted', order: existing };
+        }
+      }
+      if (request.status !== 'OPEN') {
+        return {
+          outcome: 'request_not_open',
+          status: request.status as 'ASSIGNED' | 'CANCELLED' | 'EXPIRED',
+        };
+      }
+
+      const offer = await tx.shoppingOffer.findFirst({
+        where: { id: input.offerId, requestId: input.requestId },
+        include: { shopperProfile: { select: { userId: true } } },
+      });
+      if (!offer) {
+        return { outcome: 'not_found' };
+      }
+      if (offer.state !== 'PENDING') {
+        return { outcome: 'offer_not_pending', state: offer.state };
+      }
+      // The clock is read after the lock: waiting for it can outlast the deadline.
+      const now = new Date();
+      if (offer.expiresAt <= now) {
+        return { outcome: 'offer_expired' };
+      }
+      // The shopper must still be able to work: a suspended shopper would hold an
+      // order they get 403 on, which the customer could not cancel. FOR SHARE
+      // makes an admin's suspension wait for this transaction, so this is final.
+      const profile = await tx.$queryRaw<Array<{ account_state: string }>>`
+        SELECT account_state::text AS account_state
+        FROM shopper_profiles WHERE id = ${offer.shopperProfileId} FOR SHARE`;
+      if (profile[0]?.account_state !== 'APPROVED') {
+        return { outcome: 'shopper_unavailable' };
+      }
+
+      // The offer's own shopper can withdraw without taking the request lock, so
+      // this conditional UPDATE is what decides a withdraw racing the accept.
+      const accepted = await tx.shoppingOffer.updateMany({
+        where: { id: offer.id, state: 'PENDING' },
+        data: { state: 'ACCEPTED' },
+      });
+      if (accepted.count !== 1) {
+        const current = await tx.shoppingOffer.findUniqueOrThrow({
+          where: { id: offer.id },
+          select: { state: true },
+        });
+        return { outcome: 'offer_not_pending', state: current.state };
+      }
+      const assigned = await tx.shoppingRequest.updateMany({
+        where: { id: input.requestId, status: 'OPEN' },
+        data: { status: 'ASSIGNED' },
+      });
+      if (assigned.count !== 1) {
+        // Unreachable under the row lock; refuse (and roll back) rather than half-apply.
+        throw new Error('Accepting the offer lost the request update under the row lock');
+      }
+
+      const losers = await tx.shoppingOffer.findMany({
+        where: { requestId: input.requestId, state: 'PENDING', id: { not: offer.id } },
+        select: { id: true, shopperProfile: { select: { userId: true } } },
+      });
+      if (losers.length > 0) {
+        await tx.shoppingOffer.updateMany({
+          where: { id: { in: losers.map((l) => l.id) }, state: 'PENDING' },
+          data: { state: 'REJECTED' },
+        });
+      }
+
+      const source = await tx.shoppingRequest.findUniqueOrThrow({
+        where: { id: input.requestId },
+        include: { items: { orderBy: { position: 'asc' } } },
+      });
+      const order = await tx.shopperOrder.create({
+        data: {
+          reference: generateReference('SO'),
+          requestId: source.id,
+          offerId: offer.id,
+          customerId: input.customerId,
+          shopperProfileId: offer.shopperProfileId,
+          shoppingLocationId: source.shoppingLocationId,
+          handoffArea: source.handoffArea,
+          // The accepted offer's stored breakdown, copied as quoted.
+          financials: offer.financials as Prisma.InputJsonValue,
+          items: {
+            create: source.items.map((item) => ({
+              requestItemId: item.id,
+              position: item.position,
+              name: item.name,
+              brand: item.brand,
+              size: item.size,
+              quantity: item.quantity,
+              unit: item.unit,
+              notes: item.notes,
+              substitutionPreference: item.substitutionPreference,
+              maxSubstitutePrice: item.maxSubstitutePrice,
+              customerEstimatedPrice: item.estimatedUnitPrice,
+            })),
+          },
+          events: {
+            create: {
+              type: ORDER_EVENT_TYPES.OFFER_ACCEPTED,
+              actorId: input.customerId,
+              actorRole: 'CUSTOMER',
+              metadata: { offerId: offer.id, requestId: source.id },
+            },
+          },
+        },
+        include: customerOrderInclude,
+      });
+
+      return {
+        outcome: 'accepted',
+        order,
+        winnerUserId: offer.shopperProfile.userId,
+        requestReference: source.reference,
+        rejected: losers.map((l) => ({ offerId: l.id, userId: l.shopperProfile.userId })),
+      };
+    });
+  }
+
+  async listForCustomer(
+    customerId: string,
+    skip: number,
+    take: number,
+    filter?: OrderListFilter,
+  ): Promise<{ rows: CustomerOrder[]; total: number }> {
+    const where: Prisma.ShopperOrderWhereInput = {
+      customerId,
+      ...(filter && { state: orderStatesFor(filter) }),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.shopperOrder.findMany({
+        where,
+        include: customerOrderInclude,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip,
+        take,
+      }),
+      this.prisma.shopperOrder.count({ where }),
+    ]);
+    return { rows, total };
+  }
+
+  async findOwnedByCustomer(id: string, customerId: string): Promise<CustomerOrder | null> {
+    return this.prisma.shopperOrder.findFirst({
+      where: { id, customerId },
+      include: customerOrderInclude,
+    });
+  }
+
+  async listForShopper(
+    shopperProfileId: string,
+    skip: number,
+    take: number,
+    filter?: OrderListFilter,
+  ): Promise<{ rows: ShopperOrderForShopper[]; total: number }> {
+    const where: Prisma.ShopperOrderWhereInput = {
+      shopperProfileId,
+      ...(filter && { state: orderStatesFor(filter) }),
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.shopperOrder.findMany({
+        where,
+        include: shopperOrderInclude,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip,
+        take,
+      }),
+      this.prisma.shopperOrder.count({ where }),
+    ]);
+    return { rows, total };
+  }
+
+  async findOwnedByShopper(
+    id: string,
+    shopperProfileId: string,
+  ): Promise<ShopperOrderForShopper | null> {
+    return this.prisma.shopperOrder.findFirst({
+      where: { id, shopperProfileId },
+      include: shopperOrderInclude,
+    });
+  }
+
+  async listEvents(orderId: string, order: 'asc' | 'desc'): Promise<OrderEvent[]> {
+    return this.prisma.orderEvent.findMany({
+      where: { orderId },
+      // `id` breaks ties between events written in the same millisecond.
+      orderBy: [{ createdAt: order }, { id: order }],
+    });
+  }
+
+  async transition(input: {
+    id: string;
+    shopperProfileId: string;
+    actorId: string;
+    from: OrderState;
+    to: OrderState;
+    eventType: string;
+    stamp: 'shopperAcceptedAt' | 'shoppingStartedAt';
+  }): Promise<OrderTransitionResult> {
+    return this.prisma.$transaction(async (tx): Promise<OrderTransitionResult> => {
+      const now = new Date();
+      const { count } = await tx.shopperOrder.updateMany({
+        where: { id: input.id, shopperProfileId: input.shopperProfileId, state: input.from },
+        data: { state: input.to, [input.stamp]: now },
+      });
+      if (count === 1) {
+        await tx.orderEvent.create({
+          data: {
+            orderId: input.id,
+            type: input.eventType,
+            actorId: input.actorId,
+            actorRole: 'PERSONAL_SHOPPER',
+            metadata: { from: input.from, to: input.to },
+          },
+        });
+        const order = await tx.shopperOrder.findUniqueOrThrow({
+          where: { id: input.id },
+          include: shopperOrderInclude,
+        });
+        return { outcome: 'transitioned', order };
+      }
+      const current = await tx.shopperOrder.findFirst({
+        where: { id: input.id, shopperProfileId: input.shopperProfileId },
+        select: { state: true },
+      });
+      return current ? { outcome: 'conflict', state: current.state } : { outcome: 'not_found' };
+    });
+  }
+}

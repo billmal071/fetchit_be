@@ -70,6 +70,7 @@ model User {
   pushSubscriptions       PushSubscription[]
   notifications           Notification[]
   shoppingRequests        ShoppingRequest[]
+  shopperOrdersAsCustomer ShopperOrder[]
 
   @@map("users")
 }
@@ -444,6 +445,7 @@ model ShoppingLocation {
 
   shopperProfiles ShopperProfileLocation[]
   requests        ShoppingRequest[]
+  orders          ShopperOrder[]
 
   @@map("shopping_locations")
 }
@@ -490,6 +492,7 @@ model ShopperProfile {
   services     ShopperProfileService[]
   availability ShopperAvailability[]
   offers       ShoppingOffer[]
+  orders       ShopperOrder[]
 
   @@index([accountState])
   @@map("shopper_profiles")
@@ -589,6 +592,7 @@ model ShoppingRequest {
   shoppingLocation ShoppingLocation      @relation(fields: [shoppingLocationId], references: [id])
   items            ShoppingRequestItem[]
   offers           ShoppingOffer[]
+  order            ShopperOrder?
 
   @@index([customerId, createdAt])
   @@index([status, shoppingLocationId, offerDeadline])
@@ -638,6 +642,7 @@ model ShoppingOffer {
 
   request        ShoppingRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   shopperProfile ShopperProfile  @relation(fields: [shopperProfileId], references: [id], onDelete: Cascade)
+  order          ShopperOrder?
 
   @@index([requestId, state])
   @@index([shopperProfileId, state, createdAt])
@@ -659,6 +664,118 @@ model ShoppingConfig {
   updatedAt            DateTime @updatedAt @map("updated_at")
 
   @@map("shopping_config")
+}
+
+// ---- Orders: what an accepted offer becomes ----
+
+// Matches docs/personal-shopper-backend.md section 2.2 (the states the built
+// frontend uses), not the different list in backend-feature-requirements B6.
+enum OrderState {
+  ASSIGNED
+  SHOPPER_ACCEPTED
+  SHOPPING_STARTED
+  AWAITING_APPROVAL
+  PREPARATION
+  RECEIPT_PENDING
+  SHOPPING_COMPLETED
+  READY_FOR_HANDOFF
+  IN_TRANSIT
+  COMPLETED
+  CANCELLED
+}
+
+enum OrderItemState {
+  PENDING
+  FOUND
+  PRICE_CHANGE_REQUESTED
+  PRICE_APPROVED
+  PRICE_REJECTED
+  UNAVAILABLE
+  SUBSTITUTION_REQUESTED
+  SUBSTITUTION_APPROVED
+  SUBSTITUTION_REJECTED
+  PURCHASED
+  REMOVED
+}
+
+// Created UNPAID when the customer accepts an offer. Payment, escrow and wallet
+// (Part C) are not built: nothing is charged anywhere in this model.
+model ShopperOrder {
+  id                 String     @id @default(uuid())
+  reference          String     @unique @db.VarChar(20)
+  requestId          String     @unique @map("request_id")
+  offerId            String     @unique @map("offer_id")
+  customerId         String     @map("customer_id")
+  shopperProfileId   String     @map("shopper_profile_id")
+  state              OrderState @default(ASSIGNED)
+  shoppingLocationId String     @map("shopping_location_id")
+  handoffArea        String?    @map("handoff_area") @db.VarChar(100)
+  handoffAt          DateTime?  @map("handoff_at")
+  // Copied verbatim from the accepted offer's stored breakdown; never recomputed here.
+  financials         Json
+  shopperAcceptedAt  DateTime?  @map("shopper_accepted_at")
+  shoppingStartedAt  DateTime?  @map("shopping_started_at")
+  createdAt          DateTime   @default(now()) @map("created_at")
+  updatedAt          DateTime   @updatedAt @map("updated_at")
+
+  request          ShoppingRequest   @relation(fields: [requestId], references: [id])
+  offer            ShoppingOffer     @relation(fields: [offerId], references: [id])
+  customer         User              @relation(fields: [customerId], references: [id])
+  shopperProfile   ShopperProfile    @relation(fields: [shopperProfileId], references: [id])
+  shoppingLocation ShoppingLocation  @relation(fields: [shoppingLocationId], references: [id])
+  items            ShopperOrderItem[]
+  events           OrderEvent[]
+
+  @@index([customerId, createdAt])
+  @@index([shopperProfileId, createdAt])
+  @@map("shopper_orders")
+}
+
+// A copy of a request item. The price columns are deliberately separate (an
+// estimate, a requested change, an approved amount and the final purchase
+// amount are different facts); blank is not zero.
+model ShopperOrderItem {
+  id                     String                 @id @default(uuid())
+  orderId                String                 @map("order_id")
+  requestItemId          String?                @map("request_item_id")
+  position               Int
+  name                   String                 @db.VarChar(150)
+  brand                  String                 @db.VarChar(100)
+  size                   String                 @db.VarChar(50)
+  quantity               Int
+  unit                   String                 @db.VarChar(30)
+  notes                  String?                @db.Text
+  state                  OrderItemState         @default(PENDING)
+  substitutionPreference SubstitutionPreference @default(REFUND) @map("substitution_preference")
+  maxSubstitutePrice     Int?                   @map("max_substitute_price")
+  // All whole NGN per unit.
+  customerEstimatedPrice Int                    @map("customer_estimated_price")
+  shopperEstimatedPrice  Int?                   @map("shopper_estimated_price")
+  actualPurchasePrice    Int?                   @map("actual_purchase_price")
+  approvedPrice          Int?                   @map("approved_price")
+  finalPurchasePrice     Int?                   @map("final_purchase_price")
+
+  order ShopperOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, position])
+  @@map("shopper_order_items")
+}
+
+// Append-only audit trail of an order. `type` is a string (see ORDER_EVENT_TYPES
+// in code) so later slices add types without a migration.
+model OrderEvent {
+  id        String   @id @default(uuid())
+  orderId   String   @map("order_id")
+  type      String   @db.VarChar(64)
+  actorId   String?  @map("actor_id")
+  actorRole String?  @map("actor_role") @db.VarChar(32)
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  order ShopperOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+  @@map("order_events")
 }
 
 model PushSubscription {

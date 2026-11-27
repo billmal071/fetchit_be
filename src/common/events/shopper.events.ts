@@ -30,3 +30,15 @@ export class ShoppingOfferSubmittedEvent {
     public readonly customerTotal: number,
   ) {}
 }
+
+/** A customer accepted a shopper's offer: the order exists and the other bids lost. */
+export class ShoppingOfferAcceptedEvent {
+  constructor(
+    public readonly orderId: string,
+    public readonly orderReference: string,
+    public readonly requestId: string,
+    public readonly requestReference: string,
+    public readonly winnerUserId: string,
+    public readonly rejectedUserIds: string[],
+  ) {}
+}

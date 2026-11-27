@@ -240,6 +240,15 @@ describe('ShoppingRequestsService', () => {
       );
     });
 
+    it('409s with a clear message when the request already has an order (ASSIGNED)', async () => {
+      requests.cancel.mockResolvedValue({ outcome: 'not_open', status: 'ASSIGNED' });
+      await expect(service.cancel('cust-1', 'req-1')).rejects.toMatchObject({
+        status: 409,
+        message: 'Only an open request can be cancelled; this one is assigned',
+      });
+      expect(audit.log).not.toHaveBeenCalled();
+    });
+
     it('409s when the request is no longer open and 404s when it is not the caller own', async () => {
       requests.cancel.mockResolvedValueOnce({ outcome: 'not_open', status: 'CANCELLED' });
       await expect(service.cancel('cust-1', 'req-1')).rejects.toMatchObject({ status: 409 });

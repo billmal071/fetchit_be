@@ -108,7 +108,13 @@ export class ShoppingOfferRepository implements IShoppingOfferRepository {
 
   async listForRequest(requestId: string): Promise<OfferWithShopper[]> {
     return this.prisma.shoppingOffer.findMany({
-      where: { requestId, state: { not: 'WITHDRAWN' } },
+      // A PENDING offer from a shopper who is no longer APPROVED cannot be
+      // accepted, so the customer is not shown it.
+      where: {
+        requestId,
+        state: { not: 'WITHDRAWN' },
+        OR: [{ state: { not: 'PENDING' } }, { shopperProfile: { accountState: 'APPROVED' } }],
+      },
       include: offerWithShopperInclude,
       orderBy: [{ shopperFee: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
     });
