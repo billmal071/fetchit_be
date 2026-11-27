@@ -8,7 +8,7 @@
  *   SHOPPING_TEST_DATABASE_URL=postgresql://user@localhost:5432/scratch npx jest shopping.repository.integration
  */
 import { randomUUID } from 'crypto';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { ShoppingConfigRepository } from './shopping-config.repository';
 import { ShoppingOfferRepository } from './shopping-offer.repository';
@@ -472,6 +472,49 @@ suite('shopping repositories (real Postgres)', () => {
     const accept = (requestId: string, offerId: string, by = customerId) =>
       orderRepo.acceptOffer({ requestId, offerId, customerId: by });
 
+    const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+    /** Whether a promise has settled yet, without awaiting it. */
+    const settledFlag = (promise: Promise<unknown>): (() => boolean) => {
+      let settled = false;
+      promise.then(
+        () => (settled = true),
+        () => (settled = true),
+      );
+      return () => settled;
+    };
+    /**
+     * Hold a lock from a SECOND connection until released. `ready` resolves only
+     * once `lock` has succeeded, so nothing here depends on a sleep; `done`
+     * settles after the holder's transaction has finished. The timeouts bound it.
+     */
+    const hold = (lock: (tx: Prisma.TransactionClient) => Promise<unknown>) => {
+      let release!: () => void;
+      let signalReady!: () => void;
+      const ready = new Promise<void>((resolve) => (signalReady = resolve));
+      const released = new Promise<void>((resolve) => (release = resolve));
+      const done = db.$transaction(
+        async (tx) => {
+          await lock(tx);
+          signalReady();
+          await released;
+        },
+        { timeout: 15_000, maxWait: 5_000 },
+      );
+      return { ready: Promise.race([ready, done]), release, done };
+    };
+    /** Wait until some backend in this database is blocked on a lock in a statement mentioning `table`. */
+    const untilBlockedOn = async (table: string): Promise<void> => {
+      for (let i = 0; i < 100; i++) {
+        const rows = await db.$queryRaw<Array<{ n: bigint }>>`
+          SELECT count(*) AS n FROM pg_stat_activity
+          WHERE datname = current_database() AND wait_event_type = 'Lock'
+            AND query ILIKE ${`%${table}%`} AND pid <> pg_backend_pid()`;
+        if (Number(rows[0].n) > 0) return;
+        await sleep(30);
+      }
+      throw new Error(`no statement ever blocked on ${table}`);
+    };
+
     it('creates one UNPAID order from the offer, rejects the other bids, and assigns the request', async () => {
       const { requestId, offers: placed } = await offered([shopperA, shopperB]);
       const [winning, losing] = placed;
@@ -551,8 +594,17 @@ suite('shopping repositories (real Postgres)', () => {
         state: 'WITHDRAWN',
       });
 
-      const late = await offered([shopperA], 300);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Created with the normal deadline, then moved into the past: no timing race with setup.
+      const late = await offered([shopperA]);
+      const past = new Date(Date.now() - 60_000);
+      await db.shoppingOffer.update({
+        where: { id: late.offers[0].id },
+        data: { expiresAt: past },
+      });
+      await db.shoppingRequest.update({
+        where: { id: late.requestId },
+        data: { offerDeadline: past },
+      });
       expect(await accept(late.requestId, late.offers[0].id)).toEqual({ outcome: 'offer_expired' });
       expect(
         await db.shopperOrder.count({ where: { requestId: { in: [requestId, late.requestId] } } }),
@@ -651,21 +703,116 @@ suite('shopping repositories (real Postgres)', () => {
       }
     });
 
-    it('does not let a suspension race the accept: either it is accepted before, or refused after', async () => {
-      const [target] = await shoppersNeeded(1);
-      for (let i = 0; i < 10; i++) {
+    describe('a suspension and an accept, in each commit order (controlled by a held lock)', () => {
+      const suspend = (id: string) =>
+        db.shopperProfile.update({ where: { id }, data: { accountState: 'SUSPENDED' } });
+      const approve = (id: string) =>
+        db.shopperProfile.update({ where: { id }, data: { accountState: 'APPROVED' } });
+
+      it('suspension commits first: the accept waits for it, is refused, and writes nothing', async () => {
+        const [target] = await shoppersNeeded(1);
         const { requestId, offers: placed } = await offered([target]);
-        const [result] = await Promise.all([
-          accept(requestId, placed[0].id),
-          db.shopperProfile.update({ where: { id: target }, data: { accountState: 'SUSPENDED' } }),
-        ]);
-        const orders_ = await db.shopperOrder.count({ where: { requestId } });
-        expect(['accepted', 'shopper_unavailable']).toContain(result.outcome);
-        expect(orders_).toBe(result.outcome === 'accepted' ? 1 : 0);
-        await db.shopperProfile.update({
-          where: { id: target },
-          data: { accountState: 'APPROVED' },
-        });
+        const suspension = hold((tx) =>
+          tx.shopperProfile.update({ where: { id: target }, data: { accountState: 'SUSPENDED' } }),
+        );
+        try {
+          await suspension.ready; // the suspension is written but NOT committed
+          const attempt = accept(requestId, placed[0].id);
+          const attemptSettled = settledFlag(attempt);
+          await untilBlockedOn('shopper_profiles');
+          expect(attemptSettled()).toBe(false); // it cannot pass the profile lock
+          suspension.release();
+          await suspension.done;
+
+          expect(await attempt).toEqual({ outcome: 'shopper_unavailable' });
+          expect(await db.shopperOrder.count({ where: { requestId } })).toBe(0);
+          expect(
+            (await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } })).status,
+          ).toBe('OPEN');
+          expect(
+            (await db.shoppingOffer.findUniqueOrThrow({ where: { id: placed[0].id } })).state,
+          ).toBe('PENDING');
+        } finally {
+          suspension.release();
+          await suspension.done.catch(() => undefined);
+          await approve(target);
+        }
+      });
+
+      it('accept commits first: the suspension waits for it, and the order survives it', async () => {
+        const [target] = await shoppersNeeded(1);
+        const { requestId, offers: placed } = await offered([target]);
+        // Stall the accept AFTER it has taken the profile lock, by holding the offer row it must update.
+        const stall = hold(
+          (tx) =>
+            tx.$queryRaw`SELECT id FROM shopping_offers WHERE id = ${placed[0].id} FOR UPDATE`,
+        );
+        let suspension: Promise<unknown> | undefined;
+        try {
+          await stall.ready;
+          const attempt = accept(requestId, placed[0].id);
+          const attemptSettled = settledFlag(attempt);
+          await untilBlockedOn('shopping_offers'); // the accept now holds the profile lock
+          suspension = suspend(target);
+          const suspensionSettled = settledFlag(suspension);
+          await sleep(300);
+          expect(attemptSettled()).toBe(false);
+          expect(suspensionSettled()).toBe(false); // blocked behind the accept's profile lock
+
+          stall.release();
+          const result = await attempt;
+          await suspension;
+
+          expect(result.outcome).toBe('accepted');
+          expect(await db.shopperOrder.count({ where: { requestId } })).toBe(1);
+          // The later suspension does not undo the order.
+          expect(
+            (await db.shopperProfile.findUniqueOrThrow({ where: { id: target } })).accountState,
+          ).toBe('SUSPENDED');
+          expect((await db.shopperOrder.findFirstOrThrow({ where: { requestId } })).state).toBe(
+            'ASSIGNED',
+          );
+        } finally {
+          stall.release();
+          await stall.done.catch(() => undefined);
+          await suspension?.catch(() => undefined);
+          await approve(target);
+        }
+      });
+    });
+
+    it('refuses an offer that expired while the accept waited for the shopper profile lock', async () => {
+      const [target] = await shoppersNeeded(1);
+      const { requestId, offers: placed } = await offered([target]);
+      await db.shoppingOffer.update({
+        where: { id: placed[0].id },
+        data: { expiresAt: new Date(Date.now() + 1200) },
+      });
+      // A conflicting lock on the profile row, held past the deadline: the profile stays APPROVED.
+      const blocker = hold(
+        (tx) => tx.$queryRaw`SELECT id FROM shopper_profiles WHERE id = ${target} FOR UPDATE`,
+      );
+      try {
+        await blocker.ready;
+        const attempt = accept(requestId, placed[0].id);
+        const attemptSettled = settledFlag(attempt);
+        await untilBlockedOn('shopper_profiles');
+        await sleep(1500); // beyond the deadline
+        expect(attemptSettled()).toBe(false);
+        blocker.release();
+        await blocker.done;
+
+        expect(await attempt).toEqual({ outcome: 'offer_expired' });
+        expect(await db.shopperOrder.count({ where: { requestId } })).toBe(0);
+        expect(
+          (await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } })).status,
+        ).toBe('OPEN');
+        expect(
+          (await db.shoppingOffer.findUniqueOrThrow({ where: { id: placed[0].id } })).state,
+        ).toBe('PENDING');
+      } finally {
+        blocker.release();
+        await blocker.done.catch(() => undefined);
       }
     });
 
@@ -719,39 +866,83 @@ suite('shopping repositories (real Postgres)', () => {
 
     it('a non-owner locks nothing: their accept returns at once while the owner row lock is held', async () => {
       const { requestId, offers: placed } = await offered([shopperA]);
-      const holder = db.$transaction(
-        async (tx) => {
-          await tx.$queryRaw`SELECT id FROM shopping_requests WHERE id = ${requestId} FOR UPDATE`;
-          await new Promise((resolve) => setTimeout(resolve, 1200));
-        },
-        { timeout: 5000 },
+      const owner = hold(
+        (tx) => tx.$queryRaw`SELECT id FROM shopping_requests WHERE id = ${requestId} FOR UPDATE`,
       );
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      const started = Date.now();
-      const result = await accept(requestId, placed[0].id, shopperA); // not the owner
-      const elapsed = Date.now() - started;
-      await holder;
-      expect(result).toEqual({ outcome: 'not_found' });
-      expect(elapsed).toBeLessThan(800);
+      try {
+        await owner.ready; // the row lock is definitely held now
+        const started = Date.now();
+        const result = await Promise.race([
+          accept(requestId, placed[0].id, shopperA), // not the owner
+          sleep(5000).then(() => 'blocked' as const), // bound: a lock wait would show up here
+        ]);
+        expect(result).toEqual({ outcome: 'not_found' });
+        expect(Date.now() - started).toBeLessThan(2000);
+      } finally {
+        owner.release();
+        await owner.done.catch(() => undefined);
+      }
     });
 
-    it('allows only one order per request and per offer at the database level', async () => {
-      const { requestId, offers: placed } = await offered([shopperA]);
-      const result = await accept(requestId, placed[0].id);
-      if (result.outcome !== 'accepted') throw new Error('expected accepted');
-      await expect(
+    describe('the partial unique indexes on orders (live = not CANCELLED)', () => {
+      const insert = (requestId: string, offerId: string, reference: string) =>
         db.shopperOrder.create({
           data: {
-            reference: 'SO-DUPLICAT',
+            reference,
             requestId,
-            offerId: placed[0].id,
+            offerId,
             customerId,
             shopperProfileId: shopperA,
             shoppingLocationId: loc1,
             financials: {},
           },
-        }),
-      ).rejects.toMatchObject({ code: 'P2002' });
+        });
+      const violation = async (
+        attempt: Promise<unknown>,
+      ): Promise<Prisma.PrismaClientKnownRequestError> => {
+        const error = await attempt.then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+        expect(error).toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+        return error as Prisma.PrismaClientKnownRequestError;
+      };
+
+      it('rejects a second live order for the same REQUEST (with a different, unused offer)', async () => {
+        const { requestId } = await offered([shopperA]).then(async (o) => {
+          const r = await accept(o.requestId, o.offers[0].id);
+          if (r.outcome !== 'accepted') throw new Error('expected accepted');
+          return o;
+        });
+        const spare = await offered([shopperB]); // an offer on another request: unique on its own
+        const error = await violation(insert(requestId, spare.offers[0].id, 'SO-DUPREQ01'));
+        expect(error.code).toBe('P2002');
+        expect(error.meta?.target).toEqual(['request_id']);
+      });
+
+      it('rejects a second live order for the same OFFER (with a different, unused request)', async () => {
+        const first = await offered([shopperA]);
+        const r = await accept(first.requestId, first.offers[0].id);
+        if (r.outcome !== 'accepted') throw new Error('expected accepted');
+        const { id: otherRequest } = await makeRequest(loc1, [cat1]);
+        const error = await violation(insert(otherRequest, first.offers[0].id, 'SO-DUPOFR01'));
+        expect(error.code).toBe('P2002');
+        expect(error.meta?.target).toEqual(['offer_id']);
+      });
+
+      it('allows the same request and offer again once the earlier order is CANCELLED', async () => {
+        const first = await offered([shopperA]);
+        const r = await accept(first.requestId, first.offers[0].id);
+        if (r.outcome !== 'accepted') throw new Error('expected accepted');
+        await orderRepo.cancelOrder({
+          orderId: r.order.id,
+          actor: { kind: 'CUSTOMER', userId: customerId },
+          reopenDeadline: new Date(Date.now() + 60_000),
+        });
+        await expect(
+          insert(first.requestId, first.offers[0].id, 'SO-AFTERC02'),
+        ).resolves.toBeDefined();
+      });
     });
 
     describe('shopper transitions', () => {
@@ -808,6 +999,95 @@ suite('shopping repositories (real Postgres)', () => {
           'SHOPPER_ACCEPTED',
           'OFFER_ACCEPTED',
         ]);
+      });
+
+      describe('a shopper suspended after the service checked APPROVED', () => {
+        const suspend = (id: string) =>
+          db.shopperProfile.update({ where: { id }, data: { accountState: 'SUSPENDED' } });
+        const approve = (id: string) =>
+          db.shopperProfile.update({ where: { id }, data: { accountState: 'APPROVED' } });
+        const untouched = async (id: string): Promise<void> => {
+          expect((await db.shopperOrder.findUniqueOrThrow({ where: { id } })).state).toBe(
+            'ASSIGNED',
+          );
+          expect(await db.orderEvent.count({ where: { orderId: id } })).toBe(1); // OFFER_ACCEPTED only
+        };
+
+        it('is refused by the transition itself, writing nothing', async () => {
+          const [target] = await shoppersNeeded(1);
+          const id = await newOrder(target);
+          await suspend(target);
+          try {
+            expect(await move(id, target, 'ASSIGNED')).toEqual({ outcome: 'shopper_unavailable' });
+            await untouched(id);
+          } finally {
+            await approve(target);
+          }
+        });
+
+        it('suspension commits first: the transition waits for it and is refused', async () => {
+          const [target] = await shoppersNeeded(1);
+          const id = await newOrder(target);
+          const suspension = hold((tx) =>
+            tx.shopperProfile.update({
+              where: { id: target },
+              data: { accountState: 'SUSPENDED' },
+            }),
+          );
+          try {
+            await suspension.ready;
+            const attempt = move(id, target, 'ASSIGNED');
+            const attemptSettled = settledFlag(attempt);
+            await untilBlockedOn('shopper_profiles');
+            expect(attemptSettled()).toBe(false);
+            suspension.release();
+            await suspension.done;
+            expect(await attempt).toEqual({ outcome: 'shopper_unavailable' });
+            await untouched(id);
+          } finally {
+            suspension.release();
+            await suspension.done.catch(() => undefined);
+            await approve(target);
+          }
+        });
+
+        it('transition commits first: the suspension waits for it, and the event stays', async () => {
+          const [target] = await shoppersNeeded(1);
+          const id = await newOrder(target);
+          // Stall the transition after it has taken the profile lock, by holding the order row.
+          const stall = hold(
+            (tx) => tx.$queryRaw`SELECT id FROM shopper_orders WHERE id = ${id} FOR UPDATE`,
+          );
+          let suspension: Promise<unknown> | undefined;
+          try {
+            await stall.ready;
+            const attempt = move(id, target, 'ASSIGNED');
+            const attemptSettled = settledFlag(attempt);
+            await untilBlockedOn('shopper_orders');
+            suspension = suspend(target);
+            const suspensionSettled = settledFlag(suspension);
+            await sleep(300);
+            expect(attemptSettled()).toBe(false);
+            expect(suspensionSettled()).toBe(false);
+
+            stall.release();
+            expect((await attempt).outcome).toBe('transitioned');
+            await suspension;
+
+            expect((await db.shopperOrder.findUniqueOrThrow({ where: { id } })).state).toBe(
+              'SHOPPER_ACCEPTED',
+            );
+            expect((await orderRepo.listEvents(id, 'asc')).map((e) => e.type)).toEqual([
+              'OFFER_ACCEPTED',
+              'SHOPPER_ACCEPTED',
+            ]);
+          } finally {
+            stall.release();
+            await stall.done.catch(() => undefined);
+            await suspension?.catch(() => undefined);
+            await approve(target);
+          }
+        });
       });
 
       it('treats another shopper order as not found and changes nothing', async () => {

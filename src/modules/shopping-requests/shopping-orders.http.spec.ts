@@ -208,13 +208,13 @@ describe('orders (HTTP)', () => {
 
     it('does not let the client send order money: any body field is rejected or ignored, never used', async () => {
       orders.acceptOffer.mockResolvedValue(accepted);
-      const { json } = await call('POST', path, 'CUSTOMER', {
+      const { status, json } = await call('POST', path, 'CUSTOMER', {
         customerTotal: 1,
         financials: { customerTotal: 1 },
       });
-      expect(json.data?.financials?.customerTotal ?? BREAKDOWN.customerTotal).toBe(
-        BREAKDOWN.customerTotal,
-      );
+      // The route has no body DTO, so the body is ignored and the order total is the offer's.
+      expect(status).toBe(201);
+      expect(json.data.financials.customerTotal).toBe(BREAKDOWN.customerTotal);
       expect(orders.acceptOffer.mock.calls[0][0]).toEqual({
         requestId: REQ,
         offerId: OFFER,

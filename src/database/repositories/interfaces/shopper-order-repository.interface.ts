@@ -112,6 +112,8 @@ export type AcceptOfferResult =
 
 export type OrderTransitionResult =
   | { outcome: 'transitioned'; order: ShopperOrderForShopper }
+  // The shopper was suspended after the caller's APPROVED check; nothing was written.
+  | { outcome: 'shopper_unavailable' }
   | { outcome: 'not_found' }
   // cancelledBy is set when state is CANCELLED, so the message can say why.
   | { outcome: 'conflict'; state: OrderState; cancelledBy: string | null };

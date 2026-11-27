@@ -4,7 +4,6 @@ import { ShopperOrderRepository } from './shopper-order.repository';
 import { orderStatesFor } from './interfaces';
 
 const FINANCIALS = { shopperFee: 1000, customerTotal: 12171 };
-const FUTURE = new Date(Date.now() + 60_000);
 
 const makeTx = (
   over: {
@@ -26,7 +25,8 @@ const makeTx = (
       findFirst: jest.fn(async () => ({
         id: 'offer-1',
         state: over.offerState ?? 'PENDING',
-        expiresAt: over.expiresAt ?? FUTURE,
+        // Computed per call, so a slow run can never push the default past its expiry.
+        expiresAt: over.expiresAt ?? new Date(Date.now() + 60_000),
         shopperProfileId: 'prof-1',
         financials: FINANCIALS,
         shopperProfile: { userId: 'winner-user' },
@@ -257,6 +257,62 @@ describe('ShopperOrderRepository.acceptOffer: owner-scoped lock, shopper availab
   });
 });
 
+describe('ShopperOrderRepository.acceptOffer: locks before judgements, honest rejected list', () => {
+  it('judges the deadline after the PROFILE lock wait too: an offer that expires while waiting is refused', async () => {
+    jest.useFakeTimers({ now: new Date('2026-11-25T10:00:00Z') });
+    try {
+      const { tx, repo } = makeTx({ expiresAt: new Date('2026-11-25T10:00:01Z') });
+      tx.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) => {
+        if (strings.join('?').includes('shopper_profiles')) {
+          jest.setSystemTime(new Date('2026-11-25T10:00:05Z')); // the wait for the profile lock outlasts the deadline
+          return [{ account_state: 'APPROVED' }];
+        }
+        return [{ status: 'OPEN' }];
+      });
+      expect(await repo.acceptOffer(input)).toEqual({ outcome: 'offer_expired' });
+      expect(tx.shoppingOffer.updateMany).not.toHaveBeenCalled();
+      expect(tx.shopperOrder.create).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('takes the request lock, then the profile lock, before any state is written', async () => {
+    const { tx, repo } = makeTx();
+    await repo.acceptOffer(input);
+    const sqls = tx.$queryRaw.mock.calls.map((c) =>
+      (c[0] as unknown as TemplateStringsArray).join('?'),
+    );
+    expect(sqls[0]).toContain('shopping_requests');
+    expect(sqls[1]).toContain('shopper_profiles');
+    expect(tx.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(
+      tx.shoppingOffer.updateMany.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('does not report as rejected a bidder who withdrew between the read and the update', async () => {
+    const { tx, repo } = makeTx();
+    tx.shoppingOffer.findMany
+      .mockResolvedValueOnce([
+        { id: 'offer-2', shopperProfile: { userId: 'stays-pending-then-rejected' } },
+        { id: 'offer-3', shopperProfile: { userId: 'withdrew-meanwhile' } },
+      ])
+      // The re-read inside the same transaction: offer-3 is WITHDRAWN, not REJECTED.
+      .mockResolvedValueOnce([{ id: 'offer-2' }] as never);
+
+    const result = await repo.acceptOffer(input);
+
+    expect(tx.shoppingOffer.findMany).toHaveBeenLastCalledWith({
+      where: { id: { in: ['offer-2', 'offer-3'] }, state: 'REJECTED' },
+      select: { id: true },
+    });
+    expect(result).toMatchObject({
+      outcome: 'accepted',
+      rejected: [{ offerId: 'offer-2', userId: 'stays-pending-then-rejected' }],
+    });
+  });
+});
+
 describe('ShopperOrderRepository.transition', () => {
   const step = {
     id: 'order-1',
@@ -286,6 +342,28 @@ describe('ShopperOrderRepository.transition', () => {
       }),
     });
     expect(result.outcome).toBe('transitioned');
+  });
+
+  it.each(['SUSPENDED', 'DEACTIVATED', 'VERIFICATION_PENDING'])(
+    'refuses a shopper who became %s after the caller checked, writing nothing',
+    async (profileState) => {
+      const { tx, repo } = makeTx({ profileState });
+      expect(await repo.transition(step)).toEqual({ outcome: 'shopper_unavailable' });
+      expect(tx.shopperOrder.updateMany).not.toHaveBeenCalled();
+      expect(tx.orderEvent.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('locks the profile FOR SHARE before the order UPDATE', async () => {
+    const { tx, repo } = makeTx();
+    tx.shopperOrder.updateMany.mockResolvedValue({ count: 1 });
+    await repo.transition(step);
+    const sql = (tx.$queryRaw.mock.calls[0] as unknown as [TemplateStringsArray])[0].join('?');
+    expect(sql).toContain('shopper_profiles');
+    expect(sql).toContain('FOR SHARE');
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.shopperOrder.updateMany.mock.invocationCallOrder[0],
+    );
   });
 
   it('writes no event and reports the current state when it lost, or not_found for another shopper', async () => {

@@ -129,6 +129,10 @@ export class ShopperOrdersService {
       eventType: step.eventType,
       stamp: step.stamp,
     });
+    if (result.outcome === 'shopper_unavailable') {
+      // Suspended after the check above: the same 403 as any non-approved shopper.
+      throw new ForbiddenException('Only an approved shopper can work on orders');
+    }
     if (result.outcome === 'not_found') {
       throw new ResourceNotFoundException('Order', id);
     }

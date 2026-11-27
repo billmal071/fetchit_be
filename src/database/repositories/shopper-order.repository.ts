@@ -91,20 +91,24 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
       if (!offer) {
         return { outcome: 'not_found' };
       }
+      // Take EVERY lock before judging anything time-dependent: waiting for the
+      // profile lock can outlast the deadline, and a clock read before it would
+      // accept an expired offer. FOR SHARE also makes an admin's suspension wait
+      // for this transaction, so the state read here is final.
+      const profile = await tx.$queryRaw<Array<{ account_state: string }>>`
+        SELECT account_state::text AS account_state
+        FROM shopper_profiles WHERE id = ${offer.shopperProfileId} FOR SHARE`;
+      // The clock is read after all the locks. (Whether the offer is still
+      // PENDING is decided atomically by the conditional UPDATE below.)
+      const now = new Date();
       if (offer.state !== 'PENDING') {
         return { outcome: 'offer_not_pending', state: offer.state };
       }
-      // The clock is read after the lock: waiting for it can outlast the deadline.
-      const now = new Date();
       if (offer.expiresAt <= now) {
         return { outcome: 'offer_expired' };
       }
       // The shopper must still be able to work: a suspended shopper would hold an
-      // order they get 403 on, which the customer could not cancel. FOR SHARE
-      // makes an admin's suspension wait for this transaction, so this is final.
-      const profile = await tx.$queryRaw<Array<{ account_state: string }>>`
-        SELECT account_state::text AS account_state
-        FROM shopper_profiles WHERE id = ${offer.shopperProfileId} FOR SHARE`;
+      // order they get 403 on, which the customer could not cancel.
       if (profile[0]?.account_state !== 'APPROVED') {
         return { outcome: 'shopper_unavailable' };
       }
@@ -135,11 +139,24 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
         where: { requestId: input.requestId, state: 'PENDING', id: { not: offer.id } },
         select: { id: true, shopperProfile: { select: { userId: true } } },
       });
+      let rejectedLosers = losers;
       if (losers.length > 0) {
+        const ids = losers.map((l) => l.id);
         await tx.shoppingOffer.updateMany({
-          where: { id: { in: losers.map((l) => l.id) }, state: 'PENDING' },
+          where: { id: { in: ids }, state: 'PENDING' },
           data: { state: 'REJECTED' },
         });
+        // A bidder who withdrew between the read and the update stayed WITHDRAWN:
+        // only those this transaction actually moved to REJECTED are told so.
+        const changed = new Set(
+          (
+            await tx.shoppingOffer.findMany({
+              where: { id: { in: ids }, state: 'REJECTED' },
+              select: { id: true },
+            })
+          ).map((o) => o.id),
+        );
+        rejectedLosers = losers.filter((l) => changed.has(l.id));
       }
 
       const source = await tx.shoppingRequest.findUniqueOrThrow({
@@ -189,7 +206,7 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
         order,
         winnerUserId: offer.shopperProfile.userId,
         requestReference: source.reference,
-        rejected: losers.map((l) => ({ offerId: l.id, userId: l.shopperProfile.userId })),
+        rejected: rejectedLosers.map((l) => ({ offerId: l.id, userId: l.shopperProfile.userId })),
       };
     });
   }
@@ -275,6 +292,15 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
     stamp: 'shopperAcceptedAt' | 'shoppingStartedAt';
   }): Promise<OrderTransitionResult> {
     return this.prisma.$transaction(async (tx): Promise<OrderTransitionResult> => {
+      // The caller checked APPROVED before this transaction; a suspension may have
+      // committed since. FOR SHARE makes the check final: a suspension arriving
+      // now waits for this transaction instead of slipping in before the write.
+      const profile = await tx.$queryRaw<Array<{ account_state: string }>>`
+        SELECT account_state::text AS account_state
+        FROM shopper_profiles WHERE id = ${input.shopperProfileId} FOR SHARE`;
+      if (profile[0]?.account_state !== 'APPROVED') {
+        return { outcome: 'shopper_unavailable' };
+      }
       const now = new Date();
       const { count } = await tx.shopperOrder.updateMany({
         where: { id: input.id, shopperProfileId: input.shopperProfileId, state: input.from },

@@ -131,6 +131,13 @@ describe('ShopperOrdersService', () => {
       },
     );
 
+    it('403s, writing no audit, when the shopper was suspended after the service check', async () => {
+      orders.transition.mockResolvedValue({ outcome: 'shopper_unavailable' });
+      await expect(service.accept('u', 'order-1')).rejects.toMatchObject({ status: 403 });
+      await expect(service.start('u', 'order-1')).rejects.toMatchObject({ status: 403 });
+      expect(audit.log).not.toHaveBeenCalled();
+    });
+
     it('404s for an order that is not the shopper own', async () => {
       orders.transition.mockResolvedValue({ outcome: 'not_found' });
       await expect(service.accept('u', 'x')).rejects.toMatchObject({ status: 404 });
