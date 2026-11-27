@@ -23,6 +23,7 @@ import { UploadsModule } from '@/modules/uploads/uploads.module';
 import { ServiceRequestsModule } from '@/modules/service-requests/service-requests.module';
 import { AdminModule } from '@/modules/admin/admin.module';
 import { ShopperModule } from '@/modules/shopper/shopper.module';
+import { ShoppingRequestsModule } from '@/modules/shopping-requests/shopping-requests.module';
 import { JobsModule } from '@/jobs/jobs.module';
 import { GatewaysModule } from '@/gateways/gateways.module';
 
@@ -89,6 +90,7 @@ import { RolesGuard } from '@/common/guards';
 
     // Feature Modules - Personal Shopper
     ShopperModule,
+    ShoppingRequestsModule,
 
     // Background Jobs (resilient to Redis failures)
     JobsModule,

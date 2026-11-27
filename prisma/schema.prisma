@@ -69,6 +69,7 @@ model User {
   auditLogs               AuditLog[]
   pushSubscriptions       PushSubscription[]
   notifications           Notification[]
+  shoppingRequests        ShoppingRequest[]
 
   @@map("users")
 }
@@ -427,6 +428,7 @@ model ShoppingCategory {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   shopperProfiles ShopperProfileCategory[]
+  requestItems    ShoppingRequestItem[]
 
   @@map("shopping_categories")
 }
@@ -441,6 +443,7 @@ model ShoppingLocation {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   shopperProfiles ShopperProfileLocation[]
+  requests        ShoppingRequest[]
 
   @@map("shopping_locations")
 }
@@ -486,6 +489,7 @@ model ShopperProfile {
   locations    ShopperProfileLocation[]
   services     ShopperProfileService[]
   availability ShopperAvailability[]
+  offers       ShoppingOffer[]
 
   @@index([accountState])
   @@map("shopper_profiles")
@@ -535,6 +539,126 @@ model ShopperAvailability {
 
   @@unique([shopperProfileId, weekday])
   @@map("shopper_availability")
+}
+
+// ---- Shopping requests and offers (customer request -> shopper bids) ----
+
+enum ShoppingRequestStatus {
+  OPEN
+  // Reserved for accepting an offer (a later slice); nothing sets it yet.
+  ASSIGNED
+  CANCELLED
+  EXPIRED
+}
+
+enum SubstitutionPreference {
+  REFUND
+  SIMILAR_UP_TO
+}
+
+enum ShoppingOfferState {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  WITHDRAWN
+}
+
+model ShoppingRequest {
+  id                   String                @id @default(uuid())
+  reference            String                @unique @db.VarChar(20)
+  customerId           String                @map("customer_id")
+  status               ShoppingRequestStatus @default(OPEN)
+  shoppingLocationId   String                @map("shopping_location_id")
+  // Coarse area shown to shoppers. The exact address is never sent to them.
+  handoffArea          String?               @map("handoff_area") @db.VarChar(100)
+  deliveryAddress      String                @map("delivery_address") @db.Text
+  deliveryLatitude     Float?                @map("delivery_latitude")
+  deliveryLongitude    Float?                @map("delivery_longitude")
+  note                 String?               @db.Text
+  // Whole NGN: sum of quantity x estimatedUnitPrice, fixed at creation.
+  estimatedGoodsBudget Int                   @map("estimated_goods_budget")
+  // Server-calculated estimate shown to the customer at creation.
+  estimate             Json
+  offerDeadline        DateTime              @map("offer_deadline")
+  cancelledAt          DateTime?             @map("cancelled_at")
+  createdAt            DateTime              @default(now()) @map("created_at")
+  updatedAt            DateTime              @updatedAt @map("updated_at")
+
+  customer         User                  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  shoppingLocation ShoppingLocation      @relation(fields: [shoppingLocationId], references: [id])
+  items            ShoppingRequestItem[]
+  offers           ShoppingOffer[]
+
+  @@index([customerId, createdAt])
+  @@index([status, shoppingLocationId, offerDeadline])
+  @@map("shopping_requests")
+}
+
+model ShoppingRequestItem {
+  id                     String                 @id @default(uuid())
+  requestId              String                 @map("request_id")
+  position               Int
+  name                   String                 @db.VarChar(150)
+  brand                  String                 @db.VarChar(100)
+  size                   String                 @db.VarChar(50)
+  quantity               Int
+  unit                   String                 @db.VarChar(30)
+  estimatedUnitPrice     Int                    @map("estimated_unit_price")
+  notes                  String?                @db.Text
+  substitutionPreference SubstitutionPreference @default(REFUND) @map("substitution_preference")
+  maxSubstitutePrice     Int?                   @map("max_substitute_price")
+  // Optional: only used to match the request to shoppers who cover the category.
+  categoryId             String?                @map("category_id")
+
+  request  ShoppingRequest   @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  category ShoppingCategory? @relation(fields: [categoryId], references: [id])
+
+  @@index([requestId])
+  @@index([categoryId])
+  @@map("shopping_request_items")
+}
+
+// A shopper's bid: their fee and ETA only. The partial unique index
+// "shopping_offers_one_pending_per_shopper" (request_id, shopper_profile_id)
+// WHERE state = 'PENDING' lives in the migration SQL; Prisma cannot express it.
+model ShoppingOffer {
+  id               String             @id @default(uuid())
+  requestId        String             @map("request_id")
+  shopperProfileId String             @map("shopper_profile_id")
+  state            ShoppingOfferState @default(PENDING)
+  shopperFee       Int                @map("shopper_fee")
+  etaMinutes       Int                @map("eta_minutes")
+  note             String?            @db.Text
+  expiresAt        DateTime           @map("expires_at")
+  // Breakdown calculated at submit time and kept as quoted.
+  financials       Json
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+
+  request        ShoppingRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  shopperProfile ShopperProfile  @relation(fields: [shopperProfileId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, state])
+  @@index([shopperProfileId, state, createdAt])
+  @@map("shopping_offers")
+}
+
+// Singleton (id is always 1, enforced in the migration): the admin-editable
+// fee rules every shopping price is calculated from. Money is whole NGN;
+// percentages are plain percents (7.50 = 7.5%).
+model ShoppingConfig {
+  id                   Int      @id @default(1)
+  minShopperFee        Int      @map("min_shopper_fee")
+  maxShopperFee        Int      @map("max_shopper_fee")
+  deliveryFee          Int      @map("delivery_fee")
+  serviceChargePercent Decimal  @map("service_charge_percent") @db.Decimal(5, 2)
+  vatPercent           Decimal  @map("vat_percent") @db.Decimal(5, 2)
+  priceBufferPercent   Decimal  @map("price_buffer_percent") @db.Decimal(5, 2)
+  offerWindowMinutes   Int      @map("offer_window_minutes")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@map("shopping_config")
 }
 
 model PushSubscription {

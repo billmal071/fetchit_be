@@ -17,3 +17,16 @@ export class ShopperSentBackEvent {
     public readonly reason: string,
   ) {}
 }
+
+/** A shopper bid on a customer's shopping request. */
+export class ShoppingOfferSubmittedEvent {
+  constructor(
+    public readonly customerId: string,
+    public readonly requestId: string,
+    public readonly requestReference: string,
+    public readonly offerId: string,
+    public readonly shopperName: string,
+    public readonly shopperFee: number,
+    public readonly customerTotal: number,
+  ) {}
+}
