@@ -16,8 +16,11 @@ import {
   CustomerOrderDetailResponseDto,
   CustomerOrderResponseDto,
   OrderEventResponseDto,
+  CancelOrderDto,
   OrderQueryDto,
 } from './dto';
+import { OrderExpiryService } from './order-expiry.service';
+import { ShoppingConfigService } from './shopping-config.service';
 import { toCustomerOrder, toCustomerOrderDetail, toOrderEvent } from './order.mapper';
 
 const words = (state: string): string => state.toLowerCase().replace(/_/g, ' ');
@@ -31,6 +34,8 @@ export class ShoppingOrdersService {
     @Inject(SHOPPER_ORDER_REPOSITORY) private readonly orders: IShopperOrderRepository,
     private readonly events: EventEmitter2,
     private readonly audit: AuditService,
+    private readonly expiry: OrderExpiryService,
+    private readonly config: ShoppingConfigService,
   ) {}
 
   /**
@@ -89,6 +94,7 @@ export class ShoppingOrdersService {
     customerId: string,
     query: OrderQueryDto,
   ): Promise<IPaginatedResult<CustomerOrderResponseDto>> {
+    await this.expiry.sweep({ customerId });
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const { rows, total } = await this.orders.listForCustomer(
@@ -101,13 +107,60 @@ export class ShoppingOrdersService {
   }
 
   async findOne(customerId: string, id: string): Promise<CustomerOrderDetailResponseDto> {
+    await this.expiry.sweep({ orderId: id });
     const order = await this.owned(customerId, id);
     return toCustomerOrderDetail(order, await this.orders.listEvents(id, 'desc'));
   }
 
   async listEvents(customerId: string, id: string): Promise<OrderEventResponseDto[]> {
+    await this.expiry.sweep({ orderId: id });
     await this.owned(customerId, id);
     return (await this.orders.listEvents(id, 'desc')).map(toOrderEvent);
+  }
+
+  /**
+   * Cancel an order the shopper has not accepted yet. The request is reopened
+   * for bidding with a fresh deadline and the shopper is told. Repeating it on
+   * an order that is already cancelled returns the order (cancelled: false).
+   */
+  async cancelOrder(
+    customerId: string,
+    id: string,
+    dto: CancelOrderDto,
+  ): Promise<{ data: CustomerOrderResponseDto; cancelled: boolean }> {
+    // An order past its accept window is cancelled by the system first; the
+    // customer's cancel then reads as the harmless repeat it is.
+    await this.expiry.sweep({ orderId: id });
+    const rules = await this.config.getRules();
+    const result = await this.orders.cancelOrder({
+      orderId: id,
+      actor: { kind: 'CUSTOMER', userId: customerId },
+      reason: dto.reason || undefined,
+      reopenDeadline: new Date(Date.now() + rules.offerWindowMinutes * 60_000),
+    });
+    switch (result.outcome) {
+      case 'already_cancelled':
+        return { data: toCustomerOrder(result.order), cancelled: false };
+      case 'conflict':
+        throw new ConflictException('The shopper has already accepted this order');
+      case 'cancelled':
+        try {
+          await this.audit.log({
+            userId: customerId,
+            action: 'SHOPPING_ORDER_CANCELLED',
+            entity: 'ShopperOrder',
+            entityId: id,
+            details: { reference: result.order.reference, requestId: result.order.requestId },
+          });
+        } catch (error) {
+          this.logger.error(`Failed to record cancel of order ${id}: ${error}`);
+        }
+        this.expiry.announce(result);
+        return { data: toCustomerOrder(result.order), cancelled: true };
+      default:
+        // not_found, and not_stale (which only the system path returns)
+        throw new ResourceNotFoundException('Order', id);
+    }
   }
 
   private async owned(customerId: string, id: string): Promise<CustomerOrder> {

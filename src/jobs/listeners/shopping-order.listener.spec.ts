@@ -1,5 +1,5 @@
 import { ShoppingOrderListener } from './shopping-order.listener';
-import { ShoppingOfferAcceptedEvent } from '@/common/events';
+import { ShoppingOfferAcceptedEvent, ShoppingOrderCancelledEvent } from '@/common/events';
 import { NotificationsService } from '@/modules/notifications/notifications.service';
 import { PushService } from '@/modules/push/push.service';
 
@@ -64,5 +64,56 @@ describe('ShoppingOrderListener', () => {
     push.sendToUser.mockRejectedValue(new Error('nope'));
     await expect(listener.handleOfferAccepted(event)).resolves.toBeUndefined();
     expect(notifications.create).toHaveBeenCalledTimes(3);
+  });
+
+  describe('order cancelled', () => {
+    it.each([
+      ['CUSTOMER', 'The customer cancelled it before you accepted.'],
+      ['SYSTEM', 'It was cancelled because it was not accepted in time.'],
+    ] as const)(
+      'tells the shopper in-app and by push when %s cancelled',
+      async (cancelledBy, body) => {
+        await listener.handleOrderCancelled(
+          new ShoppingOrderCancelledEvent(
+            'order-1',
+            'SO-ABC23456',
+            'req-1',
+            'SR-ABC23456',
+            'shopper-user',
+            cancelledBy,
+          ),
+        );
+        expect(notifications.create).toHaveBeenCalledWith('shopper-user', {
+          type: 'shopping.order.cancelled',
+          title: 'Order SO-ABC23456 cancelled',
+          body,
+          href: '/shopper/orders/order-1',
+          data: { orderId: 'order-1', requestId: 'req-1', cancelledBy },
+        });
+        expect(push.sendToUser).toHaveBeenCalledWith('shopper-user', {
+          title: 'Order SO-ABC23456 cancelled',
+          body,
+          url: '/shopper/orders/order-1',
+          tag: 'shopping-order-order-1',
+        });
+      },
+    );
+
+    it('never throws if the push fails', async () => {
+      push.sendToUser.mockRejectedValue(new Error('nope'));
+      await expect(
+        listener.handleOrderCancelled(
+          new ShoppingOrderCancelledEvent(
+            'order-1',
+            'SO-ABC23456',
+            'req-1',
+            'SR-ABC23456',
+            'shopper-user',
+            'SYSTEM',
+          ),
+        ),
+      ).resolves.toBeUndefined();
+      expect(notifications.create).toHaveBeenCalledTimes(1);
+    });
   });
 });

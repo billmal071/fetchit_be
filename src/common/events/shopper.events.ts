@@ -31,6 +31,18 @@ export class ShoppingOfferSubmittedEvent {
   ) {}
 }
 
+/** An order was cancelled before the shopper accepted it (by the customer, or on timeout). */
+export class ShoppingOrderCancelledEvent {
+  constructor(
+    public readonly orderId: string,
+    public readonly orderReference: string,
+    public readonly requestId: string,
+    public readonly requestReference: string,
+    public readonly shopperUserId: string,
+    public readonly cancelledBy: 'CUSTOMER' | 'SYSTEM',
+  ) {}
+}
+
 /** A customer accepted a shopper's offer: the order exists and the other bids lost. */
 export class ShoppingOfferAcceptedEvent {
   constructor(

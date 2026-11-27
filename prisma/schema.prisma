@@ -592,7 +592,8 @@ model ShoppingRequest {
   shoppingLocation ShoppingLocation      @relation(fields: [shoppingLocationId], references: [id])
   items            ShoppingRequestItem[]
   offers           ShoppingOffer[]
-  order            ShopperOrder?
+  // Several over time: a cancelled order reopens the request, which can be accepted again.
+  orders           ShopperOrder[]
 
   @@index([customerId, createdAt])
   @@index([status, shoppingLocationId, offerDeadline])
@@ -642,7 +643,7 @@ model ShoppingOffer {
 
   request        ShoppingRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   shopperProfile ShopperProfile  @relation(fields: [shopperProfileId], references: [id], onDelete: Cascade)
-  order          ShopperOrder?
+  orders         ShopperOrder[]
 
   @@index([requestId, state])
   @@index([shopperProfileId, state, createdAt])
@@ -661,6 +662,8 @@ model ShoppingConfig {
   vatPercent           Decimal  @map("vat_percent") @db.Decimal(5, 2)
   priceBufferPercent   Decimal  @map("price_buffer_percent") @db.Decimal(5, 2)
   offerWindowMinutes   Int      @map("offer_window_minutes")
+  // How long a shopper has to accept an ASSIGNED order before it is cancelled.
+  shopperAcceptWindowMinutes Int   @default(30) @map("shopper_accept_window_minutes")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
   @@map("shopping_config")
@@ -703,8 +706,9 @@ enum OrderItemState {
 model ShopperOrder {
   id                 String     @id @default(uuid())
   reference          String     @unique @db.VarChar(20)
-  requestId          String     @unique @map("request_id")
-  offerId            String     @unique @map("offer_id")
+  // Not @unique: uniqueness is a partial index over non-cancelled orders (see the migration).
+  requestId          String     @map("request_id")
+  offerId            String     @map("offer_id")
   customerId         String     @map("customer_id")
   shopperProfileId   String     @map("shopper_profile_id")
   state              OrderState @default(ASSIGNED)
@@ -715,6 +719,11 @@ model ShopperOrder {
   financials         Json
   shopperAcceptedAt  DateTime?  @map("shopper_accepted_at")
   shoppingStartedAt  DateTime?  @map("shopping_started_at")
+  cancelledAt        DateTime?  @map("cancelled_at")
+  // CUSTOMER, SYSTEM (the shopper never accepted in time) or SHOPPER (later slices).
+  cancelledBy        String?    @map("cancelled_by") @db.VarChar(16)
+  cancelReason       String?    @map("cancel_reason") @db.Text
+  // Also the moment the order was assigned: the accept window counts from it.
   createdAt          DateTime   @default(now()) @map("created_at")
   updatedAt          DateTime   @updatedAt @map("updated_at")
 
@@ -728,6 +737,8 @@ model ShopperOrder {
 
   @@index([customerId, createdAt])
   @@index([shopperProfileId, createdAt])
+  @@index([requestId])
+  @@index([offerId])
   @@map("shopper_orders")
 }
 

@@ -19,6 +19,7 @@ export class ShoppingConfigRepository implements IShoppingConfigRepository {
       vatPercent: Number(row.vatPercent),
       priceBufferPercent: Number(row.priceBufferPercent),
       offerWindowMinutes: row.offerWindowMinutes,
+      shopperAcceptWindowMinutes: row.shopperAcceptWindowMinutes,
     };
   }
 }

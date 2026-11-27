@@ -4,6 +4,10 @@ import type { OrderEvent, OrderState } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import {
   AcceptOfferResult,
+  CancelOrderResult,
+  ICancelOrderInput,
+  ICancelledOrderInfo,
+  IExpireScope,
   CustomerOrder,
   IAcceptOfferInput,
   IShopperOrderRepository,
@@ -18,6 +22,9 @@ import {
 import { generateReference, isUniqueViolation } from './shopping-request.repository';
 
 const REFERENCE_ATTEMPTS = 5;
+
+/** Recorded on the order and the event when the accept window runs out. */
+export const SYSTEM_CANCEL_REASON = 'Shopper did not accept in time';
 
 @Injectable()
 export class ShopperOrderRepository implements IShopperOrderRepository {
@@ -61,6 +68,8 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
             requestId: input.requestId,
             offerId: input.offerId,
             customerId: input.customerId,
+            // A cancelled order for the same offer is history, not a retry.
+            state: { not: 'CANCELLED' },
           },
           include: customerOrderInclude,
         });
@@ -289,9 +298,139 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
       }
       const current = await tx.shopperOrder.findFirst({
         where: { id: input.id, shopperProfileId: input.shopperProfileId },
-        select: { state: true },
+        select: { state: true, cancelledBy: true },
       });
-      return current ? { outcome: 'conflict', state: current.state } : { outcome: 'not_found' };
+      return current
+        ? { outcome: 'conflict', state: current.state, cancelledBy: current.cancelledBy }
+        : { outcome: 'not_found' };
     });
+  }
+
+  async cancelOrder(input: ICancelOrderInput): Promise<CancelOrderResult> {
+    const { actor } = input;
+    return this.prisma.$transaction(async (tx): Promise<CancelOrderResult> => {
+      const head = await tx.shopperOrder.findUnique({
+        where: { id: input.orderId },
+        select: { requestId: true, customerId: true },
+      });
+      // Someone else's order reads the same as a missing one, before any lock is taken.
+      if (!head || (actor.kind === 'CUSTOMER' && head.customerId !== actor.userId)) {
+        return { outcome: 'not_found' };
+      }
+
+      // Same lock as accepting an offer: serialises with an accept, a cancel of
+      // the request, and another cancel of this order. The customer path also
+      // filters on the owner, so a non-owner locks nothing.
+      const locked =
+        actor.kind === 'CUSTOMER'
+          ? await tx.$queryRaw<Array<{ id: string }>>`
+              SELECT id FROM shopping_requests
+              WHERE id = ${head.requestId} AND customer_id = ${actor.userId}
+              FOR UPDATE`
+          : await tx.$queryRaw<Array<{ id: string }>>`
+              SELECT id FROM shopping_requests WHERE id = ${head.requestId} FOR UPDATE`;
+      if (locked.length === 0) {
+        return { outcome: 'not_found' };
+      }
+
+      const now = new Date();
+      const cancelledBy = actor.kind;
+      const reason = actor.kind === 'SYSTEM' ? SYSTEM_CANCEL_REASON : input.reason;
+      // The state check is part of the UPDATE: of a cancel and a shopper accept
+      // (or two cancels) exactly one changes the row. The timeout also requires
+      // the order to still be past its accept window.
+      const { count } = await tx.shopperOrder.updateMany({
+        where: {
+          id: input.orderId,
+          state: 'ASSIGNED',
+          ...(actor.kind === 'SYSTEM' &&
+            input.assignedBefore && { createdAt: { lt: input.assignedBefore } }),
+        },
+        data: {
+          state: 'CANCELLED',
+          cancelledAt: now,
+          cancelledBy,
+          cancelReason: reason ?? null,
+        },
+      });
+
+      if (count !== 1) {
+        const current = await tx.shopperOrder.findUnique({
+          where: { id: input.orderId },
+          include: customerOrderInclude,
+        });
+        if (!current) return { outcome: 'not_found' };
+        if (actor.kind === 'SYSTEM') return { outcome: 'not_stale' };
+        return current.state === 'CANCELLED'
+          ? { outcome: 'already_cancelled', order: current }
+          : { outcome: 'conflict', state: current.state };
+      }
+
+      const order = await tx.shopperOrder.findUniqueOrThrow({
+        where: { id: input.orderId },
+        include: customerOrderInclude,
+      });
+      // The customer turned this shopper down; on timeout the offer simply lapsed.
+      // Both are terminal and neither is PENDING, so the shopper may bid again.
+      await tx.shoppingOffer.updateMany({
+        where: { id: order.offerId, state: 'ACCEPTED' },
+        data: { state: actor.kind === 'CUSTOMER' ? 'REJECTED' : 'EXPIRED' },
+      });
+      // Reopen for bidding with a fresh window. The other bidders stay REJECTED.
+      await tx.shoppingRequest.updateMany({
+        where: { id: head.requestId, status: 'ASSIGNED' },
+        data: { status: 'OPEN', offerDeadline: input.reopenDeadline },
+      });
+      await tx.orderEvent.create({
+        data: {
+          orderId: input.orderId,
+          type: ORDER_EVENT_TYPES.ORDER_CANCELLED,
+          actorId: actor.kind === 'CUSTOMER' ? actor.userId : null,
+          actorRole: actor.kind,
+          metadata: { cancelledBy, ...(reason && { reason }) },
+        },
+      });
+      const shopper = await tx.shopperProfile.findUniqueOrThrow({
+        where: { id: order.shopperProfileId },
+        select: { userId: true },
+      });
+      return {
+        outcome: 'cancelled',
+        order,
+        shopperUserId: shopper.userId,
+        requestReference: order.request.reference,
+        cancelledBy,
+      };
+    });
+  }
+
+  async expireStale(
+    scope: IExpireScope,
+    assignedBefore: Date,
+    reopenDeadline: Date,
+  ): Promise<ICancelledOrderInfo[]> {
+    const stale = await this.prisma.shopperOrder.findMany({
+      where: {
+        state: 'ASSIGNED',
+        createdAt: { lt: assignedBefore },
+        ...(scope.orderId && { id: scope.orderId }),
+        ...(scope.customerId && { customerId: scope.customerId }),
+        ...(scope.shopperProfileId && { shopperProfileId: scope.shopperProfileId }),
+      },
+      select: { id: true },
+    });
+    const cancelled: ICancelledOrderInfo[] = [];
+    for (const { id } of stale) {
+      const result = await this.cancelOrder({
+        orderId: id,
+        actor: { kind: 'SYSTEM' },
+        assignedBefore,
+        reopenDeadline,
+      });
+      if (result.outcome === 'cancelled') {
+        cancelled.push(result);
+      }
+    }
+    return cancelled;
   }
 }

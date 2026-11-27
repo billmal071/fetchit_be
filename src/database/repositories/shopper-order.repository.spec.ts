@@ -237,7 +237,12 @@ describe('ShopperOrderRepository.acceptOffer: owner-scoped lock, shopper availab
     expect(await repo.acceptOffer(input)).toEqual({ outcome: 'already_accepted', order: existing });
     expect(tx.shopperOrder.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { requestId: 'req-1', offerId: 'offer-1', customerId: 'cust-1' },
+        where: {
+          requestId: 'req-1',
+          offerId: 'offer-1',
+          customerId: 'cust-1',
+          state: { not: 'CANCELLED' },
+        },
       }),
     );
     expect(tx.shopperOrder.create).not.toHaveBeenCalled();
@@ -301,5 +306,195 @@ describe('orderStatesFor', () => {
     expect(orderStatesFor('completed')).toBe('COMPLETED');
     expect(orderStatesFor('cancelled')).toBe('CANCELLED');
     expect(orderStatesFor('active')).toEqual({ notIn: ['COMPLETED', 'CANCELLED'] });
+  });
+});
+
+describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
+  const NOW_ = new Date('2026-11-25T10:00:00Z');
+  const REOPEN = new Date('2026-11-25T11:00:00Z');
+  const customer = { kind: 'CUSTOMER' as const, userId: 'cust-1' };
+
+  const makeCancelTx = (
+    over: { head?: unknown; lock?: unknown[]; updated?: number; current?: unknown } = {},
+  ) => {
+    const cancelled = {
+      id: 'order-1',
+      reference: 'SO-ABC23456',
+      requestId: 'req-1',
+      offerId: 'offer-1',
+      shopperProfileId: 'prof-1',
+      state: 'CANCELLED',
+      request: { reference: 'SR-ABC23456' },
+    };
+    const tx = {
+      $queryRaw: jest.fn(async () => over.lock ?? [{ id: 'req-1' }]),
+      shopperOrder: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValueOnce(
+            over.head === undefined ? { requestId: 'req-1', customerId: 'cust-1' } : over.head,
+          )
+          .mockResolvedValue(
+            over.current === undefined ? { ...cancelled, state: 'SHOPPER_ACCEPTED' } : over.current,
+          ),
+        findUniqueOrThrow: jest.fn(async () => cancelled),
+        updateMany: jest.fn(async () => ({ count: over.updated ?? 1 })),
+        findMany: jest.fn(async () => [{ id: 'order-1' }, { id: 'order-2' }]),
+      },
+      shoppingOffer: { updateMany: jest.fn() },
+      shoppingRequest: { updateMany: jest.fn() },
+      shopperProfile: { findUniqueOrThrow: jest.fn(async () => ({ userId: 'shopper-user' })) },
+      orderEvent: { create: jest.fn() },
+    };
+    const prisma = {
+      $transaction: jest.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)),
+      shopperOrder: tx.shopperOrder,
+    };
+    return { tx, repo: new ShopperOrderRepository(prisma as unknown as PrismaService) };
+  };
+  const cancel = (repo: ShopperOrderRepository, over: object = {}) =>
+    repo.cancelOrder({ orderId: 'order-1', actor: customer, reopenDeadline: REOPEN, ...over });
+
+  it('locks the request with the OWNER filter for a customer, and without it for the system', async () => {
+    const a = makeCancelTx();
+    await cancel(a.repo);
+    const [customerSql, ...customerValues] = a.tx.$queryRaw.mock.calls[0] as unknown as [
+      TemplateStringsArray,
+      ...unknown[],
+    ];
+    expect(customerSql.join('?')).toMatch(/WHERE id = \? AND customer_id = \?\s+FOR UPDATE/);
+    expect(customerValues).toEqual(['req-1', 'cust-1']);
+
+    const b = makeCancelTx();
+    await b.repo.cancelOrder({
+      orderId: 'order-1',
+      actor: { kind: 'SYSTEM' },
+      assignedBefore: NOW_,
+      reopenDeadline: REOPEN,
+    });
+    const [systemSql] = b.tx.$queryRaw.mock.calls[0] as unknown as [TemplateStringsArray];
+    expect(systemSql.join('?')).not.toContain('customer_id');
+    expect(systemSql.join('?')).toContain('FOR UPDATE');
+  });
+
+  it('takes no lock at all for a missing order or someone else order', async () => {
+    const missing = makeCancelTx({ head: null });
+    expect(await cancel(missing.repo)).toEqual({ outcome: 'not_found' });
+    const other = makeCancelTx({ head: { requestId: 'req-1', customerId: 'someone-else' } });
+    expect(await cancel(other.repo)).toEqual({ outcome: 'not_found' });
+    expect(missing.tx.$queryRaw).not.toHaveBeenCalled();
+    expect(other.tx.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('puts state = ASSIGNED in the UPDATE, and for the system also the staleness test', async () => {
+    const a = makeCancelTx();
+    await cancel(a.repo, { reason: 'changed my mind' });
+    expect(a.tx.shopperOrder.updateMany).toHaveBeenCalledWith({
+      where: { id: 'order-1', state: 'ASSIGNED' },
+      data: {
+        state: 'CANCELLED',
+        cancelledAt: expect.any(Date),
+        cancelledBy: 'CUSTOMER',
+        cancelReason: 'changed my mind',
+      },
+    });
+    const b = makeCancelTx();
+    await b.repo.cancelOrder({
+      orderId: 'order-1',
+      actor: { kind: 'SYSTEM' },
+      assignedBefore: NOW_,
+      reopenDeadline: REOPEN,
+    });
+    expect(b.tx.shopperOrder.updateMany).toHaveBeenCalledWith({
+      where: { id: 'order-1', state: 'ASSIGNED', createdAt: { lt: NOW_ } },
+      data: expect.objectContaining({
+        cancelledBy: 'SYSTEM',
+        cancelReason: 'Shopper did not accept in time',
+      }),
+    });
+  });
+
+  it('on a customer cancel: offer REJECTED, request reopened with the new deadline, event with the reason', async () => {
+    const { tx, repo } = makeCancelTx();
+    const result = await cancel(repo, { reason: 'changed my mind' });
+
+    expect(tx.shoppingOffer.updateMany).toHaveBeenCalledWith({
+      where: { id: 'offer-1', state: 'ACCEPTED' },
+      data: { state: 'REJECTED' },
+    });
+    expect(tx.shoppingRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: 'req-1', status: 'ASSIGNED' },
+      data: { status: 'OPEN', offerDeadline: REOPEN },
+    });
+    expect(tx.orderEvent.create).toHaveBeenCalledWith({
+      data: {
+        orderId: 'order-1',
+        type: 'ORDER_CANCELLED',
+        actorId: 'cust-1',
+        actorRole: 'CUSTOMER',
+        metadata: { cancelledBy: 'CUSTOMER', reason: 'changed my mind' },
+      },
+    });
+    expect(result).toMatchObject({
+      outcome: 'cancelled',
+      cancelledBy: 'CUSTOMER',
+      shopperUserId: 'shopper-user',
+      requestReference: 'SR-ABC23456',
+    });
+  });
+
+  it('on a timeout: offer EXPIRED and an actorless SYSTEM event', async () => {
+    const { tx, repo } = makeCancelTx();
+    await repo.cancelOrder({
+      orderId: 'order-1',
+      actor: { kind: 'SYSTEM' },
+      assignedBefore: NOW_,
+      reopenDeadline: REOPEN,
+    });
+    expect(tx.shoppingOffer.updateMany).toHaveBeenCalledWith({
+      where: { id: 'offer-1', state: 'ACCEPTED' },
+      data: { state: 'EXPIRED' },
+    });
+    expect(tx.orderEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorId: null,
+        actorRole: 'SYSTEM',
+        metadata: { cancelledBy: 'SYSTEM', reason: 'Shopper did not accept in time' },
+      }),
+    });
+  });
+
+  it('writes nothing more when it lost: conflict, already_cancelled, and not_stale', async () => {
+    const accepted = makeCancelTx({ updated: 0 });
+    expect(await cancel(accepted.repo)).toEqual({ outcome: 'conflict', state: 'SHOPPER_ACCEPTED' });
+    const done = makeCancelTx({ updated: 0, current: { id: 'order-1', state: 'CANCELLED' } });
+    expect(await cancel(done.repo)).toMatchObject({ outcome: 'already_cancelled' });
+    const fresh = makeCancelTx({ updated: 0, current: { id: 'order-1', state: 'ASSIGNED' } });
+    expect(
+      await fresh.repo.cancelOrder({
+        orderId: 'order-1',
+        actor: { kind: 'SYSTEM' },
+        assignedBefore: NOW_,
+        reopenDeadline: REOPEN,
+      }),
+    ).toEqual({ outcome: 'not_stale' });
+    for (const t of [accepted.tx, done.tx, fresh.tx]) {
+      expect(t.shoppingOffer.updateMany).not.toHaveBeenCalled();
+      expect(t.shoppingRequest.updateMany).not.toHaveBeenCalled();
+      expect(t.orderEvent.create).not.toHaveBeenCalled();
+    }
+  });
+
+  it('expireStale selects stale ASSIGNED orders in scope and cancels each as the system', async () => {
+    const { tx, repo } = makeCancelTx();
+    tx.shopperOrder.findUnique.mockResolvedValue({ requestId: 'req-1', customerId: 'cust-1' });
+    const result = await repo.expireStale({ customerId: 'cust-1' }, NOW_, REOPEN);
+
+    expect(tx.shopperOrder.findMany).toHaveBeenCalledWith({
+      where: { state: 'ASSIGNED', createdAt: { lt: NOW_ }, customerId: 'cust-1' },
+      select: { id: true },
+    });
+    expect(result).toHaveLength(2);
+    expect(tx.shopperOrder.updateMany).toHaveBeenCalledTimes(2);
   });
 });

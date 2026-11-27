@@ -15,7 +15,13 @@ import { IPaginatedResult } from '@common/interfaces';
 import { createPaginationMeta } from '@common/utils/pagination.util';
 import { AuditService } from '@common/services/audit.service';
 import { OrderEventResponseDto, OrderQueryDto, ShopperOrderResponseDto } from './dto';
-import { toOrderEvent, toShopperOrder } from './order.mapper';
+import { toShopperOrder, toShopperOrderEvent } from './order.mapper';
+import { OrderExpiryService } from './order-expiry.service';
+
+const cancelledMessage = (cancelledBy: string | null): string =>
+  cancelledBy === 'SYSTEM'
+    ? 'This order was cancelled because it was not accepted in time'
+    : 'This order was cancelled by the customer';
 
 const words = (state: string): string => state.toLowerCase().replace(/_/g, ' ');
 
@@ -32,6 +38,7 @@ export class ShopperOrdersService {
     @Inject(SHOPPER_PROFILE_REPOSITORY) private readonly profiles: IShopperProfileRepository,
     @Inject(SHOPPER_ORDER_REPOSITORY) private readonly orders: IShopperOrderRepository,
     private readonly audit: AuditService,
+    private readonly expiry: OrderExpiryService,
   ) {}
 
   async list(
@@ -39,6 +46,7 @@ export class ShopperOrdersService {
     query: OrderQueryDto,
   ): Promise<IPaginatedResult<ShopperOrderResponseDto>> {
     const profileId = await this.approvedProfileId(userId);
+    await this.expiry.sweep({ shopperProfileId: profileId });
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const { rows, total } = await this.orders.listForShopper(
@@ -51,13 +59,17 @@ export class ShopperOrdersService {
   }
 
   async findOne(userId: string, id: string): Promise<ShopperOrderResponseDto> {
-    return toShopperOrder(await this.owned(await this.approvedProfileId(userId), id));
+    const profileId = await this.approvedProfileId(userId);
+    await this.expiry.sweep({ orderId: id });
+    return toShopperOrder(await this.owned(profileId, id));
   }
 
   /** Newest first. */
   async listEvents(userId: string, id: string): Promise<OrderEventResponseDto[]> {
-    await this.owned(await this.approvedProfileId(userId), id);
-    return (await this.orders.listEvents(id, 'desc')).map(toOrderEvent);
+    const profileId = await this.approvedProfileId(userId);
+    await this.expiry.sweep({ orderId: id });
+    await this.owned(profileId, id);
+    return (await this.orders.listEvents(id, 'desc')).map(toShopperOrderEvent);
   }
 
   accept(userId: string, id: string): Promise<ShopperOrderResponseDto> {
@@ -66,8 +78,10 @@ export class ShopperOrdersService {
       to: OrderState.SHOPPER_ACCEPTED,
       eventType: ORDER_EVENT_TYPES.SHOPPER_ACCEPTED,
       stamp: 'shopperAcceptedAt',
-      refusal: (state) =>
-        `This order cannot be accepted: it is ${words(state)}. Only a newly assigned order can be accepted.`,
+      refusal: (state, cancelledBy) =>
+        state === OrderState.CANCELLED
+          ? cancelledMessage(cancelledBy)
+          : `This order cannot be accepted: it is ${words(state)}. Only a newly assigned order can be accepted.`,
     });
   }
 
@@ -77,10 +91,12 @@ export class ShopperOrdersService {
       to: OrderState.SHOPPING_STARTED,
       eventType: ORDER_EVENT_TYPES.SHOPPING_STARTED,
       stamp: 'shoppingStartedAt',
-      refusal: (state) =>
-        state === OrderState.ASSIGNED
-          ? 'Accept this order before starting to shop'
-          : `Shopping cannot be started: the order is ${words(state)}. Only an accepted order can be started.`,
+      refusal: (state, cancelledBy) =>
+        state === OrderState.CANCELLED
+          ? cancelledMessage(cancelledBy)
+          : state === OrderState.ASSIGNED
+            ? 'Accept this order before starting to shop'
+            : `Shopping cannot be started: the order is ${words(state)}. Only an accepted order can be started.`,
     });
   }
 
@@ -98,10 +114,12 @@ export class ShopperOrdersService {
       to: OrderState;
       eventType: string;
       stamp: 'shopperAcceptedAt' | 'shoppingStartedAt';
-      refusal: (current: OrderState) => string;
+      refusal: (current: OrderState, cancelledBy: string | null) => string;
     },
   ): Promise<ShopperOrderResponseDto> {
     const profileId = await this.approvedProfileId(userId);
+    // An order whose accept window has run out is cancelled now, so a late accept loses.
+    await this.expiry.sweep({ orderId: id });
     const result: OrderTransitionResult = await this.orders.transition({
       id,
       shopperProfileId: profileId,
@@ -115,7 +133,7 @@ export class ShopperOrdersService {
       throw new ResourceNotFoundException('Order', id);
     }
     if (result.outcome === 'conflict') {
-      throw new ConflictException(step.refusal(result.state));
+      throw new ConflictException(step.refusal(result.state, result.cancelledBy));
     }
     await this.record(userId, step.eventType, id, result.order.reference);
     return toShopperOrder(result.order);

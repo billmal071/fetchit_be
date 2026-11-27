@@ -5,6 +5,7 @@ describe('ShopperOrdersService', () => {
   let profiles: { ensureByUserId: jest.Mock };
   let orders: Record<string, jest.Mock>;
   let audit: { log: jest.Mock };
+  let expiry: { sweep: jest.Mock; announce: jest.Mock };
   let service: ShopperOrdersService;
 
   beforeEach(() => {
@@ -21,7 +22,13 @@ describe('ShopperOrdersService', () => {
       })),
     };
     audit = { log: jest.fn() };
-    service = new ShopperOrdersService(profiles as never, orders as never, audit as never);
+    expiry = { sweep: jest.fn(async () => undefined), announce: jest.fn() };
+    service = new ShopperOrdersService(
+      profiles as never,
+      orders as never,
+      audit as never,
+      expiry as never,
+    );
   });
 
   it.each(['REGISTERED', 'VERIFICATION_PENDING', 'SUSPENDED', 'DEACTIVATED'])(
@@ -161,6 +168,80 @@ describe('ShopperOrdersService', () => {
         status: 409,
         message: expect.stringContaining('shopping started'),
       });
+    });
+  });
+
+  describe('the lazy timeout and cancelled orders', () => {
+    it('sweeps before every read and before acting, so a late accept loses', async () => {
+      orders.listForShopper.mockResolvedValue({ rows: [], total: 0 });
+      await service.list('u', {} as never);
+      expect(expiry.sweep).toHaveBeenLastCalledWith({ shopperProfileId: 'prof-1' });
+      for (const call of [
+        () => service.findOne('u', 'order-1'),
+        () => service.listEvents('u', 'order-1'),
+        () => service.accept('u', 'order-1'),
+        () => service.start('u', 'order-1'),
+      ]) {
+        expiry.sweep.mockClear();
+        await call().catch(() => undefined);
+        expect(expiry.sweep).toHaveBeenCalledWith({ orderId: 'order-1' });
+      }
+      orders.transition.mockClear();
+      await service.accept('u', 'order-1');
+      expect(expiry.sweep.mock.invocationCallOrder.at(-1)!).toBeLessThan(
+        orders.transition.mock.invocationCallOrder[0],
+      );
+    });
+
+    it.each([
+      ['SYSTEM', 'This order was cancelled because it was not accepted in time'],
+      ['CUSTOMER', 'This order was cancelled by the customer'],
+    ])(
+      '409s accept and start with a clear message when the order was cancelled by %s',
+      async (cancelledBy, message) => {
+        orders.transition.mockResolvedValue({
+          outcome: 'conflict',
+          state: 'CANCELLED',
+          cancelledBy,
+        });
+        await expect(service.accept('u', 'order-1')).rejects.toMatchObject({
+          status: 409,
+          message,
+        });
+        await expect(service.start('u', 'order-1')).rejects.toMatchObject({ status: 409, message });
+      },
+    );
+
+    it('shows who cancelled but never the customer reason, on the order or in the events', async () => {
+      orders.findOwnedByShopper.mockResolvedValue(
+        makeShopperOrder({
+          state: 'CANCELLED',
+          cancelledBy: 'CUSTOMER',
+          cancelReason: 'call me on 0803 111 2222',
+          cancelledAt: new Date('2026-11-25T11:00:00Z'),
+        }),
+      );
+      orders.listEvents.mockResolvedValue([
+        makeOrderEvent({
+          id: 'ev-2',
+          type: 'ORDER_CANCELLED',
+          actorRole: 'CUSTOMER',
+          metadata: { cancelledBy: 'CUSTOMER', reason: 'call me on 0803 111 2222' },
+        }),
+      ]);
+      const order = await service.findOne('u', 'order-1');
+      const events = await service.listEvents('u', 'order-1');
+      expect(order).toMatchObject({
+        state: 'CANCELLED',
+        cancelledBy: 'CUSTOMER',
+        cancelledAt: '2026-11-25T11:00:00.000Z',
+      });
+      expect(events[0]).toMatchObject({
+        type: 'ORDER_CANCELLED',
+        metadata: { cancelledBy: 'CUSTOMER' },
+      });
+      expect(JSON.stringify([order, events])).not.toContain('0803');
+      expect(order).not.toHaveProperty('cancelReason');
     });
   });
 });

@@ -4,6 +4,9 @@ CREATE TYPE "OrderState" AS ENUM ('ASSIGNED', 'SHOPPER_ACCEPTED', 'SHOPPING_STAR
 -- CreateEnum
 CREATE TYPE "OrderItemState" AS ENUM ('PENDING', 'FOUND', 'PRICE_CHANGE_REQUESTED', 'PRICE_APPROVED', 'PRICE_REJECTED', 'UNAVAILABLE', 'SUBSTITUTION_REQUESTED', 'SUBSTITUTION_APPROVED', 'SUBSTITUTION_REJECTED', 'PURCHASED', 'REMOVED');
 
+-- AlterTable
+ALTER TABLE "shopping_config" ADD COLUMN     "shopper_accept_window_minutes" INTEGER NOT NULL DEFAULT 30;
+
 -- CreateTable
 CREATE TABLE "shopper_orders" (
     "id" TEXT NOT NULL,
@@ -19,6 +22,9 @@ CREATE TABLE "shopper_orders" (
     "financials" JSONB NOT NULL,
     "shopper_accepted_at" TIMESTAMP(3),
     "shopping_started_at" TIMESTAMP(3),
+    "cancelled_at" TIMESTAMP(3),
+    "cancelled_by" VARCHAR(16),
+    "cancel_reason" TEXT,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
 
@@ -66,16 +72,16 @@ CREATE TABLE "order_events" (
 CREATE UNIQUE INDEX "shopper_orders_reference_key" ON "shopper_orders"("reference");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "shopper_orders_request_id_key" ON "shopper_orders"("request_id");
-
--- CreateIndex
-CREATE UNIQUE INDEX "shopper_orders_offer_id_key" ON "shopper_orders"("offer_id");
-
--- CreateIndex
 CREATE INDEX "shopper_orders_customer_id_created_at_idx" ON "shopper_orders"("customer_id", "created_at");
 
 -- CreateIndex
 CREATE INDEX "shopper_orders_shopper_profile_id_created_at_idx" ON "shopper_orders"("shopper_profile_id", "created_at");
+
+-- CreateIndex
+CREATE INDEX "shopper_orders_request_id_idx" ON "shopper_orders"("request_id");
+
+-- CreateIndex
+CREATE INDEX "shopper_orders_offer_id_idx" ON "shopper_orders"("offer_id");
 
 -- CreateIndex
 CREATE INDEX "shopper_order_items_order_id_position_idx" ON "shopper_order_items"("order_id", "position");
@@ -114,3 +120,15 @@ ALTER TABLE "shopper_order_items"
         AND ("approved_price" IS NULL OR "approved_price" >= 0)
         AND ("final_purchase_price" IS NULL OR "final_purchase_price" >= 0)
     );
+
+-- A cancelled order reopens its request, which can then be accepted again, so a
+-- request (and an offer) may have SEVERAL orders over time but only one that is
+-- not cancelled. Prisma cannot express partial unique indexes; they are
+-- maintained here, like "shopping_offers_one_pending_per_shopper".
+CREATE UNIQUE INDEX "shopper_orders_one_live_per_request"
+    ON "shopper_orders"("request_id") WHERE "state" <> 'CANCELLED';
+CREATE UNIQUE INDEX "shopper_orders_one_live_per_offer"
+    ON "shopper_orders"("offer_id") WHERE "state" <> 'CANCELLED';
+
+ALTER TABLE "shopping_config"
+    ADD CONSTRAINT "shopping_config_accept_window_positive" CHECK ("shopper_accept_window_minutes" > 0);

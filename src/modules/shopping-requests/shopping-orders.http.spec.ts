@@ -24,7 +24,13 @@ import {
   SHOPPING_REQUEST_REPOSITORY,
 } from '@/database/repositories';
 import { ShoppingRequestsModule } from './shopping-requests.module';
-import { BREAKDOWN, makeCustomerOrder, makeOrderEvent, makeShopperOrder } from './testing/fixtures';
+import {
+  BREAKDOWN,
+  RULES,
+  makeCustomerOrder,
+  makeOrderEvent,
+  makeShopperOrder,
+} from './testing/fixtures';
 
 const REQ = '3f2b8c1e-9d4a-4b7e-8a51-0c6d2e7f9a10';
 const OFFER = '4a3c9d2f-0e5b-4c8f-9b62-1d7e3f8a0b21';
@@ -39,8 +45,11 @@ const orders = {
   findOwnedByShopper: jest.fn(),
   listEvents: jest.fn(),
   transition: jest.fn(),
+  expireStale: jest.fn(),
+  cancelOrder: jest.fn(),
 };
 const requests = { cancel: jest.fn() };
+const config = { get: jest.fn() };
 const audit = { log: jest.fn() };
 
 @Global()
@@ -51,7 +60,7 @@ const audit = { log: jest.fn() };
     { provide: SHOPPING_REQUEST_REPOSITORY, useValue: requests },
     { provide: SHOPPING_OFFER_REPOSITORY, useValue: {} },
     { provide: SHOPPING_REFERENCE_REPOSITORY, useValue: {} },
-    { provide: SHOPPING_CONFIG_REPOSITORY, useValue: {} },
+    { provide: SHOPPING_CONFIG_REPOSITORY, useValue: config },
     { provide: AuditService, useValue: audit },
   ],
   exports: [
@@ -121,6 +130,8 @@ describe('orders (HTTP)', () => {
     jest.resetAllMocks();
     profiles.ensureByUserId.mockResolvedValue({ id: 'prof-1', accountState: 'APPROVED' });
     orders.listEvents.mockResolvedValue([makeOrderEvent()]);
+    orders.expireStale.mockResolvedValue([]);
+    config.get.mockResolvedValue(RULES);
   });
 
   const call = async (
@@ -238,6 +249,142 @@ describe('orders (HTTP)', () => {
       const { status, json } = await call('DELETE', `/shopping-requests/${REQ}`, 'CUSTOMER');
       expect(status).toBe(409);
       expect(json.message).toBe('Only an open request can be cancelled; this one is assigned');
+    });
+  });
+
+  describe('customer: POST /shopping-orders/:id/cancel', () => {
+    const path = `/shopping-orders/${ORDER}/cancel`;
+    const cancelled = {
+      outcome: 'cancelled',
+      order: makeCustomerOrder({
+        state: 'CANCELLED',
+        cancelledBy: 'CUSTOMER',
+        cancelReason: 'changed my mind',
+      }),
+      shopperUserId: 'shopper-user',
+      requestReference: 'SR-ABC23456',
+      cancelledBy: 'CUSTOMER',
+    };
+
+    it('is CUSTOMER-only (403 for a shopper)', async () => {
+      expect((await call('POST', path, 'PERSONAL_SHOPPER', {})).status).toBe(403);
+      expect(orders.cancelOrder).not.toHaveBeenCalled();
+    });
+
+    it('cancels with 200, passes the trimmed reason, reopens with a deadline from the config, and tells the shopper', async () => {
+      orders.cancelOrder.mockResolvedValue(cancelled);
+      const emit = jest.spyOn(app.get(EventEmitter2), 'emit');
+      emit.mockClear();
+
+      const { status, json } = await call('POST', path, 'CUSTOMER', {
+        reason: '  changed my mind  ',
+      });
+
+      expect(status).toBe(200);
+      expect(json).toMatchObject({
+        message: 'Order cancelled',
+        data: { state: 'CANCELLED', cancelledBy: 'CUSTOMER', cancelReason: 'changed my mind' },
+      });
+      const input = orders.cancelOrder.mock.calls[0][0];
+      expect(input).toMatchObject({
+        orderId: ORDER,
+        reason: 'changed my mind',
+        actor: { kind: 'CUSTOMER', userId: 'user-1' },
+      });
+      expect(input.reopenDeadline.getTime()).toBeGreaterThan(
+        Date.now() + (RULES.offerWindowMinutes - 1) * 60_000,
+      );
+      expect(emit).toHaveBeenCalledWith(
+        'shopping.order.cancelled',
+        expect.objectContaining({ shopperUserId: 'shopper-user' }),
+      );
+    });
+
+    it('accepts an empty body', async () => {
+      orders.cancelOrder.mockResolvedValue(cancelled);
+      expect((await call('POST', path, 'CUSTOMER')).status).toBe(200);
+    });
+
+    it.each([
+      ['a reason over 500 characters', { reason: 'x'.repeat(501) }],
+      ['a numeric reason', { reason: 5 }],
+      ['an unknown field', { reason: 'ok', state: 'COMPLETED' }],
+    ])('rejects %s with 400', async (_label, body) => {
+      expect((await call('POST', path, 'CUSTOMER', body)).status).toBe(400);
+      expect(orders.cancelOrder).not.toHaveBeenCalled();
+    });
+
+    it('returns the order with 200 on a repeat, and announces nothing', async () => {
+      orders.cancelOrder.mockResolvedValue({
+        outcome: 'already_cancelled',
+        order: makeCustomerOrder({ state: 'CANCELLED' }),
+      });
+      const emit = jest.spyOn(app.get(EventEmitter2), 'emit');
+      emit.mockClear();
+      const { status, json } = await call('POST', path, 'CUSTOMER', {});
+      expect(status).toBe(200);
+      expect(json.data.state).toBe('CANCELLED');
+      expect(emit).not.toHaveBeenCalledWith('shopping.order.cancelled', expect.anything());
+    });
+
+    it('409s once the shopper has accepted, 404s for someone else order, 400 for a bad id', async () => {
+      orders.cancelOrder.mockResolvedValueOnce({ outcome: 'conflict', state: 'SHOPPER_ACCEPTED' });
+      const conflict = await call('POST', path, 'CUSTOMER', {});
+      expect(conflict.status).toBe(409);
+      expect(conflict.json.message).toBe('The shopper has already accepted this order');
+      orders.cancelOrder.mockResolvedValueOnce({ outcome: 'not_found' });
+      expect((await call('POST', path, 'CUSTOMER', {})).status).toBe(404);
+      expect((await call('POST', '/shopping-orders/x/cancel', 'CUSTOMER', {})).status).toBe(400);
+    });
+  });
+
+  describe('the accept timeout over HTTP', () => {
+    it('cancels a stale order before a shopper accept, which then gets the timeout message', async () => {
+      orders.expireStale.mockResolvedValue([
+        {
+          order: makeCustomerOrder({ state: 'CANCELLED' }),
+          shopperUserId: 'shopper-user',
+          requestReference: 'SR-ABC23456',
+          cancelledBy: 'SYSTEM',
+        },
+      ]);
+      orders.transition.mockResolvedValue({
+        outcome: 'conflict',
+        state: 'CANCELLED',
+        cancelledBy: 'SYSTEM',
+      });
+      const emit = jest.spyOn(app.get(EventEmitter2), 'emit');
+      emit.mockClear();
+
+      const { status, json } = await call(
+        'POST',
+        `/shopper/orders/${ORDER}/accept`,
+        'PERSONAL_SHOPPER',
+      );
+
+      expect(status).toBe(409);
+      expect(json.message).toBe('This order was cancelled because it was not accepted in time');
+      expect(emit).toHaveBeenCalledWith(
+        'shopping.order.cancelled',
+        expect.objectContaining({ cancelledBy: 'SYSTEM' }),
+      );
+      const [scope, assignedBefore, reopenDeadline] = orders.expireStale.mock.calls[0];
+      expect(scope).toEqual({ orderId: ORDER });
+      expect(assignedBefore.getTime()).toBeLessThan(
+        Date.now() - (RULES.shopperAcceptWindowMinutes - 1) * 60_000,
+      );
+      expect(reopenDeadline.getTime()).toBeGreaterThan(Date.now());
+    });
+
+    it('sweeps on the customer and shopper order lists too', async () => {
+      orders.listForCustomer.mockResolvedValue({ rows: [], total: 0 });
+      orders.listForShopper.mockResolvedValue({ rows: [], total: 0 });
+      await call('GET', '/shopping-orders', 'CUSTOMER');
+      await call('GET', '/shopper/orders', 'PERSONAL_SHOPPER');
+      expect(orders.expireStale.mock.calls.map((c) => c[0])).toEqual([
+        { customerId: 'user-1' },
+        { shopperProfileId: 'prof-1' },
+      ]);
     });
   });
 

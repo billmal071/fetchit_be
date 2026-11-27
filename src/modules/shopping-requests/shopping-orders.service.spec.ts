@@ -1,12 +1,14 @@
 import { ShoppingOrdersService } from './shopping-orders.service';
 import { EVENTS } from '@common/constants';
 import { ShoppingOfferAcceptedEvent } from '@common/events';
-import { BREAKDOWN, makeCustomerOrder, makeOrderEvent } from './testing/fixtures';
+import { BREAKDOWN, RULES, makeCustomerOrder, makeOrderEvent } from './testing/fixtures';
 
 describe('ShoppingOrdersService', () => {
   let orders: Record<string, jest.Mock>;
   let events: { emit: jest.Mock };
   let audit: { log: jest.Mock };
+  let expiry: { sweep: jest.Mock; announce: jest.Mock };
+  let config: { getRules: jest.Mock };
   let service: ShoppingOrdersService;
 
   const accepted = {
@@ -23,10 +25,19 @@ describe('ShoppingOrdersService', () => {
       listForCustomer: jest.fn(),
       findOwnedByCustomer: jest.fn(async () => makeCustomerOrder()),
       listEvents: jest.fn(async () => [makeOrderEvent()]),
+      cancelOrder: jest.fn(),
     };
     events = { emit: jest.fn() };
     audit = { log: jest.fn() };
-    service = new ShoppingOrdersService(orders as never, events as never, audit as never);
+    expiry = { sweep: jest.fn(async () => undefined), announce: jest.fn() };
+    config = { getRules: jest.fn(async () => RULES) };
+    service = new ShoppingOrdersService(
+      orders as never,
+      events as never,
+      audit as never,
+      expiry as never,
+      config as never,
+    );
   });
 
   describe('acceptOffer', () => {
@@ -177,6 +188,135 @@ describe('ShoppingOrdersService', () => {
     it('returns events newest first', async () => {
       await service.listEvents('cust-1', 'order-1');
       expect(orders.listEvents).toHaveBeenCalledWith('order-1', 'desc');
+    });
+  });
+
+  describe('cancelOrder', () => {
+    const cancelled = {
+      outcome: 'cancelled',
+      order: makeCustomerOrder({
+        state: 'CANCELLED',
+        cancelledBy: 'CUSTOMER',
+        cancelReason: 'changed my mind',
+      }),
+      shopperUserId: 'shopper-user',
+      requestReference: 'SR-ABC23456',
+      cancelledBy: 'CUSTOMER',
+    };
+
+    it('sweeps the timeout first, then cancels as the customer with a reopen deadline from the config', async () => {
+      orders.cancelOrder.mockResolvedValue(cancelled);
+      const before = Date.now();
+      await service.cancelOrder('cust-1', 'order-1', { reason: 'changed my mind' });
+
+      expect(expiry.sweep).toHaveBeenCalledWith({ orderId: 'order-1' });
+      expect(expiry.sweep.mock.invocationCallOrder[0]).toBeLessThan(
+        orders.cancelOrder.mock.invocationCallOrder[0],
+      );
+      const input = orders.cancelOrder.mock.calls[0][0];
+      expect(input).toMatchObject({
+        orderId: 'order-1',
+        actor: { kind: 'CUSTOMER', userId: 'cust-1' },
+        reason: 'changed my mind',
+      });
+      expect(input.reopenDeadline.getTime() - before).toBeGreaterThanOrEqual(
+        RULES.offerWindowMinutes * 60_000,
+      );
+      expect(input.reopenDeadline.getTime() - before).toBeLessThan(
+        RULES.offerWindowMinutes * 60_000 + 5000,
+      );
+    });
+
+    it('returns the cancelled order, audits it, and tells the shopper', async () => {
+      orders.cancelOrder.mockResolvedValue(cancelled);
+      const result = await service.cancelOrder('cust-1', 'order-1', {});
+      expect(result.cancelled).toBe(true);
+      expect(result.data).toMatchObject({
+        state: 'CANCELLED',
+        cancelledBy: 'CUSTOMER',
+        cancelReason: 'changed my mind',
+      });
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'SHOPPING_ORDER_CANCELLED' }),
+      );
+      expect(expiry.announce).toHaveBeenCalledWith(cancelled);
+    });
+
+    it('treats an empty reason as none', async () => {
+      orders.cancelOrder.mockResolvedValue(cancelled);
+      await service.cancelOrder('cust-1', 'order-1', { reason: '' });
+      expect(orders.cancelOrder.mock.calls[0][0].reason).toBeUndefined();
+    });
+
+    it('still succeeds when the audit write fails', async () => {
+      orders.cancelOrder.mockResolvedValue(cancelled);
+      audit.log.mockRejectedValue(new Error('db down'));
+      await expect(service.cancelOrder('cust-1', 'order-1', {})).resolves.toMatchObject({
+        cancelled: true,
+      });
+      expect(expiry.announce).toHaveBeenCalled();
+    });
+
+    it('returns the order again, without announcing or auditing, when it is already cancelled', async () => {
+      orders.cancelOrder.mockResolvedValue({
+        outcome: 'already_cancelled',
+        order: makeCustomerOrder({ state: 'CANCELLED' }),
+      });
+      const result = await service.cancelOrder('cust-1', 'order-1', {});
+      expect(result).toMatchObject({ cancelled: false, data: { state: 'CANCELLED' } });
+      expect(expiry.announce).not.toHaveBeenCalled();
+      expect(audit.log).not.toHaveBeenCalled();
+    });
+
+    it('409s with a clear message once the shopper has accepted', async () => {
+      orders.cancelOrder.mockResolvedValue({ outcome: 'conflict', state: 'SHOPPER_ACCEPTED' });
+      await expect(service.cancelOrder('cust-1', 'order-1', {})).rejects.toMatchObject({
+        status: 409,
+        message: 'The shopper has already accepted this order',
+      });
+      expect(expiry.announce).not.toHaveBeenCalled();
+    });
+
+    it('404s for an order that is not the caller own', async () => {
+      orders.cancelOrder.mockResolvedValue({ outcome: 'not_found' });
+      await expect(service.cancelOrder('cust-1', 'x', {})).rejects.toMatchObject({ status: 404 });
+    });
+  });
+
+  describe('the lazy timeout', () => {
+    beforeEach(() => {
+      orders.listForCustomer.mockResolvedValue({ rows: [], total: 0 });
+    });
+
+    it('sweeps the caller own orders before listing, and the one order before detail and events', async () => {
+      await service.list('cust-1', {} as never);
+      expect(expiry.sweep).toHaveBeenLastCalledWith({ customerId: 'cust-1' });
+      expect(expiry.sweep.mock.invocationCallOrder[0]).toBeLessThan(
+        orders.listForCustomer.mock.invocationCallOrder[0],
+      );
+
+      await service.findOne('cust-1', 'order-1');
+      expect(expiry.sweep).toHaveBeenLastCalledWith({ orderId: 'order-1' });
+      await service.listEvents('cust-1', 'order-1');
+      expect(expiry.sweep).toHaveBeenLastCalledWith({ orderId: 'order-1' });
+      expect(expiry.sweep).toHaveBeenCalledTimes(3);
+    });
+
+    it('shows the cancellation on the order the customer reads', async () => {
+      orders.findOwnedByCustomer.mockResolvedValue(
+        makeCustomerOrder({
+          state: 'CANCELLED',
+          cancelledBy: 'SYSTEM',
+          cancelReason: 'Shopper did not accept in time',
+          cancelledAt: new Date('2026-11-25T11:00:00Z'),
+        }),
+      );
+      expect(await service.findOne('cust-1', 'order-1')).toMatchObject({
+        state: 'CANCELLED',
+        cancelledBy: 'SYSTEM',
+        cancelReason: 'Shopper did not accept in time',
+        cancelledAt: '2026-11-25T11:00:00.000Z',
+      });
     });
   });
 });

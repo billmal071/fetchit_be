@@ -16,6 +16,7 @@ export const RULES: IShoppingFeeRules = {
   vatPercent: 7.5,
   priceBufferPercent: 10,
   offerWindowMinutes: 30,
+  shopperAcceptWindowMinutes: 30,
 };
 
 const T0 = new Date('2026-11-24T10:00:00.000Z');
@@ -144,6 +145,9 @@ const orderBase = {
   financials: BREAKDOWN,
   shopperAcceptedAt: null,
   shoppingStartedAt: null,
+  cancelledAt: null,
+  cancelledBy: null,
+  cancelReason: null,
   createdAt: T0,
   updatedAt: T0,
 };

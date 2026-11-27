@@ -14,6 +14,7 @@ import { ShoppingConfigRepository } from './shopping-config.repository';
 import { ShoppingOfferRepository } from './shopping-offer.repository';
 import { ShoppingRequestRepository } from './shopping-request.repository';
 import { ShopperOrderRepository } from './shopper-order.repository';
+import { OrderExpiryService } from '../../modules/shopping-requests/order-expiry.service';
 import { ShopperProfileRepository } from './shopper-profile.repository';
 import { ShoppingReferenceRepository } from './shopping-reference.repository';
 import { ShoppingConfigService } from '../../modules/shopping-requests/shopping-config.service';
@@ -134,6 +135,7 @@ suite('shopping repositories (real Postgres)', () => {
       vatPercent: expect.any(Number),
       priceBufferPercent: expect.any(Number),
       offerWindowMinutes: expect.any(Number),
+      shopperAcceptWindowMinutes: 30,
     });
     expect(rules?.maxShopperFee).toBeGreaterThanOrEqual(rules?.minShopperFee ?? Infinity);
   });
@@ -790,6 +792,7 @@ suite('shopping repositories (real Postgres)', () => {
         expect(await move(id, shopperA, 'SHOPPER_ACCEPTED')).toEqual({
           outcome: 'conflict',
           state: 'ASSIGNED',
+          cancelledBy: null,
         });
         await move(id, shopperA, 'ASSIGNED');
 
@@ -858,15 +861,19 @@ suite('shopping repositories (real Postgres)', () => {
         { emit } as never,
         audit as never,
       );
+      const expiry = new OrderExpiryService(orderRepo, config, { emit } as never);
       const customerOrders = new ShoppingOrdersService(
         orderRepo,
         { emit } as never,
         audit as never,
+        expiry,
+        config,
       );
       const shopperOrders = new ShopperOrdersService(
         new ShopperProfileRepository(prisma),
         orderRepo,
         audit as never,
+        expiry,
       );
       const shopperUser = (await db.shopperProfile.findUniqueOrThrow({ where: { id: shopperA } }))
         .userId;
@@ -937,6 +944,431 @@ suite('shopping repositories (real Postgres)', () => {
       await expect(requestsService.cancel(customerId, requestId)).rejects.toMatchObject({
         status: 409,
         message: 'Only an open request can be cancelled; this one is assigned',
+      });
+    });
+  });
+
+  describe('orders: cancelling and the accept timeout', () => {
+    const orderRepo = new ShopperOrderRepository(prisma);
+    const extra: string[] = [];
+    const reopen = (): Date => new Date(Date.now() + 30 * 60_000);
+
+    const shoppers = async (n: number): Promise<string[]> => {
+      while (extra.length < n) extra.push(await makeShopper(`oc-${extra.length}`, loc1, cat1));
+      return extra.slice(0, n);
+    };
+    const bid = (requestId: string, shopperProfileId: string, fee = 1000) =>
+      offers.submit({
+        requestId,
+        shopperProfileId,
+        shopperFee: fee,
+        etaMinutes: 20,
+        financials: { shopperFee: fee, customerTotal: 12000 + fee },
+      });
+    /** A request with offers from the given shoppers, the first one accepted: an ASSIGNED order. */
+    const assigned = async (who: string[] = [shopperA, shopperB]) => {
+      const { id: requestId } = await makeRequest(loc1, [cat1]);
+      const placed = [];
+      for (const [i, shopperId] of who.entries())
+        placed.push(await bid(requestId, shopperId, 1000 + i));
+      const result = await orderRepo.acceptOffer({ requestId, offerId: placed[0].id, customerId });
+      if (result.outcome !== 'accepted')
+        throw new Error(`expected accepted, got ${result.outcome}`);
+      return { requestId, placed, orderId: result.order.id };
+    };
+    const cancel = (orderId: string, by = customerId, reason?: string) =>
+      orderRepo.cancelOrder({
+        orderId,
+        actor: { kind: 'CUSTOMER', userId: by },
+        reason,
+        reopenDeadline: reopen(),
+      });
+    const shopperMove = (id: string, by = shopperA) =>
+      orderRepo.transition({
+        id,
+        shopperProfileId: by,
+        actorId: 'actor',
+        from: 'ASSIGNED',
+        to: 'SHOPPER_ACCEPTED',
+        eventType: 'SHOPPER_ACCEPTED',
+        stamp: 'shopperAcceptedAt',
+      });
+    const eventTypes = async (orderId: string): Promise<string[]> =>
+      (await orderRepo.listEvents(orderId, 'asc')).map((e) => e.type);
+
+    it('cancels an ASSIGNED order: offer REJECTED, request reopened with a fresh deadline, event written', async () => {
+      const { requestId, placed, orderId } = await assigned();
+      const deadline = new Date(Date.now() + 45 * 60_000);
+
+      const result = await orderRepo.cancelOrder({
+        orderId,
+        actor: { kind: 'CUSTOMER', userId: customerId },
+        reason: 'changed my mind',
+        reopenDeadline: deadline,
+      });
+
+      if (result.outcome !== 'cancelled')
+        throw new Error(`expected cancelled, got ${result.outcome}`);
+      expect(result.cancelledBy).toBe('CUSTOMER');
+      expect(result.shopperUserId).toBe(
+        (await db.shopperProfile.findUniqueOrThrow({ where: { id: shopperA } })).userId,
+      );
+      const order = await db.shopperOrder.findUniqueOrThrow({ where: { id: orderId } });
+      expect(order).toMatchObject({
+        state: 'CANCELLED',
+        cancelledBy: 'CUSTOMER',
+        cancelReason: 'changed my mind',
+      });
+      expect(order.cancelledAt).not.toBeNull();
+      expect(
+        (await db.shoppingOffer.findUniqueOrThrow({ where: { id: placed[0].id } })).state,
+      ).toBe('REJECTED');
+      expect(
+        (await db.shoppingOffer.findUniqueOrThrow({ where: { id: placed[1].id } })).state,
+      ).toBe('REJECTED');
+      const request = await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } });
+      expect(request.status).toBe('OPEN');
+      expect(request.offerDeadline.getTime()).toBe(deadline.getTime());
+      expect(await eventTypes(orderId)).toEqual(['OFFER_ACCEPTED', 'ORDER_CANCELLED']);
+      const event = (await orderRepo.listEvents(orderId, 'desc'))[0];
+      expect(event).toMatchObject({
+        actorRole: 'CUSTOMER',
+        metadata: { cancelledBy: 'CUSTOMER', reason: 'changed my mind' },
+      });
+    });
+
+    it('then lets the request be bid on and accepted again: a second order, the first stays CANCELLED', async () => {
+      const [, , shopperC] = [shopperA, shopperB, ...(await shoppers(1))];
+      const { requestId, placed, orderId: first } = await assigned();
+      await cancel(first);
+
+      // The cancelled shopper may bid again (their old offer is REJECTED, so the one-PENDING index allows it).
+      const rebid = await bid(requestId, shopperA, 900);
+      const fresh = await bid(requestId, shopperC, 800);
+      const second = await orderRepo.acceptOffer({ requestId, offerId: fresh.id, customerId });
+      if (second.outcome !== 'accepted')
+        throw new Error(`expected accepted, got ${second.outcome}`);
+
+      expect(second.order.id).not.toBe(first);
+      expect(await db.shopperOrder.count({ where: { requestId } })).toBe(2);
+      expect((await db.shopperOrder.findUniqueOrThrow({ where: { id: first } })).state).toBe(
+        'CANCELLED',
+      );
+      expect(
+        (await db.shopperOrder.findUniqueOrThrow({ where: { id: second.order.id } })).state,
+      ).toBe('ASSIGNED');
+      expect(
+        (await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } })).status,
+      ).toBe('ASSIGNED');
+      expect((await db.shoppingOffer.findUniqueOrThrow({ where: { id: rebid.id } })).state).toBe(
+        'REJECTED',
+      );
+      expect(placed).toHaveLength(2);
+    });
+
+    it('retrying the accept of the first, cancelled order finds no live order: the offer is not pending', async () => {
+      const { requestId, placed, orderId } = await assigned();
+      await cancel(orderId);
+      expect(await orderRepo.acceptOffer({ requestId, offerId: placed[0].id, customerId })).toEqual(
+        {
+          outcome: 'offer_not_pending',
+          state: 'REJECTED',
+        },
+      );
+    });
+
+    it('the database allows only one non-cancelled order per request and per offer', async () => {
+      const { requestId, placed, orderId } = await assigned();
+      const row = (reference: string, offerId: string) => ({
+        reference,
+        requestId,
+        offerId,
+        customerId,
+        shopperProfileId: shopperA,
+        shoppingLocationId: loc1,
+        financials: {},
+      });
+      await expect(
+        db.shopperOrder.create({ data: row('SO-DUPREQ01', placed[1].id) }),
+      ).rejects.toMatchObject({ code: 'P2002' });
+      await expect(
+        db.shopperOrder.create({ data: row('SO-DUPOFR01', placed[0].id) }),
+      ).rejects.toMatchObject({ code: 'P2002' });
+      await cancel(orderId);
+      await expect(
+        db.shopperOrder.create({ data: row('SO-AFTERC01', placed[1].id) }),
+      ).resolves.toBeDefined();
+    });
+
+    it('refuses to cancel once the shopper has accepted, changing nothing', async () => {
+      const { requestId, orderId } = await assigned();
+      await shopperMove(orderId);
+      expect(await cancel(orderId)).toEqual({ outcome: 'conflict', state: 'SHOPPER_ACCEPTED' });
+      expect((await db.shopperOrder.findUniqueOrThrow({ where: { id: orderId } })).state).toBe(
+        'SHOPPER_ACCEPTED',
+      );
+      expect(
+        (await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } })).status,
+      ).toBe('ASSIGNED');
+      expect(await eventTypes(orderId)).toEqual(['OFFER_ACCEPTED', 'SHOPPER_ACCEPTED']);
+    });
+
+    it('treats someone else order as not found, and a repeat cancel by the owner as already_cancelled', async () => {
+      const { orderId } = await assigned();
+      expect(await cancel(orderId, shopperA)).toEqual({ outcome: 'not_found' });
+      expect((await cancel(orderId)).outcome).toBe('cancelled');
+      const again = await cancel(orderId);
+      expect(again.outcome).toBe('already_cancelled');
+      expect(again.outcome === 'already_cancelled' && again.order.state).toBe('CANCELLED');
+      expect(await eventTypes(orderId)).toEqual(['OFFER_ACCEPTED', 'ORDER_CANCELLED']);
+    });
+
+    it('lets exactly one of 8 concurrent cancels win, with one event', async () => {
+      const { orderId } = await assigned();
+      const results = await Promise.all(Array.from({ length: 8 }, () => cancel(orderId)));
+      expect(results.filter((r) => r.outcome === 'cancelled')).toHaveLength(1);
+      expect(results.filter((r) => r.outcome === 'already_cancelled')).toHaveLength(7);
+      expect(await eventTypes(orderId)).toEqual(['OFFER_ACCEPTED', 'ORDER_CANCELLED']);
+    });
+
+    it('lets exactly one of cancel and shopper accept win, 8 times over', async () => {
+      for (let i = 0; i < 8; i++) {
+        const { requestId, orderId } = await assigned();
+        const [cancelled, accepted] = await Promise.all([cancel(orderId), shopperMove(orderId)]);
+        const order = await db.shopperOrder.findUniqueOrThrow({ where: { id: orderId } });
+        const types = await eventTypes(orderId);
+        const request = await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } });
+        if (cancelled.outcome === 'cancelled') {
+          expect(accepted).toMatchObject({
+            outcome: 'conflict',
+            state: 'CANCELLED',
+            cancelledBy: 'CUSTOMER',
+          });
+          expect(order.state).toBe('CANCELLED');
+          expect(types).toEqual(['OFFER_ACCEPTED', 'ORDER_CANCELLED']);
+          expect(request.status).toBe('OPEN');
+        } else {
+          expect(cancelled).toEqual({ outcome: 'conflict', state: 'SHOPPER_ACCEPTED' });
+          expect(accepted.outcome).toBe('transitioned');
+          expect(order.state).toBe('SHOPPER_ACCEPTED');
+          expect(types).toEqual(['OFFER_ACCEPTED', 'SHOPPER_ACCEPTED']);
+          expect(request.status).toBe('ASSIGNED');
+        }
+      }
+    });
+
+    describe('timeout', () => {
+      const system = (orderId: string, assignedBefore: Date) =>
+        orderRepo.cancelOrder({
+          orderId,
+          actor: { kind: 'SYSTEM' },
+          assignedBefore,
+          reopenDeadline: reopen(),
+        });
+
+      it('does not cancel an order that is still inside its window', async () => {
+        const { orderId } = await assigned();
+        expect(await system(orderId, new Date(Date.now() - 60_000))).toEqual({
+          outcome: 'not_stale',
+        });
+        expect((await db.shopperOrder.findUniqueOrThrow({ where: { id: orderId } })).state).toBe(
+          'ASSIGNED',
+        );
+      });
+
+      it('cancels a stale order as SYSTEM: offer EXPIRED, request reopened, no customer reason', async () => {
+        const { requestId, placed, orderId } = await assigned();
+        const result = await system(orderId, new Date(Date.now() + 1000));
+        expect(result.outcome).toBe('cancelled');
+        const order = await db.shopperOrder.findUniqueOrThrow({ where: { id: orderId } });
+        expect(order).toMatchObject({
+          state: 'CANCELLED',
+          cancelledBy: 'SYSTEM',
+          cancelReason: 'Shopper did not accept in time',
+        });
+        expect(
+          (await db.shoppingOffer.findUniqueOrThrow({ where: { id: placed[0].id } })).state,
+        ).toBe('EXPIRED');
+        expect(
+          (await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } })).status,
+        ).toBe('OPEN');
+        expect((await orderRepo.listEvents(orderId, 'desc'))[0]).toMatchObject({
+          type: 'ORDER_CANCELLED',
+          actorRole: 'SYSTEM',
+          actorId: null,
+        });
+      });
+
+      it('expireStale cancels only stale ASSIGNED orders in scope and reports what it cancelled', async () => {
+        const stale = await assigned();
+        const accepted = await assigned();
+        await shopperMove(accepted.orderId);
+        const future = new Date(Date.now() + 1000);
+
+        const scoped = await orderRepo.expireStale({ orderId: stale.orderId }, future, reopen());
+        expect(scoped.map((c) => c.order.id)).toEqual([stale.orderId]);
+        expect(scoped[0].cancelledBy).toBe('SYSTEM');
+
+        const swept = await orderRepo.expireStale({ customerId }, future, reopen());
+        expect(swept.map((c) => c.order.id)).not.toContain(accepted.orderId);
+        expect(
+          (await db.shopperOrder.findUniqueOrThrow({ where: { id: accepted.orderId } })).state,
+        ).toBe('SHOPPER_ACCEPTED');
+        expect(
+          await orderRepo.expireStale(
+            { shopperProfileId: shopperA },
+            new Date(Date.now() - 60_000),
+            reopen(),
+          ),
+        ).toEqual([]);
+      });
+
+      it('lets exactly one of expiry and shopper accept win, 8 times over', async () => {
+        for (let i = 0; i < 8; i++) {
+          const { orderId } = await assigned();
+          const [expired, accepted] = await Promise.all([
+            system(orderId, new Date(Date.now() + 1000)),
+            shopperMove(orderId),
+          ]);
+          const order = await db.shopperOrder.findUniqueOrThrow({ where: { id: orderId } });
+          if (expired.outcome === 'cancelled') {
+            expect(accepted).toMatchObject({
+              outcome: 'conflict',
+              state: 'CANCELLED',
+              cancelledBy: 'SYSTEM',
+            });
+            expect(order.state).toBe('CANCELLED');
+            expect(await eventTypes(orderId)).toEqual(['OFFER_ACCEPTED', 'ORDER_CANCELLED']);
+          } else {
+            expect(accepted.outcome).toBe('transitioned');
+            expect(expired.outcome).toBe('not_stale');
+            expect(order.state).toBe('SHOPPER_ACCEPTED');
+            expect(await eventTypes(orderId)).toEqual(['OFFER_ACCEPTED', 'SHOPPER_ACCEPTED']);
+          }
+        }
+      });
+
+      it('lets exactly one of two concurrent expiry sweeps cancel, with one event', async () => {
+        const { orderId } = await assigned();
+        const future = new Date(Date.now() + 1000);
+        const sweeps = await Promise.all([
+          orderRepo.expireStale({ orderId }, future, reopen()),
+          orderRepo.expireStale({ orderId }, future, reopen()),
+          cancel(orderId),
+        ]);
+        expect(
+          sweeps[0].length + sweeps[1].length + (sweeps[2].outcome === 'cancelled' ? 1 : 0),
+        ).toBe(1);
+        expect(await eventTypes(orderId)).toEqual(['OFFER_ACCEPTED', 'ORDER_CANCELLED']);
+      });
+    });
+
+    it('end to end through the services: timeout on a shopper accept, customer view, reopened request, notification', async () => {
+      const config = new ShoppingConfigService(new ShoppingConfigRepository(prisma));
+      const audit = { log: jest.fn() };
+      const emit = jest.fn();
+      const expiry = new OrderExpiryService(orderRepo, config, { emit } as never);
+      const customerOrders = new ShoppingOrdersService(
+        orderRepo,
+        { emit } as never,
+        audit as never,
+        expiry,
+        config,
+      );
+      const shopperOrders = new ShopperOrdersService(
+        new ShopperProfileRepository(prisma),
+        orderRepo,
+        audit as never,
+        expiry,
+      );
+      const rules = await config.getRules();
+      expect(rules.shopperAcceptWindowMinutes).toBeGreaterThan(0);
+
+      const { requestId, orderId } = await assigned();
+      const shopperUser = (await db.shopperProfile.findUniqueOrThrow({ where: { id: shopperA } }))
+        .userId;
+      // Make the order older than the window.
+      await db.shopperOrder.update({
+        where: { id: orderId },
+        data: { createdAt: new Date(Date.now() - (rules.shopperAcceptWindowMinutes + 1) * 60_000) },
+      });
+
+      await expect(shopperOrders.accept(shopperUser, orderId)).rejects.toMatchObject({
+        status: 409,
+        message: 'This order was cancelled because it was not accepted in time',
+      });
+      expect(emit).toHaveBeenCalledWith(
+        'shopping.order.cancelled',
+        expect.objectContaining({ orderId, shopperUserId: shopperUser, cancelledBy: 'SYSTEM' }),
+      );
+      const detail = await customerOrders.findOne(customerId, orderId);
+      expect(detail).toMatchObject({ state: 'CANCELLED', cancelledBy: 'SYSTEM' });
+      expect(detail.events.map((e) => e.type)).toEqual(['ORDER_CANCELLED', 'OFFER_ACCEPTED']);
+      const listed = await customerOrders.list(customerId, {
+        filter: 'cancelled',
+        page: 1,
+        limit: 100,
+      } as never);
+      expect(listed.data.map((o) => o.id)).toContain(orderId);
+      const request = await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } });
+      expect(request.status).toBe('OPEN');
+      expect(request.offerDeadline.getTime()).toBeGreaterThan(
+        Date.now() + (rules.offerWindowMinutes - 1) * 60_000,
+      );
+
+      // The shopper's view of it never carries the customer's reason.
+      const seen = await shopperOrders.findOne(shopperUser, orderId);
+      expect(seen).toMatchObject({ state: 'CANCELLED', cancelledBy: 'SYSTEM' });
+      expect(seen).not.toHaveProperty('cancelReason');
+    });
+
+    it('end to end: the customer cancels with a reason the shopper never sees, then cancelling again returns the order', async () => {
+      const config = new ShoppingConfigService(new ShoppingConfigRepository(prisma));
+      const audit = { log: jest.fn() };
+      const emit = jest.fn();
+      const expiry = new OrderExpiryService(orderRepo, config, { emit } as never);
+      const customerOrders = new ShoppingOrdersService(
+        orderRepo,
+        { emit } as never,
+        audit as never,
+        expiry,
+        config,
+      );
+      const shopperOrders = new ShopperOrdersService(
+        new ShopperProfileRepository(prisma),
+        orderRepo,
+        audit as never,
+        expiry,
+      );
+      const { orderId } = await assigned();
+      const shopperUser = (await db.shopperProfile.findUniqueOrThrow({ where: { id: shopperA } }))
+        .userId;
+
+      const first = await customerOrders.cancelOrder(customerId, orderId, {
+        reason: 'call me on 08031112222',
+      });
+      expect(first.data).toMatchObject({
+        state: 'CANCELLED',
+        cancelledBy: 'CUSTOMER',
+        cancelReason: 'call me on 08031112222',
+      });
+      expect(first.cancelled).toBe(true);
+      expect(emit).toHaveBeenCalledWith(
+        'shopping.order.cancelled',
+        expect.objectContaining({ orderId, shopperUserId: shopperUser, cancelledBy: 'CUSTOMER' }),
+      );
+      const again = await customerOrders.cancelOrder(customerId, orderId, {});
+      expect(again.cancelled).toBe(false);
+      expect(again.data.state).toBe('CANCELLED');
+
+      const text = JSON.stringify([
+        await shopperOrders.findOne(shopperUser, orderId),
+        await shopperOrders.listEvents(shopperUser, orderId),
+      ]);
+      expect(text).not.toContain('08031112222');
+      expect(text).toContain('ORDER_CANCELLED');
+      await expect(shopperOrders.start(shopperUser, orderId)).rejects.toMatchObject({
+        status: 409,
       });
     });
   });

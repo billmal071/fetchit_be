@@ -11,6 +11,7 @@ export const ORDER_EVENT_TYPES = {
   OFFER_ACCEPTED: 'OFFER_ACCEPTED',
   SHOPPER_ACCEPTED: 'SHOPPER_ACCEPTED',
   SHOPPING_STARTED: 'SHOPPING_STARTED',
+  ORDER_CANCELLED: 'ORDER_CANCELLED',
 } as const;
 
 const orderItemsInclude = { orderBy: { position: 'asc' } } as const;
@@ -112,7 +113,45 @@ export type AcceptOfferResult =
 export type OrderTransitionResult =
   | { outcome: 'transitioned'; order: ShopperOrderForShopper }
   | { outcome: 'not_found' }
+  // cancelledBy is set when state is CANCELLED, so the message can say why.
+  | { outcome: 'conflict'; state: OrderState; cancelledBy: string | null };
+
+/** Who is cancelling: the customer (owner-checked), or the system on timeout. */
+export type CancelActor = { kind: 'CUSTOMER'; userId: string } | { kind: 'SYSTEM' };
+
+export interface ICancelOrderInput {
+  orderId: string;
+  actor: CancelActor;
+  /** Free text from the customer. Never sent to the shopper. */
+  reason?: string;
+  /** The request is reopened with this offer deadline (now + the configured offer window). */
+  reopenDeadline: Date;
+  /** SYSTEM only: the order is stale when it was created before this instant. */
+  assignedBefore?: Date;
+}
+
+/** What a notification about a cancellation needs. */
+export interface ICancelledOrderInfo {
+  order: CustomerOrder;
+  shopperUserId: string;
+  requestReference: string;
+  cancelledBy: 'CUSTOMER' | 'SYSTEM';
+}
+
+export type CancelOrderResult =
+  | ({ outcome: 'cancelled' } & ICancelledOrderInfo)
+  // The customer cancelled (or the system had) already: a retry gets the order back.
+  | { outcome: 'already_cancelled'; order: CustomerOrder }
+  | { outcome: 'not_found' }
+  // SYSTEM only: the order is not past its accept window (or no longer ASSIGNED).
+  | { outcome: 'not_stale' }
   | { outcome: 'conflict'; state: OrderState };
+
+export interface IExpireScope {
+  orderId?: string;
+  customerId?: string;
+  shopperProfileId?: string;
+}
 
 export interface IShopperOrderRepository {
   /**
@@ -152,6 +191,27 @@ export interface IShopperOrderRepository {
 
   /** Events of an order the caller already proved they may read. */
   listEvents(orderId: string, order: 'asc' | 'desc'): Promise<OrderEvent[]>;
+
+  /**
+   * Cancel an ASSIGNED order, the one transaction behind both the customer's
+   * cancel and the automatic timeout: lock the request row (the customer path
+   * with the ownership filter, so a non-owner locks nothing), conditionally
+   * update the order WHERE state = ASSIGNED, then set the offer to REJECTED
+   * (customer) or EXPIRED (system), reopen the request with `reopenDeadline`
+   * and write the ORDER_CANCELLED event. Of a cancel and a shopper accept (or
+   * two cancels) exactly one wins the conditional update.
+   */
+  cancelOrder(input: ICancelOrderInput): Promise<CancelOrderResult>;
+
+  /**
+   * The lazy timeout: cancel (as SYSTEM) every ASSIGNED order in `scope` that
+   * was assigned before `assignedBefore`. Returns the ones this call cancelled.
+   */
+  expireStale(
+    scope: IExpireScope,
+    assignedBefore: Date,
+    reopenDeadline: Date,
+  ): Promise<ICancelledOrderInfo[]>;
 
   /**
    * Move an order the shopper is assigned to from `from` to `to` and record the

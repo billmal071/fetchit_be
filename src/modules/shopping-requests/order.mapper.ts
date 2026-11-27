@@ -48,6 +48,20 @@ export const toOrderEvent = (row: OrderEvent): OrderEventResponseDto => ({
   createdAt: iso(row.createdAt),
 });
 
+/**
+ * The shopper's feed: the customer's cancel reason is free text and can carry a
+ * phone number or an address, so it is dropped from the event metadata.
+ */
+export const toShopperOrderEvent = (row: OrderEvent): OrderEventResponseDto => {
+  const event = toOrderEvent(row);
+  if (event.metadata && 'reason' in event.metadata) {
+    const { reason: _reason, ...rest } = event.metadata;
+    void _reason;
+    return { ...event, metadata: rest };
+  }
+  return event;
+};
+
 const breakdownOf = (order: { financials: unknown }): IOfferBreakdown =>
   order.financials as IOfferBreakdown;
 
@@ -80,6 +94,9 @@ export function toCustomerOrder(order: CustomerOrder): CustomerOrderResponseDto 
       completedOrders: shopper.completedOrders,
       completionRate: shopper.completionRate === null ? undefined : Number(shopper.completionRate),
     },
+    cancelledAt: order.cancelledAt ? iso(order.cancelledAt) : undefined,
+    cancelledBy: orUndefined(order.cancelledBy),
+    cancelReason: orUndefined(order.cancelReason),
     createdAt: iso(order.createdAt),
     updatedAt: iso(order.updatedAt),
   };
@@ -113,6 +130,8 @@ export function toShopperOrder(order: ShopperOrderForShopper): ShopperOrderRespo
     pendingApprovals: 0,
     acceptedAt: order.shopperAcceptedAt ? iso(order.shopperAcceptedAt) : undefined,
     startedAt: order.shoppingStartedAt ? iso(order.shoppingStartedAt) : undefined,
+    cancelledAt: order.cancelledAt ? iso(order.cancelledAt) : undefined,
+    cancelledBy: orUndefined(order.cancelledBy),
     createdAt: iso(order.createdAt),
     updatedAt: iso(order.updatedAt),
   };

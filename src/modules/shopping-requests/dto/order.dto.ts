@@ -1,7 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { OrderItemState, OrderState, SubstitutionPreference } from '@prisma/client';
-import { IsIn, IsOptional } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { PaginationDto } from '@common/dto/pagination.dto';
+import { TrimmedValue } from './raw-value';
 import {
   DeliveryAddressResponseDto,
   LocationSummaryDto,
@@ -19,6 +20,18 @@ export class OrderQueryDto extends PaginationDto {
   @IsOptional()
   @IsIn(ORDER_LIST_FILTERS)
   filter?: (typeof ORDER_LIST_FILTERS)[number];
+}
+
+export class CancelOrderDto {
+  @ApiPropertyOptional({
+    description: 'Why the order is being cancelled. Shown to you, never to the shopper.',
+    maxLength: 500,
+  })
+  @TrimmedValue()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }
 
 export class OrderItemResponseDto {
@@ -71,6 +84,10 @@ export class CustomerOrderResponseDto {
   })
   financials: OfferBreakdownResponseDto;
   @ApiProperty({ type: ShopperPublicDto }) shopper: ShopperPublicDto;
+  @ApiPropertyOptional() cancelledAt?: string;
+  @ApiPropertyOptional({ enum: ['CUSTOMER', 'SYSTEM', 'SHOPPER'] }) cancelledBy?: string;
+  @ApiPropertyOptional({ description: 'Your own reason, or the system reason on timeout' })
+  cancelReason?: string;
   @ApiProperty() createdAt: string;
   @ApiProperty() updatedAt: string;
 }
@@ -109,6 +126,12 @@ export class ShopperOrderResponseDto {
   @ApiProperty({ description: '0 until price-change approvals exist' }) pendingApprovals: number;
   @ApiPropertyOptional() acceptedAt?: string;
   @ApiPropertyOptional() startedAt?: string;
+  @ApiPropertyOptional() cancelledAt?: string;
+  @ApiPropertyOptional({
+    enum: ['CUSTOMER', 'SYSTEM', 'SHOPPER'],
+    description: 'Who cancelled it. The reason is never sent to the shopper.',
+  })
+  cancelledBy?: string;
   @ApiProperty() createdAt: string;
   @ApiProperty() updatedAt: string;
 }

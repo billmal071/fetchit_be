@@ -7,6 +7,7 @@ import { ShoppingRequestsService } from './shopping-requests.service';
 import { ShopperBiddingService } from './shopper-bidding.service';
 import { ShoppingOrdersService } from './shopping-orders.service';
 import { ShopperOrdersService } from './shopper-orders.service';
+import { OrderExpiryService } from './order-expiry.service';
 import { ShoppingConfigService } from './shopping-config.service';
 
 @Module({
@@ -22,6 +23,7 @@ import { ShoppingConfigService } from './shopping-config.service';
     ShoppingOrdersService,
     ShopperOrdersService,
     ShoppingConfigService,
+    OrderExpiryService,
   ],
   exports: [
     ShoppingRequestsService,

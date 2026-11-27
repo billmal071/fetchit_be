@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { EVENTS } from '@/common/constants';
-import { ShoppingOfferAcceptedEvent } from '@/common/events';
+import { ShoppingOfferAcceptedEvent, ShoppingOrderCancelledEvent } from '@/common/events';
 import { NotificationsService } from '@/modules/notifications/notifications.service';
 import { PushService } from '@/modules/push/push.service';
 
@@ -54,6 +54,41 @@ export class ShoppingOrderListener {
         href: '/shopper/offers',
         data: { requestId: event.requestId },
       });
+    }
+  }
+
+  /**
+   * The shopper learns their assigned order is gone: in-app and push. The
+   * customer's reason is not in the event and is never passed on.
+   */
+  @OnEvent(EVENTS.SHOPPING_ORDER_CANCELLED)
+  async handleOrderCancelled(event: ShoppingOrderCancelledEvent): Promise<void> {
+    const href = `/shopper/orders/${event.orderId}`;
+    const title = `Order ${event.orderReference} cancelled`;
+    const body =
+      event.cancelledBy === 'SYSTEM'
+        ? 'It was cancelled because it was not accepted in time.'
+        : 'The customer cancelled it before you accepted.';
+
+    await this.notifications.create(event.shopperUserId, {
+      type: 'shopping.order.cancelled',
+      title,
+      body,
+      href,
+      data: { orderId: event.orderId, requestId: event.requestId, cancelledBy: event.cancelledBy },
+    });
+    try {
+      await this.pushService.sendToUser(event.shopperUserId, {
+        title,
+        body,
+        url: href,
+        tag: `shopping-order-${event.orderId}`,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to send order cancelled push for order ${event.orderId}:`,
+        error instanceof Error ? error.stack : error,
+      );
     }
   }
 }
