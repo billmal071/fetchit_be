@@ -182,10 +182,12 @@ export function toShopperOffer(
 export function toShopperOfferWithRequest(
   offer: OfferWithRequest,
   rules: IShoppingFeeRules,
+  /** Whether the shopper has a CURRENT pending offer on the request, whatever this row's own state. */
+  hasSubmittedOffer: boolean,
 ): ShopperOfferWithRequestResponseDto {
   return {
     ...toShopperOffer(offer, breakdownOf(offer)),
-    request: toShopperSummary(offer.request, rules, offer.state === 'PENDING'),
+    request: toShopperSummary(offer.request, rules, hasSubmittedOffer),
   };
 }
 

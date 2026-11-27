@@ -228,14 +228,13 @@ describe('ShoppingOfferRepository.submit', () => {
     shopperFee: 1000,
     etaMinutes: 30,
     financials: {},
-    now: NOW,
   };
   const makeRepo = (locked: unknown[], create = jest.fn(async () => ({ id: 'offer-1' }))) => {
     const tx = { $queryRaw: jest.fn(async () => locked), shoppingOffer: { create } };
     const prisma = { $transaction: jest.fn(async (fn: (t: unknown) => unknown) => fn(tx)) };
     return { repo: new ShoppingOfferRepository(prisma as unknown as PrismaService), tx, create };
   };
-  const later = new Date(NOW.getTime() + 60_000);
+  const later = new Date(Date.now() + 60_000);
 
   it('locks the request row FOR SHARE before inserting, and expires with the request deadline', async () => {
     const { repo, tx, create } = makeRepo([{ status: 'OPEN', offer_deadline: later }]);
@@ -248,9 +247,31 @@ describe('ShoppingOfferRepository.submit', () => {
     );
   });
 
+  it('judges the deadline by the clock read AFTER the lock query, not before it', async () => {
+    jest.useFakeTimers({ now: NOW });
+    try {
+      const deadline = new Date(NOW.getTime() + 1000);
+      const create = jest.fn(async () => ({ id: 'offer-1' }));
+      const tx = {
+        $queryRaw: jest.fn(async () => {
+          jest.setSystemTime(new Date(NOW.getTime() + 5000)); // the lock wait outlasts the deadline
+          return [{ status: 'OPEN', offer_deadline: deadline }];
+        }),
+        shoppingOffer: { create },
+      };
+      const prisma = { $transaction: jest.fn(async (fn: (t: unknown) => unknown) => fn(tx)) };
+      const repo = new ShoppingOfferRepository(prisma as unknown as PrismaService);
+
+      await expect(repo.submit(input)).rejects.toBeInstanceOf(OfferRequestClosedError);
+      expect(create).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it.each([
     ['cancelled', [{ status: 'CANCELLED', offer_deadline: later }]],
-    ['past deadline', [{ status: 'OPEN', offer_deadline: NOW }]],
+    ['past deadline', [{ status: 'OPEN', offer_deadline: new Date(Date.now() - 1000) }]],
     ['missing', []],
   ])('refuses and writes nothing when the request is %s', async (_label, locked) => {
     const { repo, create } = makeRepo(locked);

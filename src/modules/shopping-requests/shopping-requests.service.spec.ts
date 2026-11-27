@@ -146,6 +146,12 @@ describe('ShoppingRequestsService', () => {
       });
     });
 
+    it('rejects non-finite amounts (a malformed item that reached the service) with 422', async () => {
+      const body = { ...dto, items: [[]] } as unknown as CreateShoppingRequestDto;
+      await expect(service.create('cust-1', body)).rejects.toMatchObject({ status: 422 });
+      expect(requests.create).not.toHaveBeenCalled();
+    });
+
     it('rejects an unknown or inactive location with 400 and writes nothing', async () => {
       reference.findActiveLocationIds.mockResolvedValue([]);
       await expect(service.create('cust-1', dto)).rejects.toMatchObject({ status: 400 });

@@ -50,7 +50,6 @@ export interface ISubmitOfferInput {
   etaMinutes: number;
   note?: string;
   financials: Prisma.InputJsonValue;
-  now: Date;
 }
 
 export interface IShoppingOfferRepository {

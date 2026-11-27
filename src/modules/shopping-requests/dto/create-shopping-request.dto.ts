@@ -183,6 +183,7 @@ export class CreateShoppingRequestDto {
   @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(MAX_REQUEST_ITEMS)
+  @IsObject({ each: true })
   @ValidateNested({ each: true })
   @Type(() => ShoppingRequestItemDto)
   items: ShoppingRequestItemDto[];

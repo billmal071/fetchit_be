@@ -212,6 +212,18 @@ describe('shopping requests and offers (HTTP)', () => {
       expect(input.items[0].maxSubstitutePrice).toBeUndefined(); // null for REFUND is accepted and dropped
     });
 
+    it.each([
+      ['[[]]', [[]]],
+      ['[null]', [null]],
+      ["['x']", ['x']],
+      ['[1]', [1]],
+    ])('POST rejects items %s with 400 and creates nothing', async (_label, items) => {
+      expect(
+        (await call('POST', '/shopping-requests', 'CUSTOMER', { ...validBody, items })).status,
+      ).toBe(400);
+      expect(requests.create).not.toHaveBeenCalled();
+    });
+
     it('POST trims string fields before storing them', async () => {
       const item = {
         ...validItem,
@@ -568,6 +580,7 @@ describe('shopping requests and offers (HTTP)', () => {
 
     it('GET /shopper/offers filters by state and pages', async () => {
       offers.listForShopper.mockResolvedValue({ rows: [makeOfferRow()], total: 1 });
+      offers.findPendingRequestIds.mockResolvedValue(new Set(['req-1']));
       const { status, json } = await call(
         'GET',
         '/shopper/offers?state=PENDING&page=1&limit=10',

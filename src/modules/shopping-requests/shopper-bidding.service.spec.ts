@@ -178,6 +178,8 @@ describe('ShopperBiddingService', () => {
     });
 
     it('is idempotent: the same input gives the same answer', async () => {
+      const row = makeRequestRow(); // one fixture: its deadline must not move between calls
+      requests.findCoveredByShopper.mockResolvedValue(row);
       expect(await service.preview('u', 'req-1', bid)).toEqual(
         await service.preview('u', 'req-1', bid),
       );
@@ -195,7 +197,6 @@ describe('ShopperBiddingService', () => {
         etaMinutes: 30,
         note: 'hi',
         financials: expect.objectContaining({ customerTotal: 12171 }),
-        now: expect.any(Date),
       });
       expect(result).toMatchObject({ id: 'offer-1', financials: { shopperGrossEarnings: 1000 } });
       expect(audit.log).toHaveBeenCalledWith(
@@ -291,8 +292,47 @@ describe('ShopperBiddingService', () => {
     });
   });
 
+  describe('hasSubmittedOffer after withdraw then resubmit', () => {
+    const historical = makeOfferRow({ id: 'offer-A', state: 'WITHDRAWN' });
+
+    it('offer list: a withdrawn offer A reports true while B is PENDING on the same request', async () => {
+      offers.listForShopper.mockResolvedValue({ rows: [historical], total: 1 });
+      offers.findPendingRequestIds.mockResolvedValue(new Set(['req-1']));
+      const result = await service.listOffers('u', { page: 1, limit: 10 } as never);
+      expect(offers.findPendingRequestIds).toHaveBeenCalledWith('prof-1', ['req-1']);
+      expect(result.data[0]).toMatchObject({
+        state: 'WITHDRAWN',
+        request: { hasSubmittedOffer: true },
+      });
+    });
+
+    it('offer list: false when the shopper has no current pending offer, even for a PENDING-looking row', async () => {
+      offers.listForShopper.mockResolvedValue({
+        rows: [makeOfferRow({ state: 'EXPIRED' })],
+        total: 1,
+      });
+      offers.findPendingRequestIds.mockResolvedValue(new Set());
+      const result = await service.listOffers('u', { page: 1, limit: 10 } as never);
+      expect(result.data[0].request.hasSubmittedOffer).toBe(false);
+    });
+
+    it('offer detail: same rule', async () => {
+      offers.findOwnedById.mockResolvedValue(historical);
+      offers.findPendingByShopperAndRequest.mockResolvedValue(makeOfferRow({ id: 'offer-B' }));
+      const result = await service.getOffer('u', 'offer-A');
+      expect(offers.findPendingByShopperAndRequest).toHaveBeenCalledWith('prof-1', 'req-1');
+      expect(result.request.hasSubmittedOffer).toBe(true);
+    });
+
+    it('request detail: reports true from the current pending offer', async () => {
+      offers.findPendingByShopperAndRequest.mockResolvedValue(makeOfferRow({ id: 'offer-B' }));
+      expect((await service.getRequest('u', 'req-1')).hasSubmittedOffer).toBe(true);
+    });
+  });
+
   describe('own offers', () => {
     it('lists with the state filter, after expiring due offers', async () => {
+      offers.findPendingRequestIds.mockResolvedValue(new Set(['req-1']));
       const result = await service.listOffers('u', {
         page: 1,
         limit: 10,

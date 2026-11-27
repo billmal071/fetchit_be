@@ -159,7 +159,6 @@ export class ShopperBiddingService {
         etaMinutes: dto.etaMinutes,
         note: dto.note,
         financials: { ...financials },
-        now: new Date(),
       });
     } catch (error) {
       // Re-checked under the repository's row lock / unique index, so these
@@ -206,8 +205,12 @@ export class ShopperBiddingService {
       this.config.getRules(),
       this.offers.listForShopper(profile.id, (page - 1) * limit, limit, query.state),
     ]);
+    const pending = await this.offers.findPendingRequestIds(
+      profile.id,
+      rows.map((row) => row.requestId),
+    );
     return {
-      data: rows.map((row) => toShopperOfferWithRequest(row, rules)),
+      data: rows.map((row) => toShopperOfferWithRequest(row, rules, pending.has(row.requestId))),
       meta: createPaginationMeta(page, limit, total),
     };
   }
@@ -219,7 +222,11 @@ export class ShopperBiddingService {
     if (!offer) {
       throw new ResourceNotFoundException('Offer', id);
     }
-    return toShopperOfferWithRequest(offer, await this.config.getRules());
+    return toShopperOfferWithRequest(
+      offer,
+      await this.config.getRules(),
+      await this.hasPending(profile.id, offer.requestId),
+    );
   }
 
   /** Withdraw an own PENDING offer. The state check is part of the UPDATE. */
@@ -237,10 +244,18 @@ export class ShopperBiddingService {
       );
     }
     await this.record(userId, 'SHOPPING_OFFER_WITHDRAWN', id, { requestId: offer.requestId });
-    return toShopperOfferWithRequest(offer, await this.config.getRules());
+    return toShopperOfferWithRequest(
+      offer,
+      await this.config.getRules(),
+      await this.hasPending(profile.id, offer.requestId),
+    );
   }
 
   // ------------------------------------------------------------------ helpers
+
+  private async hasPending(shopperProfileId: string, requestId: string): Promise<boolean> {
+    return (await this.offers.findPendingByShopperAndRequest(shopperProfileId, requestId)) !== null;
+  }
 
   /** 403 unless APPROVED. */
   private async approvedProfile(userId: string): Promise<ShopperProfileWithDetails> {

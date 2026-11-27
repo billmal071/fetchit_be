@@ -25,8 +25,12 @@ export class ShoppingOfferRepository implements IShoppingOfferRepository {
         const locked = await tx.$queryRaw<Array<{ status: string; offer_deadline: Date }>>`
           SELECT status::text AS status, offer_deadline
           FROM shopping_requests WHERE id = ${input.requestId} FOR SHARE`;
+        // Read the clock only now: waiting for a connection or for the row lock
+        // can outlast the deadline, and a time captured before it would let an
+        // offer in with an already-past expiresAt.
+        const now = new Date();
         const request = locked[0];
-        if (!request || request.status !== 'OPEN' || request.offer_deadline <= input.now) {
+        if (!request || request.status !== 'OPEN' || request.offer_deadline <= now) {
           throw new OfferRequestClosedError();
         }
         return tx.shoppingOffer.create({

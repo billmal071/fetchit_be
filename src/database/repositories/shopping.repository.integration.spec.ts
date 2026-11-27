@@ -98,7 +98,6 @@ suite('shopping repositories (real Postgres)', () => {
       shopperFee: 1000,
       etaMinutes: 30,
       financials: { shopperFee: 1000 },
-      now: new Date(),
     });
 
   beforeAll(async () => {
@@ -262,6 +261,22 @@ suite('shopping repositories (real Postgres)', () => {
 
       const late = await makeRequest(loc1, [cat1], -1000);
       await expect(submit(late.id, shopperA)).rejects.toBeInstanceOf(OfferRequestClosedError);
+    });
+
+    it('refuses an offer whose deadline passed while it waited for the request row lock', async () => {
+      const { id } = await makeRequest(loc1, [cat1], 400);
+      const holder = db.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT id FROM shopping_requests WHERE id = ${id} FOR UPDATE`;
+          await new Promise((resolve) => setTimeout(resolve, 900));
+        },
+        { timeout: 5000 },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const attempt = submit(id, shopperA); // blocks on FOR SHARE until the holder commits
+      await holder;
+      await expect(attempt).rejects.toBeInstanceOf(OfferRequestClosedError);
+      expect(await db.shoppingOffer.count({ where: { requestId: id } })).toBe(0);
     });
 
     it('expireDue moves only PENDING offers past their expiry', async () => {

@@ -142,13 +142,15 @@ export class ShoppingRequestsService {
         [{ field, message: `${what} must not exceed ₦${MAX_AMOUNT.toLocaleString('en-NG')}` }],
         'Amount is too large',
       );
+    // `!(x <= MAX)` also catches NaN/Infinity from a malformed item.
+    const within = (amount: number): boolean => Number.isFinite(amount) && amount <= MAX_AMOUNT;
     dto.items.forEach((item, index) => {
-      if (item.quantity * item.estimatedUnitPrice > MAX_AMOUNT) {
+      if (!within(item.quantity * item.estimatedUnitPrice)) {
         throw tooBig(`items[${index}]`, 'quantity x estimatedUnitPrice');
       }
     });
-    if (goods > MAX_AMOUNT) throw tooBig('items', 'The total of all items');
-    if (estimatedTotal > MAX_AMOUNT) throw tooBig('items', 'The estimated total including fees');
+    if (!within(goods)) throw tooBig('items', 'The total of all items');
+    if (!within(estimatedTotal)) throw tooBig('items', 'The estimated total including fees');
   }
 
   private async assertReferences(dto: CreateShoppingRequestDto): Promise<void> {
