@@ -27,6 +27,13 @@ RUN pnpm db:generate && pnpm build
 FROM builder AS migrate
 CMD ["pnpm", "db:migrate:deploy"]
 
+# ─── Production dependencies: the builder's node_modules (Prisma client already
+# generated) with devDependencies pruned. Pruning in its own stage means the
+# full tree is never copied into a production layer. `migrate` above stays on
+# the unpruned builder, so the prisma CLI is still available there.
+FROM builder AS prod-deps
+RUN pnpm prune --prod
+
 # ─── Stage 3: Production ──────────────────────────────────────────────────────
 FROM node:20-alpine AS production
 
@@ -36,13 +43,12 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# Production deps only. The `prisma` CLI is a devDependency, so `pnpm db:generate`
-# cannot run after a --prod install; reuse the node_modules the builder already
-# generated the client into, then drop devDependencies.
+# Production deps only (pruned in the prod-deps stage). The `prisma` CLI is a
+# devDependency, so `pnpm db:generate` cannot run after a --prod install; the
+# generated client comes along in the pruned node_modules.
 COPY package.json pnpm-lock.yaml ./
 COPY prisma ./prisma/
-COPY --from=builder /app/node_modules ./node_modules
-RUN pnpm prune --prod
+COPY --from=prod-deps /app/node_modules ./node_modules
 
 # Copy built output
 COPY --from=builder /app/dist ./dist
