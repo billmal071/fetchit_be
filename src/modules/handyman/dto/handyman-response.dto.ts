@@ -44,7 +44,11 @@ export class HandymanApplicationServiceRequestDto {
   @ApiProperty() categoryId: string;
   @ApiProperty() title: string;
   @ApiProperty() description: string;
-  @ApiProperty() location: string;
+  @ApiProperty({
+    description:
+      'Empty once the request went to someone else and this application is no longer PENDING/ACCEPTED',
+  })
+  location: string;
   @ApiProperty({ nullable: true, type: Number }) latitude: number | null;
   @ApiProperty({ nullable: true, type: Number }) longitude: number | null;
   @ApiProperty({ nullable: true, type: String, description: 'Decimal serialised as a string' })
@@ -74,8 +78,8 @@ export class HandymanApplicationResponseDto {
   @ApiProperty() serviceRequestId: string;
   @ApiProperty() handymanProfileId: string;
   @ApiProperty({ required: false, nullable: true, type: String }) coverMessage?: string | null;
-  @ApiProperty({ required: false, nullable: true, type: String, description: 'Decimal as string' })
-  proposedRate?: string | null;
+  @ApiProperty({ nullable: true, type: String, description: 'Decimal as string' })
+  proposedRate: string | null;
   @ApiProperty({ enum: ['PENDING', 'ACCEPTED', 'REJECTED', 'WITHDRAWN'] }) status: string;
   @ApiProperty() createdAt: Date;
   @ApiProperty() updatedAt: Date;
