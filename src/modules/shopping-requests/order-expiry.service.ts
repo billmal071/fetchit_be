@@ -25,6 +25,11 @@ export class OrderExpiryService {
     private readonly events: EventEmitter2,
   ) {}
 
+  /** Minutes a shopper has to accept an ASSIGNED order, from the config. */
+  async acceptWindowMinutes(): Promise<number> {
+    return (await this.config.getRules()).shopperAcceptWindowMinutes;
+  }
+
   /** Cancel every stale ASSIGNED order in `scope`, telling each shopper. */
   async sweep(scope: IExpireScope): Promise<void> {
     const rules = await this.config.getRules();

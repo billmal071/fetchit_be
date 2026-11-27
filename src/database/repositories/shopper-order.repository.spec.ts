@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { ShopperOrderRepository } from './shopper-order.repository';
@@ -376,6 +377,204 @@ describe('ShopperOrderRepository.transition', () => {
     expect(await repo.transition(step)).toEqual({ outcome: 'conflict', state: 'SHOPPER_ACCEPTED' });
     expect(await repo.transition(step)).toEqual({ outcome: 'not_found' });
     expect(tx.orderEvent.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('ShopperOrderRepository.expireStale: what it hands to cancelOrder, and surviving a failure', () => {
+  const NOW_ = new Date('2026-11-25T10:00:00Z');
+  const REOPEN = new Date('2026-11-25T11:00:00Z');
+  const makeRepo = (ids: string[]) => {
+    const prisma = { shopperOrder: { findMany: jest.fn(async () => ids.map((id) => ({ id }))) } };
+    const repo = new ShopperOrderRepository(prisma as unknown as PrismaService);
+    return { repo, prisma, cancelOrder: jest.spyOn(repo, 'cancelOrder') };
+  };
+  const done = (id: string) =>
+    ({
+      outcome: 'cancelled',
+      order: { id },
+      shopperUserId: `shopper-of-${id}`,
+      requestReference: 'SR-1',
+      cancelledBy: 'SYSTEM',
+    }) as never;
+
+  it('cancels every stale order as the SYSTEM, with the cutoff and the reopen deadline', async () => {
+    const { repo, cancelOrder } = makeRepo(['order-1', 'order-2']);
+    cancelOrder.mockImplementation(async (input) => done(input.orderId));
+
+    await repo.expireStale({ customerId: 'cust-1' }, NOW_, REOPEN);
+
+    expect(cancelOrder.mock.calls.map((c) => c[0])).toEqual([
+      {
+        orderId: 'order-1',
+        actor: { kind: 'SYSTEM' },
+        assignedBefore: NOW_,
+        reopenDeadline: REOPEN,
+      },
+      {
+        orderId: 'order-2',
+        actor: { kind: 'SYSTEM' },
+        assignedBefore: NOW_,
+        reopenDeadline: REOPEN,
+      },
+    ]);
+  });
+
+  it('keeps the cancellations that committed when a later one throws, logs it, and carries on', async () => {
+    const { repo, cancelOrder } = makeRepo(['order-1', 'order-2', 'order-3']);
+    cancelOrder.mockImplementation(async (input) => {
+      if (input.orderId === 'order-2') throw new Error('deadlock detected');
+      return done(input.orderId);
+    });
+    const logged = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const result = await repo.expireStale({}, NOW_, REOPEN);
+
+      expect(result.map((c) => c.order.id)).toEqual(['order-1', 'order-3']);
+      expect(cancelOrder).toHaveBeenCalledTimes(3);
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(String(logged.mock.calls[0][0])).toContain('order-2');
+      expect(String(logged.mock.calls[0][0])).toContain('deadlock detected');
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it('a failing order is not lost: the next sweep selects it again, since it is still ASSIGNED', async () => {
+    const { repo, prisma, cancelOrder } = makeRepo(['order-2']);
+    cancelOrder
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockImplementation(async (i) => done(i.orderId));
+    const logged = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      expect(await repo.expireStale({}, NOW_, REOPEN)).toEqual([]);
+      expect((await repo.expireStale({}, NOW_, REOPEN)).map((c) => c.order.id)).toEqual([
+        'order-2',
+      ]);
+      expect(prisma.shopperOrder.findMany).toHaveBeenCalledTimes(2);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+});
+
+describe('ShopperOrderRepository.cancelOrder: the SYSTEM cutoff is mandatory', () => {
+  const REOPEN = new Date('2026-11-25T11:00:00Z');
+
+  it('throws before opening a transaction when a SYSTEM cancel has no cutoff', async () => {
+    const { tx, repo } = makeTx();
+    const prisma = (repo as unknown as { prisma: { $transaction: jest.Mock } }).prisma;
+    await expect(
+      repo.cancelOrder({
+        orderId: 'order-1',
+        actor: { kind: 'SYSTEM' },
+        reopenDeadline: REOPEN,
+      } as never),
+    ).rejects.toThrow('assignedBefore');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(tx.shopperOrder.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not accept a SYSTEM cancel without a cutoff at compile time', () => {
+    const { repo } = makeTx();
+    const attempt = (): Promise<unknown> =>
+      // @ts-expect-error assignedBefore is required for the SYSTEM actor
+      repo.cancelOrder({ orderId: 'o', actor: { kind: 'SYSTEM' }, reopenDeadline: REOPEN });
+    expect(attempt).toBeDefined();
+  });
+
+  it('keeps the customer cancel independent of any cutoff', async () => {
+    const { tx, repo } = makeTx();
+    tx.$queryRaw.mockResolvedValue([{ id: 'req-1' }] as never);
+    tx.shopperOrder.updateMany.mockResolvedValue({ count: 0 });
+    (tx as Record<string, any>).shopperOrder.findUnique = jest
+      .fn()
+      .mockResolvedValue({ requestId: 'req-1', customerId: 'cust-1' });
+    const result = await repo.cancelOrder({
+      orderId: 'order-1',
+      actor: { kind: 'CUSTOMER', userId: 'cust-1' },
+      reopenDeadline: REOPEN,
+    });
+    expect(result.outcome).not.toBe('not_stale');
+    expect(tx.shopperOrder.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'order-1', state: 'ASSIGNED' } }),
+    );
+  });
+});
+
+describe('ShopperOrderRepository.transition: the accept window is re-checked after the locks', () => {
+  const T = new Date('2026-11-25T10:00:00Z');
+  const step = {
+    id: 'order-1',
+    shopperProfileId: 'prof-1',
+    actorId: 'user-1',
+    from: 'ASSIGNED' as const,
+    to: 'SHOPPER_ACCEPTED' as const,
+    eventType: 'SHOPPER_ACCEPTED',
+    stamp: 'shopperAcceptedAt' as const,
+  };
+
+  it('puts the cutoff, from a clock read AFTER the profile lock, into the UPDATE', async () => {
+    jest.useFakeTimers({ now: T });
+    try {
+      const { tx, repo } = makeTx();
+      tx.$queryRaw.mockImplementation(async () => {
+        jest.setSystemTime(new Date('2026-11-25T10:05:00Z')); // the lock wait took five minutes
+        return [{ account_state: 'APPROVED' }];
+      });
+      tx.shopperOrder.updateMany.mockResolvedValue({ count: 1 });
+      await repo.transition({ ...step, acceptWindowMinutes: 30 });
+
+      expect(tx.shopperOrder.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 'order-1',
+          shopperProfileId: 'prof-1',
+          state: 'ASSIGNED',
+          createdAt: { gte: new Date('2026-11-25T09:35:00Z') }, // 10:05 - 30 min
+        },
+        data: { state: 'SHOPPER_ACCEPTED', shopperAcceptedAt: new Date('2026-11-25T10:05:00Z') },
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('reports accept_expired, writing nothing, when the order is still ASSIGNED but past the window', async () => {
+    const { tx, repo } = makeTx();
+    tx.shopperOrder.updateMany.mockResolvedValue({ count: 0 });
+    tx.shopperOrder.findFirst.mockResolvedValue({ state: 'ASSIGNED', cancelledBy: null });
+
+    expect(await repo.transition({ ...step, acceptWindowMinutes: 30 })).toEqual({
+      outcome: 'accept_expired',
+    });
+    expect(tx.orderEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('still reports an ordinary conflict for any other state', async () => {
+    const { tx, repo } = makeTx();
+    tx.shopperOrder.updateMany.mockResolvedValue({ count: 0 });
+    tx.shopperOrder.findFirst.mockResolvedValue({ state: 'SHOPPER_ACCEPTED', cancelledBy: null });
+    expect(await repo.transition({ ...step, acceptWindowMinutes: 30 })).toEqual({
+      outcome: 'conflict',
+      state: 'SHOPPER_ACCEPTED',
+      cancelledBy: null,
+    });
+  });
+
+  it('applies no deadline to the start-shopping step, or when no window is given', async () => {
+    const { tx, repo } = makeTx();
+    tx.shopperOrder.updateMany.mockResolvedValue({ count: 1 });
+    await repo.transition({
+      ...step,
+      from: 'SHOPPER_ACCEPTED',
+      to: 'SHOPPING_STARTED',
+      eventType: 'SHOPPING_STARTED',
+      stamp: 'shoppingStartedAt',
+    });
+    expect(tx.shopperOrder.updateMany.mock.calls[0][0].where).toEqual({
+      id: 'order-1',
+      shopperProfileId: 'prof-1',
+      state: 'SHOPPER_ACCEPTED',
+    });
   });
 });
 

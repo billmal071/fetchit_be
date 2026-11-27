@@ -755,9 +755,11 @@ suite('shopping repositories (real Postgres)', () => {
           await untilBlockedOn('shopping_offers'); // the accept now holds the profile lock
           suspension = suspend(target);
           const suspensionSettled = settledFlag(suspension);
-          await sleep(300);
+          // Observe the suspension itself parked on the profile lock the accept holds
+          // (not just a pending promise) before letting the accept go on.
+          await untilBlockedOn('shopper_profiles');
           expect(attemptSettled()).toBe(false);
-          expect(suspensionSettled()).toBe(false); // blocked behind the accept's profile lock
+          expect(suspensionSettled()).toBe(false);
 
           stall.release();
           const result = await attempt;
@@ -784,20 +786,27 @@ suite('shopping repositories (real Postgres)', () => {
     it('refuses an offer that expired while the accept waited for the shopper profile lock', async () => {
       const [target] = await shoppersNeeded(1);
       const { requestId, offers: placed } = await offered([target]);
-      await db.shoppingOffer.update({
-        where: { id: placed[0].id },
-        data: { expiresAt: new Date(Date.now() + 1200) },
-      });
-      // A conflicting lock on the profile row, held past the deadline: the profile stays APPROVED.
+      // A conflicting lock on the profile row; the profile itself stays APPROVED.
       const blocker = hold(
         (tx) => tx.$queryRaw`SELECT id FROM shopper_profiles WHERE id = ${target} FOR UPDATE`,
       );
       try {
         await blocker.ready;
+        // The deadline is set only now, after the lock is held, so setup cannot consume it.
+        const deadline = Date.now() + 2500;
+        await db.shoppingOffer.update({
+          where: { id: placed[0].id },
+          data: { expiresAt: new Date(deadline) },
+        });
         const attempt = accept(requestId, placed[0].id);
         const attemptSettled = settledFlag(attempt);
         await untilBlockedOn('shopper_profiles');
-        await sleep(1500); // beyond the deadline
+        // Proof the accept is parked on the profile lock WHILE the offer is still valid: a
+        // repository that sampled the clock before this lock would have judged it right now.
+        expect(Date.now()).toBeLessThan(deadline);
+        expect(attemptSettled()).toBe(false);
+
+        await sleep(deadline - Date.now() + 150); // now the deadline has passed
         expect(attemptSettled()).toBe(false);
         blocker.release();
         await blocker.done;
@@ -864,21 +873,27 @@ suite('shopping repositories (real Postgres)', () => {
       expect(await db.shopperOrder.count({ where: { requestId } })).toBe(1);
     });
 
-    it('a non-owner locks nothing: their accept returns at once while the owner row lock is held', async () => {
+    it('a non-owner locks nothing: their accept returns not_found while the owner row lock is still held', async () => {
       const { requestId, offers: placed } = await offered([shopperA]);
       const owner = hold(
         (tx) => tx.$queryRaw`SELECT id FROM shopping_requests WHERE id = ${requestId} FOR UPDATE`,
       );
+      let timer: NodeJS.Timeout | undefined;
       try {
-        await owner.ready; // the row lock is definitely held now
-        const started = Date.now();
+        await owner.ready; // the row lock is definitely held, and stays held below
+        // ONE bound for the whole call: if the call waited on the lock it would lose this race.
+        const bound = new Promise<'blocked'>((resolve) => {
+          timer = setTimeout(() => resolve('blocked'), 10_000);
+        });
         const result = await Promise.race([
           accept(requestId, placed[0].id, shopperA), // not the owner
-          sleep(5000).then(() => 'blocked' as const), // bound: a lock wait would show up here
+          bound,
         ]);
+        clearTimeout(timer);
+        // Decisive, and made BEFORE the holder releases: it did not wait for the lock.
         expect(result).toEqual({ outcome: 'not_found' });
-        expect(Date.now() - started).toBeLessThan(2000);
       } finally {
+        clearTimeout(timer);
         owner.release();
         await owner.done.catch(() => undefined);
       }
@@ -1001,17 +1016,142 @@ suite('shopping repositories (real Postgres)', () => {
         ]);
       });
 
+      const untouched = async (id: string): Promise<void> => {
+        expect((await db.shopperOrder.findUniqueOrThrow({ where: { id } })).state).toBe('ASSIGNED');
+        expect(await db.orderEvent.count({ where: { orderId: id } })).toBe(1); // OFFER_ACCEPTED only
+      };
+
+      describe('the accept window runs out while the accept waits for the profile lock', () => {
+        const WINDOW = 30;
+        /** An ASSIGNED order that is `validForMs` away from the end of its accept window. */
+        const nearlyExpired = async (shopperId: string, validForMs: number): Promise<string> => {
+          const id = await newOrder(shopperId);
+          await db.shopperOrder.update({
+            where: { id },
+            data: { createdAt: new Date(Date.now() - WINDOW * 60_000 + validForMs) },
+          });
+          return id;
+        };
+        const acceptWithWindow = (id: string, shopperId: string) =>
+          orderRepo.transition({
+            id,
+            shopperProfileId: shopperId,
+            actorId: 'actor',
+            from: 'ASSIGNED',
+            to: 'SHOPPER_ACCEPTED',
+            eventType: 'SHOPPER_ACCEPTED',
+            stamp: 'shopperAcceptedAt',
+            acceptWindowMinutes: WINDOW,
+          });
+
+        it('refuses the accept, writing nothing, when the window ends during the lock wait', async () => {
+          const [target] = await shoppersNeeded(1);
+          // The order is created BEFORE the profile lock is taken: creating it needs that row.
+          const id = await newOrder(target);
+          const blocker = hold(
+            (tx) => tx.$queryRaw`SELECT id FROM shopper_profiles WHERE id = ${target} FOR UPDATE`,
+          );
+          try {
+            await blocker.ready;
+            await db.shopperOrder.update({
+              where: { id },
+              data: { createdAt: new Date(Date.now() - WINDOW * 60_000 + 2500) },
+            });
+            const deadline = Date.now() + 2500;
+            const attempt = acceptWithWindow(id, target);
+            const attemptSettled = settledFlag(attempt);
+            await untilBlockedOn('shopper_profiles');
+            expect(Date.now()).toBeLessThan(deadline); // parked while the order was still acceptable
+            await sleep(deadline - Date.now() + 200);
+            expect(attemptSettled()).toBe(false);
+            blocker.release();
+            await blocker.done;
+
+            expect(await attempt).toEqual({ outcome: 'accept_expired' });
+            await untouched(id);
+          } finally {
+            blocker.release();
+            await blocker.done.catch(() => undefined);
+          }
+        });
+
+        it('accepts an order that is still inside its window, and never applies the window to start', async () => {
+          const [target] = await shoppersNeeded(1);
+          const id = await nearlyExpired(target, 60_000);
+          expect((await acceptWithWindow(id, target)).outcome).toBe('transitioned');
+          // The window is long gone for this order, but starting is not bound by it.
+          await db.shopperOrder.update({
+            where: { id },
+            data: { createdAt: new Date(Date.now() - 5 * WINDOW * 60_000) },
+          });
+          expect((await move(id, target, 'SHOPPER_ACCEPTED')).outcome).toBe('transitioned');
+        });
+
+        it('through the service: the shopper gets the timeout 409 and the order ends up cancelled and the request reopened', async () => {
+          const config = new ShoppingConfigService(new ShoppingConfigRepository(prisma));
+          const emit = jest.fn();
+          const expiry = new OrderExpiryService(orderRepo, config, { emit } as never);
+          const shopperOrders = new ShopperOrdersService(
+            new ShopperProfileRepository(prisma),
+            orderRepo,
+            { log: jest.fn() } as never,
+            expiry,
+          );
+          const rules = await config.getRules();
+          const [target] = await shoppersNeeded(1);
+          const userId = (await db.shopperProfile.findUniqueOrThrow({ where: { id: target } }))
+            .userId;
+          const id = await newOrder(target);
+          const blocker = hold(
+            (tx) => tx.$queryRaw`SELECT id FROM shopper_profiles WHERE id = ${target} FOR UPDATE`,
+          );
+          try {
+            await blocker.ready;
+            const deadline = Date.now() + 2500;
+            await db.shopperOrder.update({
+              where: { id },
+              data: {
+                createdAt: new Date(deadline - rules.shopperAcceptWindowMinutes * 60_000),
+              },
+            });
+            // The service's own sweep (before the transition) still sees a fresh order.
+            const attempt = shopperOrders.accept(userId, id).catch((e: unknown) => e);
+            await untilBlockedOn('shopper_profiles');
+            expect(Date.now()).toBeLessThan(deadline);
+            await sleep(deadline - Date.now() + 200);
+            blocker.release();
+            await blocker.done;
+
+            expect(await attempt).toMatchObject({
+              status: 409,
+              message: 'This order was cancelled because it was not accepted in time',
+            });
+            const order = await db.shopperOrder.findUniqueOrThrow({ where: { id } });
+            expect(order).toMatchObject({ state: 'CANCELLED', cancelledBy: 'SYSTEM' });
+            expect((await orderRepo.listEvents(id, 'asc')).map((e) => e.type)).toEqual([
+              'OFFER_ACCEPTED',
+              'ORDER_CANCELLED',
+            ]);
+            expect(
+              (await db.shoppingRequest.findUniqueOrThrow({ where: { id: order.requestId } }))
+                .status,
+            ).toBe('OPEN');
+            expect(emit).toHaveBeenCalledWith(
+              'shopping.order.cancelled',
+              expect.objectContaining({ orderId: id, cancelledBy: 'SYSTEM' }),
+            );
+          } finally {
+            blocker.release();
+            await blocker.done.catch(() => undefined);
+          }
+        });
+      });
+
       describe('a shopper suspended after the service checked APPROVED', () => {
         const suspend = (id: string) =>
           db.shopperProfile.update({ where: { id }, data: { accountState: 'SUSPENDED' } });
         const approve = (id: string) =>
           db.shopperProfile.update({ where: { id }, data: { accountState: 'APPROVED' } });
-        const untouched = async (id: string): Promise<void> => {
-          expect((await db.shopperOrder.findUniqueOrThrow({ where: { id } })).state).toBe(
-            'ASSIGNED',
-          );
-          expect(await db.orderEvent.count({ where: { orderId: id } })).toBe(1); // OFFER_ACCEPTED only
-        };
 
         it('is refused by the transition itself, writing nothing', async () => {
           const [target] = await shoppersNeeded(1);
@@ -1066,7 +1206,9 @@ suite('shopping repositories (real Postgres)', () => {
             await untilBlockedOn('shopper_orders');
             suspension = suspend(target);
             const suspensionSettled = settledFlag(suspension);
-            await sleep(300);
+            // The suspension must be seen waiting on the profile lock the transition holds;
+            // only then is the order lock released. Without the guard it would never wait.
+            await untilBlockedOn('shopper_profiles');
             expect(attemptSettled()).toBe(false);
             expect(suspensionSettled()).toBe(false);
 

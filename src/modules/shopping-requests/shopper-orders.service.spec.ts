@@ -5,7 +5,7 @@ describe('ShopperOrdersService', () => {
   let profiles: { ensureByUserId: jest.Mock };
   let orders: Record<string, jest.Mock>;
   let audit: { log: jest.Mock };
-  let expiry: { sweep: jest.Mock; announce: jest.Mock };
+  let expiry: { sweep: jest.Mock; announce: jest.Mock; acceptWindowMinutes: jest.Mock };
   let service: ShopperOrdersService;
 
   beforeEach(() => {
@@ -22,7 +22,11 @@ describe('ShopperOrdersService', () => {
       })),
     };
     audit = { log: jest.fn() };
-    expiry = { sweep: jest.fn(async () => undefined), announce: jest.fn() };
+    expiry = {
+      sweep: jest.fn(async () => undefined),
+      announce: jest.fn(),
+      acceptWindowMinutes: jest.fn(async () => 30),
+    };
     service = new ShopperOrdersService(
       profiles as never,
       orders as never,
@@ -113,6 +117,7 @@ describe('ShopperOrdersService', () => {
         to: 'SHOPPER_ACCEPTED',
         eventType: 'SHOPPER_ACCEPTED',
         stamp: 'shopperAcceptedAt',
+        acceptWindowMinutes: 30,
       });
       expect(result.state).toBe('SHOPPER_ACCEPTED');
       expect(audit.log).toHaveBeenCalledWith(
@@ -175,6 +180,36 @@ describe('ShopperOrdersService', () => {
         status: 409,
         message: expect.stringContaining('shopping started'),
       });
+    });
+  });
+
+  describe('the accept window is re-checked inside the accept', () => {
+    it('passes the configured window to the accept step only, not to start', async () => {
+      await service.accept('u', 'order-1');
+      expect(orders.transition).toHaveBeenLastCalledWith(
+        expect.objectContaining({ from: 'ASSIGNED', acceptWindowMinutes: 30 }),
+      );
+      orders.transition.mockResolvedValue({
+        outcome: 'transitioned',
+        order: makeShopperOrder({ state: 'SHOPPING_STARTED' }),
+      });
+      await service.start('u', 'order-1');
+      expect(orders.transition.mock.calls.at(-1)![0]).not.toHaveProperty('acceptWindowMinutes');
+    });
+
+    it('when the window ran out while the accept waited: runs the same SYSTEM cancel, then 409s with the timeout message', async () => {
+      orders.transition.mockResolvedValue({ outcome: 'accept_expired' });
+      expiry.sweep.mockClear();
+
+      await expect(service.accept('u', 'order-1')).rejects.toMatchObject({
+        status: 409,
+        message: 'This order was cancelled because it was not accepted in time',
+      });
+
+      // once before the transition, and once more after it reported the expiry
+      expect(expiry.sweep).toHaveBeenCalledTimes(2);
+      expect(expiry.sweep).toHaveBeenLastCalledWith({ orderId: 'order-1' });
+      expect(audit.log).not.toHaveBeenCalled();
     });
   });
 

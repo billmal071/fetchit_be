@@ -76,4 +76,10 @@ describe('OrderExpiryService', () => {
     await service.sweep({ shopperProfileId: 'prof-1' });
     expect(events.emit).not.toHaveBeenCalled();
   });
+
+  it('exposes the configured accept window', async () => {
+    expect(await service.acceptWindowMinutes()).toBe(20);
+    config.getRules.mockResolvedValue({ ...RULES, shopperAcceptWindowMinutes: 7 });
+    expect(await service.acceptWindowMinutes()).toBe(7);
+  });
 });

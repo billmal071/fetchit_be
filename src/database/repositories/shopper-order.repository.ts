@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { OrderEvent, OrderState } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
@@ -28,6 +28,8 @@ export const SYSTEM_CANCEL_REASON = 'Shopper did not accept in time';
 
 @Injectable()
 export class ShopperOrderRepository implements IShopperOrderRepository {
+  private readonly logger = new Logger(ShopperOrderRepository.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async acceptOffer(input: IAcceptOfferInput): Promise<AcceptOfferResult> {
@@ -290,6 +292,7 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
     to: OrderState;
     eventType: string;
     stamp: 'shopperAcceptedAt' | 'shoppingStartedAt';
+    acceptWindowMinutes?: number;
   }): Promise<OrderTransitionResult> {
     return this.prisma.$transaction(async (tx): Promise<OrderTransitionResult> => {
       // The caller checked APPROVED before this transaction; a suspension may have
@@ -301,9 +304,21 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
       if (profile[0]?.account_state !== 'APPROVED') {
         return { outcome: 'shopper_unavailable' };
       }
+      // The clock is read only now, after the lock: waiting for it can outlast the
+      // accept window, which the caller's earlier sweep could not know.
       const now = new Date();
+      const acceptCutoff =
+        input.acceptWindowMinutes === undefined
+          ? undefined
+          : new Date(now.getTime() - input.acceptWindowMinutes * 60_000);
       const { count } = await tx.shopperOrder.updateMany({
-        where: { id: input.id, shopperProfileId: input.shopperProfileId, state: input.from },
+        where: {
+          id: input.id,
+          shopperProfileId: input.shopperProfileId,
+          state: input.from,
+          // Part of the UPDATE, so the deadline and the state are one atomic test.
+          ...(acceptCutoff && { createdAt: { gte: acceptCutoff } }),
+        },
         data: { state: input.to, [input.stamp]: now },
       });
       if (count === 1) {
@@ -326,14 +341,25 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
         where: { id: input.id, shopperProfileId: input.shopperProfileId },
         select: { state: true, cancelledBy: true },
       });
-      return current
-        ? { outcome: 'conflict', state: current.state, cancelledBy: current.cancelledBy }
-        : { outcome: 'not_found' };
+      if (!current) {
+        return { outcome: 'not_found' };
+      }
+      // Still in the state it was expected in, so only the window can have stopped it.
+      if (acceptCutoff && current.state === input.from) {
+        return { outcome: 'accept_expired' };
+      }
+      return { outcome: 'conflict', state: current.state, cancelledBy: current.cancelledBy };
     });
   }
 
   async cancelOrder(input: ICancelOrderInput): Promise<CancelOrderResult> {
     const { actor } = input;
+    // The type already demands it; this is the second line of defence for callers
+    // that get past it (a cast, plain JS): a SYSTEM cancel with no cutoff would
+    // cancel an order that is still inside its window.
+    if (actor.kind === 'SYSTEM' && !(input.assignedBefore instanceof Date)) {
+      throw new Error('A SYSTEM cancel requires assignedBefore');
+    }
     return this.prisma.$transaction(async (tx): Promise<CancelOrderResult> => {
       const head = await tx.shopperOrder.findUnique({
         where: { id: input.orderId },
@@ -369,8 +395,7 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
         where: {
           id: input.orderId,
           state: 'ASSIGNED',
-          ...(actor.kind === 'SYSTEM' &&
-            input.assignedBefore && { createdAt: { lt: input.assignedBefore } }),
+          ...(actor.kind === 'SYSTEM' && { createdAt: { lt: input.assignedBefore } }),
         },
         data: {
           state: 'CANCELLED',
@@ -447,14 +472,24 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
     });
     const cancelled: ICancelledOrderInfo[] = [];
     for (const { id } of stale) {
-      const result = await this.cancelOrder({
-        orderId: id,
-        actor: { kind: 'SYSTEM' },
-        assignedBefore,
-        reopenDeadline,
-      });
-      if (result.outcome === 'cancelled') {
-        cancelled.push(result);
+      // Each cancel commits on its own. A failure of one must not discard the ones
+      // that already committed: their shoppers would never be told, because a later
+      // sweep only selects orders that are still ASSIGNED. So it is logged and the
+      // sweep goes on; the failed order stays ASSIGNED and the next sweep retries it.
+      try {
+        const result = await this.cancelOrder({
+          orderId: id,
+          actor: { kind: 'SYSTEM' },
+          assignedBefore,
+          reopenDeadline,
+        });
+        if (result.outcome === 'cancelled') {
+          cancelled.push(result);
+        }
+      } catch (error) {
+        this.logger.error(
+          `Could not expire stale order ${id}: ${error instanceof Error ? error.message : error}`,
+        );
       }
     }
     return cancelled;

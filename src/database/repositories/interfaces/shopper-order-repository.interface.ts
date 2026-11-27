@@ -114,6 +114,9 @@ export type OrderTransitionResult =
   | { outcome: 'transitioned'; order: ShopperOrderForShopper }
   // The shopper was suspended after the caller's APPROVED check; nothing was written.
   | { outcome: 'shopper_unavailable' }
+  // Accepting only: the accept window ran out before the accept could commit (judged
+  // after every lock was taken). Nothing was written; the caller runs the SYSTEM cancel.
+  | { outcome: 'accept_expired' }
   | { outcome: 'not_found' }
   // cancelledBy is set when state is CANCELLED, so the message can say why.
   | { outcome: 'conflict'; state: OrderState; cancelledBy: string | null };
@@ -121,16 +124,28 @@ export type OrderTransitionResult =
 /** Who is cancelling: the customer (owner-checked), or the system on timeout. */
 export type CancelActor = { kind: 'CUSTOMER'; userId: string } | { kind: 'SYSTEM' };
 
-export interface ICancelOrderInput {
+interface ICancelOrderBase {
   orderId: string;
-  actor: CancelActor;
   /** Free text from the customer. Never sent to the shopper. */
   reason?: string;
   /** The request is reopened with this offer deadline (now + the configured offer window). */
   reopenDeadline: Date;
-  /** SYSTEM only: the order is stale when it was created before this instant. */
-  assignedBefore?: Date;
 }
+
+/**
+ * The customer's cancel never depends on a cutoff. The system's does, always: it
+ * is what stops a sweep from cancelling an order that is still inside its window,
+ * so it is required here and checked again at runtime.
+ */
+export type ICancelOrderInput = ICancelOrderBase &
+  (
+    | { actor: { kind: 'CUSTOMER'; userId: string }; assignedBefore?: never }
+    | {
+        actor: { kind: 'SYSTEM' };
+        /** The order is stale when it was created before this instant. */
+        assignedBefore: Date;
+      }
+  );
 
 /** What a notification about a cancellation needs. */
 export interface ICancelledOrderInfo {
@@ -228,6 +243,13 @@ export interface IShopperOrderRepository {
     to: OrderState;
     eventType: string;
     stamp: 'shopperAcceptedAt' | 'shoppingStartedAt';
+    /**
+     * Set for the ASSIGNED -> SHOPPER_ACCEPTED step only. The order must still be
+     * inside this accept window at the moment of the UPDATE, judged with a clock
+     * read after the profile lock; otherwise nothing is written and the result
+     * is accept_expired. Never set for starting to shop.
+     */
+    acceptWindowMinutes?: number;
   }): Promise<OrderTransitionResult>;
 }
 

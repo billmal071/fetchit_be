@@ -78,6 +78,7 @@ export class ShopperOrdersService {
       to: OrderState.SHOPPER_ACCEPTED,
       eventType: ORDER_EVENT_TYPES.SHOPPER_ACCEPTED,
       stamp: 'shopperAcceptedAt',
+      enforceAcceptWindow: true,
       refusal: (state, cancelledBy) =>
         state === OrderState.CANCELLED
           ? cancelledMessage(cancelledBy)
@@ -114,6 +115,8 @@ export class ShopperOrdersService {
       to: OrderState;
       eventType: string;
       stamp: 'shopperAcceptedAt' | 'shoppingStartedAt';
+      /** Only the accept step is bound by the accept window; starting to shop is not. */
+      enforceAcceptWindow?: boolean;
       refusal: (current: OrderState, cancelledBy: string | null) => string;
     },
   ): Promise<ShopperOrderResponseDto> {
@@ -128,10 +131,19 @@ export class ShopperOrdersService {
       to: step.to,
       eventType: step.eventType,
       stamp: step.stamp,
+      ...(step.enforceAcceptWindow && {
+        acceptWindowMinutes: await this.expiry.acceptWindowMinutes(),
+      }),
     });
     if (result.outcome === 'shopper_unavailable') {
       // Suspended after the check above: the same 403 as any non-approved shopper.
       throw new ForbiddenException('Only an approved shopper can work on orders');
+    }
+    if (result.outcome === 'accept_expired') {
+      // The window ran out while the accept waited for its locks. Nothing was
+      // written; run the same SYSTEM cancel the sweep would have, then refuse.
+      await this.expiry.sweep({ orderId: id });
+      throw new ConflictException(cancelledMessage('SYSTEM'));
     }
     if (result.outcome === 'not_found') {
       throw new ResourceNotFoundException('Order', id);
