@@ -25,12 +25,12 @@ describe('OrderExpiryService', () => {
   });
   afterEach(() => jest.useRealTimers());
 
-  it('reads both windows from the config: stale means assigned before now - accept window, reopen = now + offer window', async () => {
+  it('reads both windows from the config: stale means assigned before now - accept window, reopen = the offer window in minutes', async () => {
     await service.sweep({ customerId: 'cust-1' });
     expect(orders.expireStale).toHaveBeenCalledWith(
       { customerId: 'cust-1' },
       new Date('2026-11-25T09:40:00Z'),
-      new Date('2026-11-25T10:45:00Z'),
+      45,
     );
   });
 
@@ -44,7 +44,7 @@ describe('OrderExpiryService', () => {
     expect(orders.expireStale).toHaveBeenCalledWith(
       { orderId: 'o' },
       new Date('2026-11-25T09:55:00Z'),
-      new Date('2026-11-25T10:10:00Z'),
+      10,
     );
   });
 
@@ -102,7 +102,7 @@ describe('OrderExpiryService', () => {
       expect(orders.expireStale).toHaveBeenCalledWith(
         { orderId: 'o' },
         new Date('2026-11-25T09:57:00Z'),
-        new Date('2026-11-25T10:04:00Z'),
+        4,
       );
     });
 
@@ -115,7 +115,7 @@ describe('OrderExpiryService', () => {
         orderId: 'order-1',
         actor: { kind: 'SYSTEM' },
         assignedBefore: cutoff,
-        reopenDeadline: new Date('2026-11-25T10:45:00Z'),
+        reopenWindowMinutes: 45,
       });
       expect(events.emit).toHaveBeenCalledTimes(1);
     });

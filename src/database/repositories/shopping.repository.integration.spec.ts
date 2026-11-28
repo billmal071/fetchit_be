@@ -34,6 +34,49 @@ suite('shopping repositories (real Postgres)', () => {
   const offers = new ShoppingOfferRepository(prisma);
   const run = randomUUID().slice(0, 8);
 
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+  /** Whether a promise has settled yet, without awaiting it. */
+  const settledFlag = (promise: Promise<unknown>): (() => boolean) => {
+    let settled = false;
+    promise.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    return () => settled;
+  };
+  /**
+   * Hold a lock from a SECOND connection until released. `ready` resolves only
+   * once `lock` has succeeded, so nothing here depends on a sleep; `done`
+   * settles after the holder's transaction has finished. The timeouts bound it.
+   */
+  const hold = (lock: (tx: Prisma.TransactionClient) => Promise<unknown>) => {
+    let release!: () => void;
+    let signalReady!: () => void;
+    const ready = new Promise<void>((resolve) => (signalReady = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const done = db.$transaction(
+      async (tx) => {
+        await lock(tx);
+        signalReady();
+        await released;
+      },
+      { timeout: 15_000, maxWait: 5_000 },
+    );
+    return { ready: Promise.race([ready, done]), release, done };
+  };
+  /** Wait until some backend in this database is blocked on a lock in a statement mentioning `table`. */
+  const untilBlockedOn = async (table: string): Promise<void> => {
+    for (let i = 0; i < 100; i++) {
+      const rows = await db.$queryRaw<Array<{ n: bigint }>>`
+        SELECT count(*) AS n FROM pg_stat_activity
+        WHERE datname = current_database() AND wait_event_type = 'Lock'
+          AND query ILIKE ${`%${table}%`} AND pid <> pg_backend_pid()`;
+      if (Number(rows[0].n) > 0) return;
+      await sleep(30);
+    }
+    throw new Error(`no statement ever blocked on ${table}`);
+  };
+
   const userIds: string[] = [];
   let loc1: string;
   let loc2: string;
@@ -472,49 +515,6 @@ suite('shopping repositories (real Postgres)', () => {
     const accept = (requestId: string, offerId: string, by = customerId) =>
       orderRepo.acceptOffer({ requestId, offerId, customerId: by });
 
-    const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-    /** Whether a promise has settled yet, without awaiting it. */
-    const settledFlag = (promise: Promise<unknown>): (() => boolean) => {
-      let settled = false;
-      promise.then(
-        () => (settled = true),
-        () => (settled = true),
-      );
-      return () => settled;
-    };
-    /**
-     * Hold a lock from a SECOND connection until released. `ready` resolves only
-     * once `lock` has succeeded, so nothing here depends on a sleep; `done`
-     * settles after the holder's transaction has finished. The timeouts bound it.
-     */
-    const hold = (lock: (tx: Prisma.TransactionClient) => Promise<unknown>) => {
-      let release!: () => void;
-      let signalReady!: () => void;
-      const ready = new Promise<void>((resolve) => (signalReady = resolve));
-      const released = new Promise<void>((resolve) => (release = resolve));
-      const done = db.$transaction(
-        async (tx) => {
-          await lock(tx);
-          signalReady();
-          await released;
-        },
-        { timeout: 15_000, maxWait: 5_000 },
-      );
-      return { ready: Promise.race([ready, done]), release, done };
-    };
-    /** Wait until some backend in this database is blocked on a lock in a statement mentioning `table`. */
-    const untilBlockedOn = async (table: string): Promise<void> => {
-      for (let i = 0; i < 100; i++) {
-        const rows = await db.$queryRaw<Array<{ n: bigint }>>`
-          SELECT count(*) AS n FROM pg_stat_activity
-          WHERE datname = current_database() AND wait_event_type = 'Lock'
-            AND query ILIKE ${`%${table}%`} AND pid <> pg_backend_pid()`;
-        if (Number(rows[0].n) > 0) return;
-        await sleep(30);
-      }
-      throw new Error(`no statement ever blocked on ${table}`);
-    };
-
     it('creates one UNPAID order from the offer, rejects the other bids, and assigns the request', async () => {
       const { requestId, offers: placed } = await offered([shopperA, shopperB]);
       const [winning, losing] = placed;
@@ -952,7 +952,7 @@ suite('shopping repositories (real Postgres)', () => {
         await orderRepo.cancelOrder({
           orderId: r.order.id,
           actor: { kind: 'CUSTOMER', userId: customerId },
-          reopenDeadline: new Date(Date.now() + 60_000),
+          reopenWindowMinutes: 1,
         });
         await expect(
           insert(first.requestId, first.offers[0].id, 'SO-AFTERC02'),
@@ -1080,6 +1080,38 @@ suite('shopping repositories (real Postgres)', () => {
           } finally {
             blocker.release();
             await blocker.done.catch(() => undefined);
+          }
+        });
+
+        it('refuses the accept when its wait for an ORDER row lock ends without changing the order, past the window', async () => {
+          const [target] = await shoppersNeeded(1);
+          const id = await newOrder(target);
+          // ONE deadline; the order is aged to it BEFORE the row is held (the update would block on it).
+          const deadline = Date.now() + 3000;
+          await db.shopperOrder.update({
+            where: { id },
+            data: { createdAt: new Date(deadline - WINDOW * 60_000) },
+          });
+          // Another transaction holds the order row (and will release it with no change).
+          const rowHolder = hold(
+            (tx) => tx.$queryRaw`SELECT id FROM shopper_orders WHERE id = ${id} FOR UPDATE`,
+          );
+          try {
+            await rowHolder.ready;
+            const attempt = acceptWithWindow(id, target);
+            const attemptSettled = settledFlag(attempt);
+            await untilBlockedOn('shopper_orders');
+            expect(Date.now()).toBeLessThan(deadline); // parked on the order lock, order still valid
+            await sleep(deadline - Date.now() + 200); // the window runs out during the wait
+            expect(attemptSettled()).toBe(false);
+            rowHolder.release();
+            await rowHolder.done;
+
+            expect(await attempt).toMatchObject({ outcome: 'accept_expired' });
+            await untouched(id);
+          } finally {
+            rowHolder.release();
+            await rowHolder.done.catch(() => undefined);
           }
         });
 
@@ -1442,7 +1474,8 @@ suite('shopping repositories (real Postgres)', () => {
   describe('orders: cancelling and the accept timeout', () => {
     const orderRepo = new ShopperOrderRepository(prisma);
     const extra: string[] = [];
-    const reopen = (): Date => new Date(Date.now() + 30 * 60_000);
+    /** The offer window, in minutes, a reopened request gets. */
+    const reopen = (): number => 30;
 
     const shoppers = async (n: number): Promise<string[]> => {
       while (extra.length < n) extra.push(await makeShopper(`oc-${extra.length}`, loc1, cat1));
@@ -1472,7 +1505,7 @@ suite('shopping repositories (real Postgres)', () => {
         orderId,
         actor: { kind: 'CUSTOMER', userId: by },
         reason,
-        reopenDeadline: reopen(),
+        reopenWindowMinutes: reopen(),
       });
     const shopperMove = (id: string, by = shopperA) =>
       orderRepo.transition({
@@ -1489,13 +1522,13 @@ suite('shopping repositories (real Postgres)', () => {
 
     it('cancels an ASSIGNED order: offer REJECTED, request reopened with a fresh deadline, event written', async () => {
       const { requestId, placed, orderId } = await assigned();
-      const deadline = new Date(Date.now() + 45 * 60_000);
+      const before = Date.now();
 
       const result = await orderRepo.cancelOrder({
         orderId,
         actor: { kind: 'CUSTOMER', userId: customerId },
         reason: 'changed my mind',
-        reopenDeadline: deadline,
+        reopenWindowMinutes: 45,
       });
 
       if (result.outcome !== 'cancelled')
@@ -1519,7 +1552,9 @@ suite('shopping repositories (real Postgres)', () => {
       ).toBe('REJECTED');
       const request = await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } });
       expect(request.status).toBe('OPEN');
-      expect(request.offerDeadline.getTime()).toBe(deadline.getTime());
+      // a fresh 45-minute window, counted from inside the cancel
+      expect(request.offerDeadline.getTime()).toBeGreaterThanOrEqual(before + 45 * 60_000);
+      expect(request.offerDeadline.getTime()).toBeLessThanOrEqual(Date.now() + 45 * 60_000);
       expect(await eventTypes(orderId)).toEqual(['OFFER_ACCEPTED', 'ORDER_CANCELLED']);
       const event = (await orderRepo.listEvents(orderId, 'desc'))[0];
       expect(event).toMatchObject({
@@ -1648,13 +1683,44 @@ suite('shopping repositories (real Postgres)', () => {
       }
     });
 
+    it('hands out the full window counted from AFTER the request-lock wait, not from before it', async () => {
+      const { requestId, orderId } = await assigned();
+      const owner = hold(
+        (tx) => tx.$queryRaw`SELECT id FROM shopping_requests WHERE id = ${requestId} FOR UPDATE`,
+      );
+      try {
+        await owner.ready;
+        const attempt = orderRepo.cancelOrder({
+          orderId,
+          actor: { kind: 'CUSTOMER', userId: customerId },
+          reopenWindowMinutes: 30,
+        });
+        await untilBlockedOn('shopping_requests'); // parked on the lock, already holding its arguments
+        await sleep(1500); // a long wait
+        const released = Date.now();
+        owner.release();
+        await owner.done;
+        expect((await attempt).outcome).toBe('cancelled');
+
+        const { offerDeadline } = await db.shoppingRequest.findUniqueOrThrow({
+          where: { id: requestId },
+        });
+        // Full 30 minutes from the moment the lock was won: a deadline fixed before the wait
+        // would be about 1.5 s short of this.
+        expect(offerDeadline.getTime()).toBeGreaterThanOrEqual(released + 30 * 60_000);
+      } finally {
+        owner.release();
+        await owner.done.catch(() => undefined);
+      }
+    });
+
     describe('timeout', () => {
       const system = (orderId: string, assignedBefore: Date) =>
         orderRepo.cancelOrder({
           orderId,
           actor: { kind: 'SYSTEM' },
           assignedBefore,
-          reopenDeadline: reopen(),
+          reopenWindowMinutes: reopen(),
         });
 
       it('does not cancel an order that is still inside its window', async () => {

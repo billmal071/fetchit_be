@@ -20,7 +20,9 @@ const makeTx = (
     $queryRaw: jest.fn(async (strings: TemplateStringsArray) =>
       strings.join('?').includes('shopping_requests')
         ? (over.locked ?? [{ status: 'OPEN' }])
-        : [{ account_state: over.profileState ?? 'APPROVED' }],
+        : strings.join('?').includes('shopper_orders')
+          ? [{ id: 'order-1' }]
+          : [{ account_state: over.profileState ?? 'APPROVED' }],
     ),
     shoppingOffer: {
       findFirst: jest.fn(async () => ({
@@ -382,7 +384,7 @@ describe('ShopperOrderRepository.transition', () => {
 
 describe('ShopperOrderRepository.expireStale: what it hands to cancelOrder, and surviving a failure', () => {
   const NOW_ = new Date('2026-11-25T10:00:00Z');
-  const REOPEN = new Date('2026-11-25T11:00:00Z');
+  const REOPEN = 60; // minutes
   const makeRepo = (ids: string[]) => {
     const prisma = { shopperOrder: { findMany: jest.fn(async () => ids.map((id) => ({ id }))) } };
     const repo = new ShopperOrderRepository(prisma as unknown as PrismaService);
@@ -408,13 +410,13 @@ describe('ShopperOrderRepository.expireStale: what it hands to cancelOrder, and 
         orderId: 'order-1',
         actor: { kind: 'SYSTEM' },
         assignedBefore: NOW_,
-        reopenDeadline: REOPEN,
+        reopenWindowMinutes: REOPEN,
       },
       {
         orderId: 'order-2',
         actor: { kind: 'SYSTEM' },
         assignedBefore: NOW_,
-        reopenDeadline: REOPEN,
+        reopenWindowMinutes: REOPEN,
       },
     ]);
   });
@@ -458,7 +460,7 @@ describe('ShopperOrderRepository.expireStale: what it hands to cancelOrder, and 
 });
 
 describe('ShopperOrderRepository.cancelOrder: the SYSTEM cutoff is mandatory', () => {
-  const REOPEN = new Date('2026-11-25T11:00:00Z');
+  const REOPEN = 60; // minutes
 
   it('throws before opening a transaction when a SYSTEM cancel has no cutoff', async () => {
     const { tx, repo } = makeTx();
@@ -467,7 +469,7 @@ describe('ShopperOrderRepository.cancelOrder: the SYSTEM cutoff is mandatory', (
       repo.cancelOrder({
         orderId: 'order-1',
         actor: { kind: 'SYSTEM' },
-        reopenDeadline: REOPEN,
+        reopenWindowMinutes: REOPEN,
       } as never),
     ).rejects.toThrow('assignedBefore');
     expect(prisma.$transaction).not.toHaveBeenCalled();
@@ -478,7 +480,7 @@ describe('ShopperOrderRepository.cancelOrder: the SYSTEM cutoff is mandatory', (
     const { repo } = makeTx();
     const attempt = (): Promise<unknown> =>
       // @ts-expect-error assignedBefore is required for the SYSTEM actor
-      repo.cancelOrder({ orderId: 'o', actor: { kind: 'SYSTEM' }, reopenDeadline: REOPEN });
+      repo.cancelOrder({ orderId: 'o', actor: { kind: 'SYSTEM' }, reopenWindowMinutes: REOPEN });
     expect(attempt).toBeDefined();
   });
 
@@ -492,7 +494,7 @@ describe('ShopperOrderRepository.cancelOrder: the SYSTEM cutoff is mandatory', (
     const result = await repo.cancelOrder({
       orderId: 'order-1',
       actor: { kind: 'CUSTOMER', userId: 'cust-1' },
-      reopenDeadline: REOPEN,
+      reopenWindowMinutes: REOPEN,
     });
     expect(result.outcome).not.toBe('not_stale');
     expect(tx.shopperOrder.updateMany).toHaveBeenCalledWith(
@@ -582,6 +584,50 @@ describe('ShopperOrderRepository.transition: the accept window is re-checked aft
   });
 });
 
+describe('timing edges: the clock is read after the LAST lock wait', () => {
+  const T = new Date('2026-11-25T10:00:00Z');
+  const LATER = new Date('2026-11-25T10:05:00Z');
+
+  it('transition: locks the order row, and only then reads the clock for the accept cutoff', async () => {
+    jest.useFakeTimers({ now: T });
+    try {
+      const { tx, repo } = makeTx();
+      const sqls: string[] = [];
+      tx.$queryRaw.mockImplementation(async (strings: TemplateStringsArray) => {
+        const sql = strings.join('?');
+        sqls.push(sql);
+        if (sql.includes('shopper_orders')) {
+          jest.setSystemTime(LATER); // waiting for another transaction's row lock took five minutes
+          return [{ id: 'order-1' }];
+        }
+        return [{ account_state: 'APPROVED' }];
+      });
+      tx.shopperOrder.updateMany.mockResolvedValue({ count: 1 });
+
+      await repo.transition({
+        id: 'order-1',
+        shopperProfileId: 'prof-1',
+        actorId: 'user-1',
+        from: 'ASSIGNED',
+        to: 'SHOPPER_ACCEPTED',
+        eventType: 'SHOPPER_ACCEPTED',
+        stamp: 'shopperAcceptedAt',
+        acceptWindowMinutes: 30,
+      });
+
+      expect(sqls).toHaveLength(2);
+      expect(sqls[0]).toContain('shopper_profiles');
+      expect(sqls[1]).toMatch(/shopper_orders[\s\S]*FOR UPDATE/);
+      // 10:05 - 30 min, i.e. judged by the time AFTER the order lock was won
+      expect(tx.shopperOrder.updateMany.mock.calls[0][0].where.createdAt).toEqual({
+        gte: new Date('2026-11-25T09:35:00Z'),
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
 describe('orderStatesFor', () => {
   it('maps the list filters onto order states', () => {
     expect(orderStatesFor('completed')).toBe('COMPLETED');
@@ -592,7 +638,7 @@ describe('orderStatesFor', () => {
 
 describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
   const NOW_ = new Date('2026-11-25T10:00:00Z');
-  const REOPEN = new Date('2026-11-25T11:00:00Z');
+  const REOPEN = 60; // minutes
   const customer = { kind: 'CUSTOMER' as const, userId: 'cust-1' };
 
   const makeCancelTx = (
@@ -634,7 +680,7 @@ describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
     return { tx, repo: new ShopperOrderRepository(prisma as unknown as PrismaService) };
   };
   const cancel = (repo: ShopperOrderRepository, over: object = {}) =>
-    repo.cancelOrder({ orderId: 'order-1', actor: customer, reopenDeadline: REOPEN, ...over });
+    repo.cancelOrder({ orderId: 'order-1', actor: customer, reopenWindowMinutes: REOPEN, ...over });
 
   it('locks the request with the OWNER filter for a customer, and without it for the system', async () => {
     const a = makeCancelTx();
@@ -651,7 +697,7 @@ describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
       orderId: 'order-1',
       actor: { kind: 'SYSTEM' },
       assignedBefore: NOW_,
-      reopenDeadline: REOPEN,
+      reopenWindowMinutes: REOPEN,
     });
     const [systemSql] = b.tx.$queryRaw.mock.calls[0] as unknown as [TemplateStringsArray];
     expect(systemSql.join('?')).not.toContain('customer_id');
@@ -684,7 +730,7 @@ describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
       orderId: 'order-1',
       actor: { kind: 'SYSTEM' },
       assignedBefore: NOW_,
-      reopenDeadline: REOPEN,
+      reopenWindowMinutes: REOPEN,
     });
     expect(b.tx.shopperOrder.updateMany).toHaveBeenCalledWith({
       where: { id: 'order-1', state: 'ASSIGNED', createdAt: { lt: NOW_ } },
@@ -705,7 +751,7 @@ describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
     });
     expect(tx.shoppingRequest.updateMany).toHaveBeenCalledWith({
       where: { id: 'req-1', status: 'ASSIGNED' },
-      data: { status: 'OPEN', offerDeadline: REOPEN },
+      data: { status: 'OPEN', offerDeadline: expect.any(Date) },
     });
     expect(tx.orderEvent.create).toHaveBeenCalledWith({
       data: {
@@ -730,7 +776,7 @@ describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
       orderId: 'order-1',
       actor: { kind: 'SYSTEM' },
       assignedBefore: NOW_,
-      reopenDeadline: REOPEN,
+      reopenWindowMinutes: REOPEN,
     });
     expect(tx.shoppingOffer.updateMany).toHaveBeenCalledWith({
       where: { id: 'offer-1', state: 'ACCEPTED' },
@@ -759,7 +805,7 @@ describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
         orderId: 'order-1',
         actor: { kind: 'SYSTEM' },
         assignedBefore: NOW_,
-        reopenDeadline: REOPEN,
+        reopenWindowMinutes: REOPEN,
       }),
     ).toMatchObject({ outcome: 'already_cancelled', order: { cancelledBy: 'CUSTOMER' } });
     const fresh = makeCancelTx({ updated: 0, current: { id: 'order-1', state: 'ASSIGNED' } });
@@ -768,7 +814,7 @@ describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
         orderId: 'order-1',
         actor: { kind: 'SYSTEM' },
         assignedBefore: NOW_,
-        reopenDeadline: REOPEN,
+        reopenWindowMinutes: REOPEN,
       }),
     ).toEqual({ outcome: 'not_stale' });
     for (const t of [accepted.tx, done.tx, bySystem.tx, fresh.tx]) {
@@ -789,5 +835,32 @@ describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
     });
     expect(result).toHaveLength(2);
     expect(tx.shopperOrder.updateMany).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancelOrder: the reopened deadline is counted from after the request lock, not from the call', async () => {
+    jest.useFakeTimers({ now: new Date('2026-11-25T10:00:00Z') });
+    try {
+      const { tx, repo } = (() => {
+        const made = makeCancelTx();
+        made.tx.$queryRaw.mockImplementation(async () => {
+          jest.setSystemTime(new Date('2026-11-25T10:05:00Z')); // a long wait for the request-row lock
+          return [{ id: 'req-1' }];
+        });
+        return made;
+      })();
+
+      await repo.cancelOrder({
+        orderId: 'order-1',
+        actor: { kind: 'CUSTOMER', userId: 'cust-1' },
+        reopenWindowMinutes: 60,
+      });
+
+      expect(tx.shoppingRequest.updateMany).toHaveBeenCalledWith({
+        where: { id: 'req-1', status: 'ASSIGNED' },
+        data: { status: 'OPEN', offerDeadline: new Date('2026-11-25T11:05:00Z') }, // 10:05 + 60 min
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

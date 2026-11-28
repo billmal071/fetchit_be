@@ -206,7 +206,6 @@ describe('ShoppingOrdersService', () => {
 
     it('sweeps the timeout first, then cancels as the customer with a reopen deadline from the config', async () => {
       orders.cancelOrder.mockResolvedValue(cancelled);
-      const before = Date.now();
       await service.cancelOrder('cust-1', 'order-1', { reason: 'changed my mind' });
 
       expect(expiry.sweep).toHaveBeenCalledWith({ orderId: 'order-1' });
@@ -219,12 +218,9 @@ describe('ShoppingOrdersService', () => {
         actor: { kind: 'CUSTOMER', userId: 'cust-1' },
         reason: 'changed my mind',
       });
-      expect(input.reopenDeadline.getTime() - before).toBeGreaterThanOrEqual(
-        RULES.offerWindowMinutes * 60_000,
-      );
-      expect(input.reopenDeadline.getTime() - before).toBeLessThan(
-        RULES.offerWindowMinutes * 60_000 + 5000,
-      );
+      // a length, which the repository turns into a deadline after its lock wait
+      expect(input.reopenWindowMinutes).toBe(RULES.offerWindowMinutes);
+      expect(input).not.toHaveProperty('reopenDeadline');
     });
 
     it('returns the cancelled order, audits it, and tells the shopper', async () => {

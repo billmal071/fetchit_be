@@ -129,8 +129,13 @@ interface ICancelOrderBase {
   orderId: string;
   /** Free text from the customer. Never sent to the shopper. */
   reason?: string;
-  /** The request is reopened with this offer deadline (now + the configured offer window). */
-  reopenDeadline: Date;
+  /**
+   * The request is reopened for this many minutes (the configured offer window).
+   * A length, not a Date: the deadline is worked out inside the transaction, after
+   * the request-row lock, so a long wait for that lock cannot hand out a deadline
+   * that is already (partly) used up.
+   */
+  reopenWindowMinutes: number;
 }
 
 /**
@@ -216,7 +221,7 @@ export interface IShopperOrderRepository {
    * cancel and the automatic timeout: lock the request row (the customer path
    * with the ownership filter, so a non-owner locks nothing), conditionally
    * update the order WHERE state = ASSIGNED, then set the offer to REJECTED
-   * (customer) or EXPIRED (system), reopen the request with `reopenDeadline`
+   * (customer) or EXPIRED (system), reopen the request for `reopenWindowMinutes`
    * and write the ORDER_CANCELLED event. Of a cancel and a shopper accept (or
    * two cancels) exactly one wins the conditional update.
    */
@@ -229,7 +234,7 @@ export interface IShopperOrderRepository {
   expireStale(
     scope: IExpireScope,
     assignedBefore: Date,
-    reopenDeadline: Date,
+    reopenWindowMinutes: number,
   ): Promise<ICancelledOrderInfo[]>;
 
   /**

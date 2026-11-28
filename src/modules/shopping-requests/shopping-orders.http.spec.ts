@@ -291,9 +291,9 @@ describe('orders (HTTP)', () => {
         reason: 'changed my mind',
         actor: { kind: 'CUSTOMER', userId: 'user-1' },
       });
-      expect(input.reopenDeadline.getTime()).toBeGreaterThan(
-        Date.now() + (RULES.offerWindowMinutes - 1) * 60_000,
-      );
+      // the length of the window (from the config), not a deadline computed before any lock wait
+      expect(input.reopenWindowMinutes).toBe(RULES.offerWindowMinutes);
+      expect(input).not.toHaveProperty('reopenDeadline');
       expect(emit).toHaveBeenCalledWith(
         'shopping.order.cancelled',
         expect.objectContaining({ shopperUserId: 'shopper-user' }),
@@ -368,12 +368,12 @@ describe('orders (HTTP)', () => {
         'shopping.order.cancelled',
         expect.objectContaining({ cancelledBy: 'SYSTEM' }),
       );
-      const [scope, assignedBefore, reopenDeadline] = orders.expireStale.mock.calls[0];
+      const [scope, assignedBefore, reopenWindowMinutes] = orders.expireStale.mock.calls[0];
       expect(scope).toEqual({ orderId: ORDER });
       expect(assignedBefore.getTime()).toBeLessThan(
         Date.now() - (RULES.shopperAcceptWindowMinutes - 1) * 60_000,
       );
-      expect(reopenDeadline.getTime()).toBeGreaterThan(Date.now());
+      expect(reopenWindowMinutes).toBe(RULES.offerWindowMinutes);
     });
 
     it('sweeps on the customer and shopper order lists too', async () => {

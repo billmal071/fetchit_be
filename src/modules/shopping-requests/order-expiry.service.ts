@@ -57,7 +57,7 @@ export class OrderExpiryService {
     const cancelled = await this.orders.expireStale(
       scope,
       new Date(now - acceptWindowMinutes * 60_000),
-      new Date(now + offerWindowMinutes * 60_000),
+      offerWindowMinutes,
     );
     for (const info of cancelled) {
       this.announce(info);
@@ -81,7 +81,7 @@ export class OrderExpiryService {
         orderId,
         actor: { kind: 'SYSTEM' },
         assignedBefore,
-        reopenDeadline: new Date(Date.now() + offerWindowMinutes * 60_000),
+        reopenWindowMinutes: offerWindowMinutes,
       });
       if (result.outcome === 'cancelled') {
         this.announce(result);

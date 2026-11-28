@@ -304,7 +304,16 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
       if (profile[0]?.account_state !== 'APPROVED') {
         return { outcome: 'shopper_unavailable' };
       }
-      // The clock is read only now, after the lock: waiting for it can outlast the
+      // Lock the order row BEFORE reading the clock. The UPDATE below would otherwise
+      // be the thing that waits for a lock another transaction holds on this row; once
+      // the wait ends, Postgres re-checks the WHERE against the new row version but
+      // with the cutoff computed before the wait, so an accept could slip through
+      // after its window. With the row already ours, the UPDATE never waits.
+      await tx.$queryRaw`
+        SELECT id FROM shopper_orders
+        WHERE id = ${input.id} AND shopper_profile_id = ${input.shopperProfileId}
+        FOR UPDATE`;
+      // The clock is read only now, after every lock: waiting for them can outlast the
       // accept window, which the caller's earlier sweep could not know.
       const now = new Date();
       const acceptCutoff =
@@ -429,7 +438,11 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
       // Reopen for bidding with a fresh window. The other bidders stay REJECTED.
       await tx.shoppingRequest.updateMany({
         where: { id: head.requestId, status: 'ASSIGNED' },
-        data: { status: 'OPEN', offerDeadline: input.reopenDeadline },
+        data: {
+          status: 'OPEN',
+          // Worked out now, after the request lock, not by the caller before the wait.
+          offerDeadline: new Date(Date.now() + input.reopenWindowMinutes * 60_000),
+        },
       });
       await tx.orderEvent.create({
         data: {
@@ -457,7 +470,7 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
   async expireStale(
     scope: IExpireScope,
     assignedBefore: Date,
-    reopenDeadline: Date,
+    reopenWindowMinutes: number,
   ): Promise<ICancelledOrderInfo[]> {
     const stale = await this.prisma.shopperOrder.findMany({
       where: {
@@ -480,7 +493,7 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
           orderId: id,
           actor: { kind: 'SYSTEM' },
           assignedBefore,
-          reopenDeadline,
+          reopenWindowMinutes,
         });
         if (result.outcome === 'cancelled') {
           cancelled.push(result);

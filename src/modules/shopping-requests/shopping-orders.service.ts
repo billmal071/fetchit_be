@@ -136,7 +136,7 @@ export class ShoppingOrdersService {
       orderId: id,
       actor: { kind: 'CUSTOMER', userId: customerId },
       reason: dto.reason || undefined,
-      reopenDeadline: new Date(Date.now() + rules.offerWindowMinutes * 60_000),
+      reopenWindowMinutes: rules.offerWindowMinutes,
     });
     switch (result.outcome) {
       case 'already_cancelled':
