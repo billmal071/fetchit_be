@@ -86,6 +86,33 @@ export class ShoppingRequestRepository implements IShoppingRequestRepository {
     }
   }
 
+  async isShopperBarred(requestId: string, shopperProfileId: string): Promise<boolean> {
+    const barred = await this.prisma.shopperOrder.findFirst({
+      where: { requestId, shopperProfileId, state: 'CANCELLED' },
+      select: { id: true },
+    });
+    return barred !== null;
+  }
+
+  async expireElapsed(
+    scope: { customerId: string; requestId?: string },
+    now: Date,
+    acceptanceWindowMinutes: number,
+  ): Promise<number> {
+    const cutoff = new Date(now.getTime() - acceptanceWindowMinutes * 60_000);
+    return this.prisma.$executeRaw`
+      UPDATE shopping_requests r
+      SET status = 'EXPIRED', updated_at = ${now}
+      WHERE r.status = 'OPEN'
+        AND r.customer_id = ${scope.customerId}
+        AND (${scope.requestId ?? null}::text IS NULL OR r.id = ${scope.requestId ?? null})
+        AND r.offer_deadline < ${cutoff}
+        AND NOT EXISTS (
+          SELECT 1 FROM shopping_offers o
+          WHERE o.request_id = r.id AND o.state = 'PENDING' AND o.expires_at > ${now}
+        )`;
+  }
+
   async findOwnedById(id: string, customerId: string): Promise<ShoppingRequestWithItems | null> {
     return this.prisma.shoppingRequest.findFirst({
       where: { id, customerId },

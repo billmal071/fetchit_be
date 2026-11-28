@@ -17,6 +17,7 @@ export const RULES: IShoppingFeeRules = {
   priceBufferPercent: 10,
   offerWindowMinutes: 30,
   shopperAcceptWindowMinutes: 30,
+  offerAcceptanceWindowMinutes: 1440,
 };
 
 const T0 = new Date('2026-11-24T10:00:00.000Z');

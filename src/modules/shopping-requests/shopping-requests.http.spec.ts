@@ -42,6 +42,8 @@ const requests = {
   findMatchingForShopper: jest.fn(),
   findCoveredByShopper: jest.fn(),
   findReadableByShopper: jest.fn(),
+  isShopperBarred: jest.fn(),
+  expireElapsed: jest.fn(),
 };
 const offers = {
   submit: jest.fn(),
@@ -159,6 +161,8 @@ describe('shopping requests and offers (HTTP)', () => {
     reference.findActiveCategoryIds.mockImplementation(async (ids: string[]) => ids);
     requests.create.mockImplementation(async () => makeRequestRow());
     offers.expireDue.mockResolvedValue(0);
+    requests.isShopperBarred.mockResolvedValue(false);
+    requests.expireElapsed.mockResolvedValue(0);
     offers.listForRequest.mockResolvedValue([]);
     profiles.ensureByUserId.mockResolvedValue({
       id: 'prof-1',
@@ -380,6 +384,26 @@ describe('shopping requests and offers (HTTP)', () => {
       });
     });
 
+    it('GET :id exposes biddingClosesAt and each offer expiresAt, and cancel of an EXPIRED request is 409', async () => {
+      const row = makeRequestRow({ status: 'EXPIRED' });
+      requests.findOwnedById.mockResolvedValue(row);
+      offers.listForRequest.mockResolvedValue([makeOfferWithShopper()]);
+      const { json } = await call('GET', `/shopping-requests/${ID}`, 'CUSTOMER');
+      expect(json.data).toMatchObject({
+        status: 'EXPIRED',
+        offerDeadline: row.offerDeadline.toISOString(),
+        biddingClosesAt: row.offerDeadline.toISOString(),
+      });
+      expect(json.data.offers[0].expiresAt).toEqual(expect.any(String));
+
+      requests.cancel.mockResolvedValue({ outcome: 'not_open', status: 'EXPIRED' });
+      const cancelled = await call('DELETE', `/shopping-requests/${ID}`, 'CUSTOMER');
+      expect(cancelled.status).toBe(409);
+      expect(cancelled.json.message).toBe(
+        'Only an open request can be cancelled; this one is expired',
+      );
+    });
+
     it('GET :id is 400 for a malformed id and 404 for someone else request', async () => {
       expect((await call('GET', '/shopping-requests/not-a-uuid', 'CUSTOMER')).status).toBe(400);
       requests.findOwnedById.mockResolvedValue(null);
@@ -566,6 +590,18 @@ describe('shopping requests and offers (HTTP)', () => {
           makeRequestRow({ status: 'CANCELLED' }),
         );
         expect((await call('POST', offerPath, 'PERSONAL_SHOPPER', bid)).status).toBe(409);
+      });
+
+      it('is 409, with a clear message, on preview and submit, for a shopper whose earlier order was cancelled', async () => {
+        requests.isShopperBarred.mockResolvedValue(true);
+        const message =
+          'You can no longer bid on this request because your earlier order on it was cancelled';
+        const submit = await call('POST', offerPath, 'PERSONAL_SHOPPER', bid);
+        const preview = await call('POST', `${offerPath}/preview`, 'PERSONAL_SHOPPER', bid);
+        expect([submit.status, preview.status]).toEqual([409, 409]);
+        expect(submit.json.message).toBe(message);
+        expect(preview.json.message).toBe(message);
+        expect(offers.submit).not.toHaveBeenCalled();
       });
 
       it('is 409 for a second active offer', async () => {

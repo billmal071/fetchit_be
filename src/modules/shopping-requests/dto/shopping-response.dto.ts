@@ -73,7 +73,11 @@ export class CustomerOfferResponseDto {
   @ApiProperty() shopperFee: number;
   @ApiProperty() etaMinutes: number;
   @ApiPropertyOptional() note?: string;
-  @ApiProperty() expiresAt: string;
+  @ApiProperty({
+    description:
+      'The end of the offer acceptance window (after bidding closes); the customer can accept until then.',
+  })
+  expiresAt: string;
   @ApiProperty() createdAt: string;
   @ApiProperty({ type: OfferBreakdownResponseDto }) financials: OfferBreakdownResponseDto;
   @ApiProperty({ type: ShopperPublicDto }) shopper: ShopperPublicDto;
@@ -91,7 +95,13 @@ export class ShoppingRequestResponseDto {
   @ApiProperty() itemCount: number;
   @ApiProperty({ description: 'Whole NGN' }) estimatedGoodsBudget: number;
   @ApiProperty({ type: RequestEstimateResponseDto }) estimate: RequestEstimateResponseDto;
-  @ApiProperty() offerDeadline: string;
+  @ApiProperty({
+    description:
+      'When BIDDING closes: no new offer or preview after it. Offers already placed stay acceptable until their own expiresAt.',
+  })
+  offerDeadline: string;
+  @ApiProperty({ description: 'Same instant as offerDeadline, under a name that says what it is.' })
+  biddingClosesAt: string;
   @ApiPropertyOptional({ description: 'Number of PENDING offers (list only)' })
   offerCount?: number;
   @ApiPropertyOptional() cancelledAt?: string;
@@ -111,7 +121,13 @@ export class ShopperRequestSummaryResponseDto {
   @ApiProperty() id: string;
   @ApiProperty() reference: string;
   @ApiProperty({ enum: ShoppingRequestStatus }) status: ShoppingRequestStatus;
-  @ApiProperty() offerDeadline: string;
+  @ApiProperty({
+    description:
+      'When BIDDING closes: no new offer or preview after it. Offers already placed stay acceptable until their own expiresAt.',
+  })
+  offerDeadline: string;
+  @ApiProperty({ description: 'Same instant as offerDeadline, under a name that says what it is.' })
+  biddingClosesAt: string;
   @ApiProperty() itemCount: number;
   @ApiProperty({ description: 'Whole NGN' }) estimatedGoodsBudget: number;
   @ApiProperty({ type: LocationSummaryDto }) shoppingLocation: LocationSummaryDto;
@@ -136,7 +152,11 @@ export class ShopperOfferResponseDto {
   @ApiProperty() shopperFee: number;
   @ApiProperty() etaMinutes: number;
   @ApiPropertyOptional() note?: string;
-  @ApiProperty() expiresAt: string;
+  @ApiProperty({
+    description:
+      'The end of the offer acceptance window (after bidding closes); the customer can accept until then.',
+  })
+  expiresAt: string;
   @ApiPropertyOptional() createdAt?: string;
   @ApiProperty({ type: OfferBreakdownResponseDto }) financials: OfferBreakdownResponseDto;
 }

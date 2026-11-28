@@ -430,7 +430,8 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
         include: customerOrderInclude,
       });
       // The customer turned this shopper down; on timeout the offer simply lapsed.
-      // Both are terminal and neither is PENDING, so the shopper may bid again.
+      // Both are terminal. The shopper is NOT free to bid again, though: their CANCELLED
+      // order bars them from this request (see ShoppingOfferRepository.submit).
       await tx.shoppingOffer.updateMany({
         where: { id: order.offerId, state: 'ACCEPTED' },
         data: { state: actor.kind === 'CUSTOMER' ? 'REJECTED' : 'EXPIRED' },

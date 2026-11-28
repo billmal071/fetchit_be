@@ -97,7 +97,8 @@ export class ShopperRequestsController {
     summary: 'Submit an offer',
     description:
       'The body is { shopperFee, etaMinutes, note? } only. 409 if the request is not OPEN, its ' +
-      'deadline has passed, or the shopper already has a PENDING offer on it (withdraw first); ' +
+      'bidding deadline has passed, the shopper already has a PENDING offer on it (withdraw first), ' +
+      'or their earlier order on the request was cancelled (they may not bid on it again); ' +
       '422 if shopperFee is outside the configured range. Notifies the customer.',
   })
   @ApiParam({ name: 'id', description: 'Shopping request UUID' })

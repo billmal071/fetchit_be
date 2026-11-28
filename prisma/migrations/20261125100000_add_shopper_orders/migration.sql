@@ -5,7 +5,8 @@ CREATE TYPE "OrderState" AS ENUM ('ASSIGNED', 'SHOPPER_ACCEPTED', 'SHOPPING_STAR
 CREATE TYPE "OrderItemState" AS ENUM ('PENDING', 'FOUND', 'PRICE_CHANGE_REQUESTED', 'PRICE_APPROVED', 'PRICE_REJECTED', 'UNAVAILABLE', 'SUBSTITUTION_REQUESTED', 'SUBSTITUTION_APPROVED', 'SUBSTITUTION_REJECTED', 'PURCHASED', 'REMOVED');
 
 -- AlterTable
-ALTER TABLE "shopping_config" ADD COLUMN     "shopper_accept_window_minutes" INTEGER NOT NULL DEFAULT 30;
+ALTER TABLE "shopping_config" ADD COLUMN     "offer_acceptance_window_minutes" INTEGER NOT NULL DEFAULT 1440,
+ADD COLUMN     "shopper_accept_window_minutes" INTEGER NOT NULL DEFAULT 30;
 
 -- CreateTable
 CREATE TABLE "shopper_orders" (
@@ -78,7 +79,7 @@ CREATE INDEX "shopper_orders_customer_id_created_at_idx" ON "shopper_orders"("cu
 CREATE INDEX "shopper_orders_shopper_profile_id_created_at_idx" ON "shopper_orders"("shopper_profile_id", "created_at");
 
 -- CreateIndex
-CREATE INDEX "shopper_orders_request_id_idx" ON "shopper_orders"("request_id");
+CREATE INDEX "shopper_orders_request_id_shopper_profile_id_idx" ON "shopper_orders"("request_id", "shopper_profile_id");
 
 -- CreateIndex
 CREATE INDEX "shopper_orders_offer_id_idx" ON "shopper_orders"("offer_id");
@@ -132,3 +133,6 @@ CREATE UNIQUE INDEX "shopper_orders_one_live_per_offer"
 
 ALTER TABLE "shopping_config"
     ADD CONSTRAINT "shopping_config_accept_window_positive" CHECK ("shopper_accept_window_minutes" > 0);
+
+ALTER TABLE "shopping_config"
+    ADD CONSTRAINT "shopping_config_offer_acceptance_window_positive" CHECK ("offer_acceptance_window_minutes" > 0);

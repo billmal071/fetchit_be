@@ -8,6 +8,7 @@ import {
   IShoppingOfferRepository,
   IShoppingRequestRepository,
   OfferRequestClosedError,
+  ShopperBarredFromRequestError,
   SHOPPER_PROFILE_REPOSITORY,
   SHOPPING_OFFER_REPOSITORY,
   SHOPPING_REQUEST_REPOSITORY,
@@ -42,6 +43,9 @@ import {
   toShopperOfferWithRequest,
   toShopperSummary,
 } from './shopping.mapper';
+
+const BARRED_MESSAGE =
+  'You can no longer bid on this request because your earlier order on it was cancelled';
 
 @Injectable()
 export class ShopperBiddingService {
@@ -132,7 +136,10 @@ export class ShopperBiddingService {
         shopperFee: dto.shopperFee,
         etaMinutes: dto.etaMinutes,
         note: dto.note ?? null,
-        expiresAt: request.offerDeadline,
+        // Valid until the end of the ACCEPTANCE window, which outlives the bidding deadline.
+        expiresAt: new Date(
+          request.offerDeadline.getTime() + rules.offerAcceptanceWindowMinutes * 60_000,
+        ),
       },
       financials,
     );
@@ -159,12 +166,16 @@ export class ShopperBiddingService {
         etaMinutes: dto.etaMinutes,
         note: dto.note,
         financials: { ...financials },
+        acceptanceWindowMinutes: rules.offerAcceptanceWindowMinutes,
       });
     } catch (error) {
       // Re-checked under the repository's row lock / unique index, so these
       // are final even when the reads above were stale.
       if (error instanceof OfferRequestClosedError) {
         throw new ConflictException('This request is no longer open for offers');
+      }
+      if (error instanceof ShopperBarredFromRequestError) {
+        throw new ConflictException(BARRED_MESSAGE);
       }
       if (error instanceof DuplicateActiveOfferError) {
         throw new ConflictException(
@@ -288,8 +299,13 @@ export class ShopperBiddingService {
     if (!request) {
       throw new ResourceNotFoundException('Shopping request', requestId);
     }
+    // The bidding deadline closes bidding for new offers and previews alike.
     if (request.status !== 'OPEN' || request.offerDeadline.getTime() <= Date.now()) {
       throw new ConflictException('This request is no longer open for offers');
+    }
+    // Cancelled out of this request: no second go at it, previews included.
+    if (await this.requests.isShopperBarred(requestId, profile.id)) {
+      throw new ConflictException(BARRED_MESSAGE);
     }
 
     const rules = await this.config.getRules();

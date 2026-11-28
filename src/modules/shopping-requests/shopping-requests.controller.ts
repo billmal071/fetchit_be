@@ -41,7 +41,8 @@ export class ShoppingRequestsController {
       'Every item needs name, brand, size, quantity, unit, estimatedUnitPrice and a ' +
       'substitutionPreference (REFUND, or SIMILAR_UP_TO with maxSubstitutePrice). The response ' +
       'carries a server-calculated estimate (goods + delivery + service charge + VAT); the ' +
-      'shopper fee is set by bids. offerDeadline is now plus the configured offer window.',
+      'shopper fee is set by bids. offerDeadline (also biddingClosesAt) is now plus the configured bidding window; ' +
+      'it closes bidding only, offers already placed stay acceptable until their own expiresAt.',
   })
   @ApiCreatedSuccessResponse(ShoppingRequestResponseDto)
   @ApiErrorResponses()
@@ -71,7 +72,8 @@ export class ShoppingRequestsController {
     description:
       'Includes the items and every offer except withdrawn ones (cheapest shopper fee first). ' +
       'Each offer carries a full server-calculated breakdown and the shopper public stats ' +
-      '(rating, completed orders, completion rate). Offers past the deadline read as EXPIRED.',
+      '(rating, completed orders, completion rate). Offers whose acceptance window (expiresAt) has ended read as EXPIRED; closing ' +
+      'the bidding deadline does not expire them. A request nothing on can be accepted any more reads as EXPIRED.',
   })
   @ApiParam({ name: 'id', description: 'Shopping request UUID' })
   @ApiSuccessResponse(ShoppingRequestDetailResponseDto)

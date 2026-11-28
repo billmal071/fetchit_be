@@ -73,8 +73,9 @@ export class ShoppingOrdersController {
   @ApiOperation({
     summary: 'Cancel an order the shopper has not accepted',
     description:
-      'Only while the order is ASSIGNED. The request goes back to OPEN with a fresh offer deadline so ' +
-      'shoppers can bid again (the earlier bidders stay rejected), and the shopper is notified. ' +
+      'Only while the order is ASSIGNED. The request goes back to OPEN with a fresh bidding deadline so ' +
+      'other shoppers can bid again (the earlier bidders stay rejected and the shopper whose order ' +
+      'was cancelled may not bid on it again), and the shopper is notified. ' +
       '409 once the shopper has accepted. Repeating it on an already cancelled order returns that ' +
       'order with 200. 404 for an order that is not yours. An order the shopper did not accept ' +
       'within the configured window is cancelled automatically (reason "Shopper did not accept in time").',

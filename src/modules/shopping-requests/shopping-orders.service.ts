@@ -66,7 +66,9 @@ export class ShoppingOrdersService {
           `This offer can no longer be accepted; it is ${words(result.state)}`,
         );
       case 'offer_expired':
-        throw new ConflictException('This offer has expired and can no longer be accepted');
+        throw new ConflictException(
+          'This offer has expired (its acceptance window ended) and can no longer be accepted',
+        );
     }
 
     const { order } = result;

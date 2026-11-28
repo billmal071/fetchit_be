@@ -90,7 +90,11 @@ export const shopperMatchWhere = (
   now: Date,
 ): Prisma.ShoppingRequestWhereInput => ({
   status: 'OPEN',
+  // Bidding is open: the deadline closes bidding (existing offers outlive it).
   offerDeadline: { gt: now },
+  // A shopper whose order on this request was cancelled may not bid on it again,
+  // so it is not offered to them.
+  orders: { none: { shopperProfileId, state: 'CANCELLED' } },
   ...shopperCoverageWhere(shopperProfileId),
 });
 
@@ -110,6 +114,22 @@ export const shopperCoverageWhere = (
 });
 
 export interface IShoppingRequestRepository {
+  /** True when the shopper has a CANCELLED order on the request: they may not bid on it again. */
+  isShopperBarred(requestId: string, shopperProfileId: string): Promise<boolean>;
+
+  /**
+   * Lazily mark the customer's OPEN requests EXPIRED once nothing on them can be
+   * accepted any more: bidding closed more than `acceptanceWindowMinutes` ago AND
+   * no PENDING offer is still inside its own acceptance window. One conditional
+   * UPDATE (WHERE status = 'OPEN'), so it serialises with an accept or a cancel on
+   * the row lock and exactly one wins. Optionally limited to one request.
+   */
+  expireElapsed(
+    scope: { customerId: string; requestId?: string },
+    now: Date,
+    acceptanceWindowMinutes: number,
+  ): Promise<number>;
+
   /** Insert the request and its items atomically; generates a unique reference. */
   create(input: ICreateShoppingRequestInput): Promise<ShoppingRequestWithItems>;
 

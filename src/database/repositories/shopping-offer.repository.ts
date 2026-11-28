@@ -8,6 +8,7 @@ import {
   OfferRequestClosedError,
   OfferWithRequest,
   OfferWithShopper,
+  ShopperBarredFromRequestError,
   offerWithRequestInclude,
   offerWithShopperInclude,
 } from './interfaces';
@@ -26,12 +27,27 @@ export class ShoppingOfferRepository implements IShoppingOfferRepository {
           SELECT status::text AS status, offer_deadline
           FROM shopping_requests WHERE id = ${input.requestId} FOR SHARE`;
         // Read the clock only now: waiting for a connection or for the row lock
-        // can outlast the deadline, and a time captured before it would let an
-        // offer in with an already-past expiresAt.
+        // can outlast the bidding deadline, and a time captured before it would let
+        // a bid in after bidding closed.
         const now = new Date();
         const request = locked[0];
+        // The deadline closes BIDDING only; the offer itself outlives it (below).
         if (!request || request.status !== 'OPEN' || request.offer_deadline <= now) {
           throw new OfferRequestClosedError();
+        }
+        // A cancelled order on this request bars this shopper from it. Read under the
+        // same lock a cancel needs FOR UPDATE: if the cancel committed first it is
+        // visible here; if this transaction holds the lock first, the bid stands.
+        const barred = await tx.shopperOrder.findFirst({
+          where: {
+            requestId: input.requestId,
+            shopperProfileId: input.shopperProfileId,
+            state: 'CANCELLED',
+          },
+          select: { id: true },
+        });
+        if (barred) {
+          throw new ShopperBarredFromRequestError();
         }
         return tx.shoppingOffer.create({
           data: {
@@ -40,7 +56,9 @@ export class ShoppingOfferRepository implements IShoppingOfferRepository {
             shopperFee: input.shopperFee,
             etaMinutes: input.etaMinutes,
             note: input.note,
-            expiresAt: request.offer_deadline,
+            expiresAt: new Date(
+              request.offer_deadline.getTime() + input.acceptanceWindowMinutes * 60_000,
+            ),
             financials: input.financials,
           },
           include: offerWithRequestInclude,

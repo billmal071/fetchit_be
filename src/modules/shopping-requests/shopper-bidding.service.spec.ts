@@ -2,7 +2,11 @@ import { ShopperBiddingService } from './shopper-bidding.service';
 import { ShoppingConfigService } from './shopping-config.service';
 import { EVENTS } from '@common/constants';
 import { ShoppingOfferSubmittedEvent } from '@common/events';
-import { DuplicateActiveOfferError, OfferRequestClosedError } from '@/database/repositories';
+import {
+  DuplicateActiveOfferError,
+  OfferRequestClosedError,
+  ShopperBarredFromRequestError,
+} from '@/database/repositories';
 import { RULES, makeOfferRow, makeRequestRow } from './testing/fixtures';
 
 describe('ShopperBiddingService', () => {
@@ -29,6 +33,7 @@ describe('ShopperBiddingService', () => {
       findMatchingForShopper: jest.fn(async () => ({ rows: [makeRequestRow()], total: 1 })),
       findCoveredByShopper: jest.fn(async () => makeRequestRow()),
       findReadableByShopper: jest.fn(async () => makeRequestRow()),
+      isShopperBarred: jest.fn(async () => false),
     };
     offers = {
       submit: jest.fn(async () => makeOfferRow()),
@@ -186,6 +191,70 @@ describe('ShopperBiddingService', () => {
     });
   });
 
+  describe('bidding closes at the deadline; offers outlive it', () => {
+    it('previews an offer valid until the bidding deadline PLUS the acceptance window', async () => {
+      const row = makeRequestRow();
+      requests.findCoveredByShopper.mockResolvedValue(row);
+      const result = await service.preview('u', 'req-1', bid);
+      expect(result.expiresAt).toBe(
+        new Date(
+          row.offerDeadline.getTime() + RULES.offerAcceptanceWindowMinutes * 60_000,
+        ).toISOString(),
+      );
+    });
+
+    it('follows the configured acceptance window when submitting', async () => {
+      config.getRules.mockResolvedValue({ ...RULES, offerAcceptanceWindowMinutes: 90 });
+      await service.submit('u', 'req-1', bid);
+      expect(offers.submit).toHaveBeenCalledWith(
+        expect.objectContaining({ acceptanceWindowMinutes: 90 }),
+      );
+    });
+
+    it('refuses new offers and previews once the bidding deadline has passed, whatever the acceptance window', async () => {
+      requests.findCoveredByShopper.mockResolvedValue(
+        makeRequestRow({ offerDeadline: new Date(Date.now() - 1000) }),
+      );
+      await expect(service.submit('u', 'req-1', bid)).rejects.toMatchObject({ status: 409 });
+      await expect(service.preview('u', 'req-1', bid)).rejects.toMatchObject({ status: 409 });
+      expect(offers.submit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('a shopper whose order on the request was cancelled', () => {
+    const MESSAGE =
+      'You can no longer bid on this request because your earlier order on it was cancelled';
+
+    it('gets a 409 on preview and on submit, with nothing written', async () => {
+      requests.isShopperBarred.mockResolvedValue(true);
+      for (const call of [
+        () => service.preview('u', 'req-1', bid),
+        () => service.submit('u', 'req-1', bid),
+      ]) {
+        await expect(call()).rejects.toMatchObject({ status: 409, message: MESSAGE });
+      }
+      expect(requests.isShopperBarred).toHaveBeenCalledWith('req-1', 'prof-1');
+      expect(offers.submit).not.toHaveBeenCalled();
+    });
+
+    it('still gets 409 when the cancel committed between the check and the insert (the repository refuses)', async () => {
+      offers.submit.mockRejectedValue(new ShopperBarredFromRequestError());
+      await expect(service.submit('u', 'req-1', bid)).rejects.toMatchObject({
+        status: 409,
+        message: MESSAGE,
+      });
+      expect(events.emit).not.toHaveBeenCalled();
+      expect(audit.log).not.toHaveBeenCalled();
+    });
+
+    it('does not affect other shoppers', async () => {
+      requests.isShopperBarred.mockImplementation(
+        async (_r: string, p: string) => p === 'someone-else',
+      );
+      await expect(service.submit('u', 'req-1', bid)).resolves.toBeDefined();
+    });
+  });
+
   describe('submit', () => {
     it('stores the server-calculated breakdown, audits, and emits one event for the customer', async () => {
       const result = await service.submit('u', 'req-1', { ...bid, note: 'hi' });
@@ -197,6 +266,7 @@ describe('ShopperBiddingService', () => {
         etaMinutes: 30,
         note: 'hi',
         financials: expect.objectContaining({ customerTotal: 12171 }),
+        acceptanceWindowMinutes: 1440,
       });
       expect(result).toMatchObject({ id: 'offer-1', financials: { shopperGrossEarnings: 1000 } });
       expect(audit.log).toHaveBeenCalledWith(

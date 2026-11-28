@@ -133,6 +133,21 @@ describe('ShopperOrderRepository.acceptOffer', () => {
     });
   });
 
+  it('does not look at the request bidding deadline: only the OFFER expiresAt decides', async () => {
+    // The bidding deadline is long past; the offer is still inside its acceptance window.
+    const { tx, repo } = makeTx({
+      locked: [{ status: 'OPEN', offer_deadline: new Date('2020-01-01T00:00:00Z') }],
+    });
+    expect((await repo.acceptOffer(input)).outcome).toBe('accepted');
+    const sql = (tx.$queryRaw.mock.calls[0] as unknown as [TemplateStringsArray])[0].join('?');
+    expect(sql).not.toContain('offer_deadline');
+  });
+
+  it('refuses an offer past its own expiresAt even though the request is OPEN', async () => {
+    const { repo } = makeTx({ expiresAt: new Date(Date.now() - 1000) });
+    expect(await repo.acceptOffer(input)).toEqual({ outcome: 'offer_expired' });
+  });
+
   it.each([
     [
       'a missing request, or one that is not the caller own (the lock query filters on the owner)',

@@ -664,6 +664,9 @@ model ShoppingConfig {
   offerWindowMinutes   Int      @map("offer_window_minutes")
   // How long a shopper has to accept an ASSIGNED order before it is cancelled.
   shopperAcceptWindowMinutes Int   @default(30) @map("shopper_accept_window_minutes")
+  // How long a PENDING offer stays acceptable after BIDDING closes (the request's
+  // offerDeadline): expiresAt = offerDeadline + this.
+  offerAcceptanceWindowMinutes Int @default(1440) @map("offer_acceptance_window_minutes")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
   @@map("shopping_config")
@@ -737,7 +740,8 @@ model ShopperOrder {
 
   @@index([customerId, createdAt])
   @@index([shopperProfileId, createdAt])
-  @@index([requestId])
+  // Also answers "was this shopper's order on this request cancelled?" (re-bid block).
+  @@index([requestId, shopperProfileId])
   @@index([offerId])
   @@map("shopper_orders")
 }

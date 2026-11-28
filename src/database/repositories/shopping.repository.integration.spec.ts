@@ -22,7 +22,11 @@ import { ShoppingRequestsService } from '../../modules/shopping-requests/shoppin
 import { ShopperOrdersService } from '../../modules/shopping-requests/shopper-orders.service';
 import { ShoppingOrdersService } from '../../modules/shopping-requests/shopping-orders.service';
 import { ShopperBiddingService } from '../../modules/shopping-requests/shopper-bidding.service';
-import { DuplicateActiveOfferError, OfferRequestClosedError } from './interfaces';
+import {
+  DuplicateActiveOfferError,
+  OfferRequestClosedError,
+  ShopperBarredFromRequestError,
+} from './interfaces';
 
 const url = process.env.SHOPPING_TEST_DATABASE_URL;
 const suite = url ? describe : describe.skip;
@@ -145,6 +149,7 @@ suite('shopping repositories (real Postgres)', () => {
       shopperFee: 1000,
       etaMinutes: 30,
       financials: { shopperFee: 1000 },
+      acceptanceWindowMinutes: 1440,
     });
 
   beforeAll(async () => {
@@ -179,6 +184,7 @@ suite('shopping repositories (real Postgres)', () => {
       priceBufferPercent: expect.any(Number),
       offerWindowMinutes: expect.any(Number),
       shopperAcceptWindowMinutes: 30,
+      offerAcceptanceWindowMinutes: 1440,
     });
     expect(rules?.maxShopperFee).toBeGreaterThanOrEqual(rules?.minShopperFee ?? Infinity);
   });
@@ -282,7 +288,8 @@ suite('shopping repositories (real Postgres)', () => {
       const { id } = await makeRequest(loc1, [cat1]);
       const first = await submit(id, shopperA);
       expect(first.state).toBe('PENDING');
-      expect(first.expiresAt.getTime()).toBe(first.request.offerDeadline.getTime());
+      // the offer outlives the bidding deadline by the acceptance window
+      expect(first.expiresAt.getTime()).toBe(first.request.offerDeadline.getTime() + 1440 * 60_000);
 
       await expect(submit(id, shopperA)).rejects.toBeInstanceOf(DuplicateActiveOfferError);
       await expect(submit(id, shopperB)).resolves.toBeDefined(); // another shopper is fine
@@ -507,6 +514,7 @@ suite('shopping repositories (real Postgres)', () => {
             shopperFee: 1000 + i,
             etaMinutes: 30,
             financials: { shopperFee: 1000 + i, customerTotal: 12171 + i },
+            acceptanceWindowMinutes: 1440,
           }),
         );
       }
@@ -1488,6 +1496,7 @@ suite('shopping repositories (real Postgres)', () => {
         shopperFee: fee,
         etaMinutes: 20,
         financials: { shopperFee: fee, customerTotal: 12000 + fee },
+        acceptanceWindowMinutes: 1440,
       });
     /** A request with offers from the given shoppers, the first one accepted: an ASSIGNED order. */
     const assigned = async (who: string[] = [shopperA, shopperB]) => {
@@ -1563,13 +1572,15 @@ suite('shopping repositories (real Postgres)', () => {
       });
     });
 
-    it('then lets the request be bid on and accepted again: a second order, the first stays CANCELLED', async () => {
+    it('then lets OTHER shoppers bid and be accepted: a second order, the first stays CANCELLED, the cancelled shopper is barred', async () => {
       const [, , shopperC] = [shopperA, shopperB, ...(await shoppers(1))];
       const { requestId, placed, orderId: first } = await assigned();
       await cancel(first);
 
-      // The cancelled shopper may bid again (their old offer is REJECTED, so the one-PENDING index allows it).
-      const rebid = await bid(requestId, shopperA, 900);
+      // The shopper whose order was cancelled may NOT bid again; someone else can.
+      await expect(bid(requestId, shopperA, 900)).rejects.toBeInstanceOf(
+        ShopperBarredFromRequestError,
+      );
       const fresh = await bid(requestId, shopperC, 800);
       const second = await orderRepo.acceptOffer({ requestId, offerId: fresh.id, customerId });
       if (second.outcome !== 'accepted')
@@ -1586,8 +1597,10 @@ suite('shopping repositories (real Postgres)', () => {
       expect(
         (await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } })).status,
       ).toBe('ASSIGNED');
-      expect((await db.shoppingOffer.findUniqueOrThrow({ where: { id: rebid.id } })).state).toBe(
-        'REJECTED',
+      expect(
+        await db.shoppingOffer.count({ where: { requestId, shopperProfileId: shopperA } }),
+      ).toBe(
+        1, // only the original, REJECTED offer: no re-bid was created
       );
       expect(placed).toHaveLength(2);
     });
@@ -1926,6 +1939,311 @@ suite('shopping repositories (real Postgres)', () => {
       expect(text).toContain('ORDER_CANCELLED');
       await expect(shopperOrders.start(shopperUser, orderId)).rejects.toMatchObject({
         status: 409,
+      });
+    });
+  });
+
+  describe('bidding window vs acceptance window, and the re-bid block', () => {
+    const orderRepo = new ShopperOrderRepository(prisma);
+    const extra: string[] = [];
+    const shoppers = async (n: number): Promise<string[]> => {
+      while (extra.length < n) extra.push(await makeShopper(`bw-${extra.length}`, loc1, cat1));
+      return extra.slice(0, n);
+    };
+    const bidWith = (requestId: string, shopperProfileId: string, acceptanceWindowMinutes = 1440) =>
+      offers.submit({
+        requestId,
+        shopperProfileId,
+        shopperFee: 1000,
+        etaMinutes: 20,
+        financials: { shopperFee: 1000, customerTotal: 13000 },
+        acceptanceWindowMinutes,
+      });
+    const acceptOffer = (requestId: string, offerId: string) =>
+      orderRepo.acceptOffer({ requestId, offerId, customerId });
+    /** A request with an accepted offer from `winner`, i.e. an ASSIGNED order. */
+    const assignedTo = async (winner: string) => {
+      const { id: requestId } = await makeRequest(loc1, [cat1]);
+      const offer = await bidWith(requestId, winner);
+      const result = await acceptOffer(requestId, offer.id);
+      if (result.outcome !== 'accepted')
+        throw new Error(`expected accepted, got ${result.outcome}`);
+      return { requestId, orderId: result.order.id };
+    };
+    const customerCancel = (orderId: string) =>
+      orderRepo.cancelOrder({
+        orderId,
+        actor: { kind: 'CUSTOMER', userId: customerId },
+        reopenWindowMinutes: 30,
+      });
+    const systemCancel = (orderId: string) =>
+      orderRepo.cancelOrder({
+        orderId,
+        actor: { kind: 'SYSTEM' },
+        assignedBefore: new Date(Date.now() + 1000),
+        reopenWindowMinutes: 30,
+      });
+    const feedIds = async (shopperProfileId: string): Promise<string[]> =>
+      (
+        await requests.findMatchingForShopper({
+          shopperProfileId,
+          now: new Date(),
+          sortBy: 'createdAt',
+          sortOrder: 'asc',
+          skip: 0,
+          take: 500,
+        })
+      ).rows.map((r) => r.id);
+
+    describe.each([
+      ['the customer cancels the order', customerCancel],
+      ['the accept timeout cancels the order', systemCancel],
+    ])('when %s', (_label, cancelIt) => {
+      it('bars that shopper from the request, hides it from their feed, and leaves everyone else free to bid', async () => {
+        const [winner, other] = await shoppers(2);
+        const { requestId, orderId } = await assignedTo(winner);
+        expect(await feedIds(winner)).not.toContain(requestId); // ASSIGNED: not in anyone's feed
+        expect((await cancelIt(orderId)).outcome).toBe('cancelled');
+
+        // the request is open again...
+        expect(await feedIds(other)).toContain(requestId);
+        // ...but not for the shopper whose order was cancelled
+        expect(await feedIds(winner)).not.toContain(requestId);
+        expect(await requests.isShopperBarred(requestId, winner)).toBe(true);
+        expect(await requests.isShopperBarred(requestId, other)).toBe(false);
+        await expect(bidWith(requestId, winner)).rejects.toBeInstanceOf(
+          ShopperBarredFromRequestError,
+        );
+        expect(
+          await db.shoppingOffer.count({
+            where: { requestId, shopperProfileId: winner, state: 'PENDING' },
+          }),
+        ).toBe(0);
+
+        // another shopper can still bid
+        await expect(bidWith(requestId, other)).resolves.toMatchObject({ state: 'PENDING' });
+        // coverage (which answers 404 vs 409) and readability through their old offer are unchanged
+        expect((await requests.findCoveredByShopper(requestId, winner))?.id).toBe(requestId);
+        expect((await requests.findReadableByShopper(requestId, winner, new Date()))?.id).toBe(
+          requestId,
+        );
+      });
+    });
+
+    it('a submit racing the cancel: the cancelled shopper never gets a live offer, a newcomer only after the cancel', async () => {
+      const [winner, newcomer] = await shoppers(2);
+      for (let i = 0; i < 8; i++) {
+        const { requestId, orderId } = await assignedTo(winner);
+        const [cancelled, byWinner, byNewcomer] = await Promise.allSettled([
+          customerCancel(orderId),
+          bidWith(requestId, winner),
+          bidWith(requestId, newcomer),
+        ]);
+        expect(cancelled.status).toBe('fulfilled');
+        // Before the cancel commits the request is ASSIGNED (closed); after, the winner is barred.
+        expect(byWinner.status).toBe('rejected');
+        const reason = (byWinner as PromiseRejectedResult).reason;
+        expect(
+          [OfferRequestClosedError, ShopperBarredFromRequestError].some((E) => reason instanceof E),
+        ).toBe(true);
+        expect(
+          await db.shoppingOffer.count({
+            where: { requestId, shopperProfileId: winner, state: 'PENDING' },
+          }),
+        ).toBe(0);
+        if (byNewcomer.status === 'fulfilled') {
+          expect(
+            (await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } })).status,
+          ).toBe('OPEN');
+        } else {
+          expect((byNewcomer as PromiseRejectedResult).reason).toBeInstanceOf(
+            OfferRequestClosedError,
+          );
+        }
+      }
+    });
+
+    it('a submit that wins the request lock first stands; the cancel waits for it and the bid survives', async () => {
+      const [winner, newcomer] = await shoppers(2);
+      const { requestId, orderId } = await assignedTo(winner);
+      // Park an OPEN-request-style submit by newcomer is impossible while ASSIGNED, so drive the
+      // lock order directly: hold FOR SHARE (what a submit holds), then start the cancel.
+      const submitLock = hold(
+        (tx) => tx.$queryRaw`SELECT id FROM shopping_requests WHERE id = ${requestId} FOR SHARE`,
+      );
+      try {
+        await submitLock.ready;
+        const cancel = customerCancel(orderId);
+        const cancelSettled = settledFlag(cancel);
+        await untilBlockedOn('shopping_requests');
+        expect(cancelSettled()).toBe(false); // the cancel cannot commit while a submit holds the lock
+        submitLock.release();
+        await submitLock.done;
+        expect((await cancel).outcome).toBe('cancelled');
+        // only now is a bid by someone else possible, and the cancelled shopper is barred
+        await expect(bidWith(requestId, newcomer)).resolves.toBeDefined();
+        await expect(bidWith(requestId, winner)).rejects.toBeInstanceOf(
+          ShopperBarredFromRequestError,
+        );
+      } finally {
+        submitLock.release();
+        await submitLock.done.catch(() => undefined);
+      }
+    });
+
+    describe('offers outlive the bidding deadline', () => {
+      it('bid before the deadline; after it the customer can still accept; offers are not expired at the deadline; no new bids', async () => {
+        const [a, b] = await shoppers(2);
+        const { id: requestId } = await makeRequest(loc1, [cat1], 1500);
+        const offer = await bidWith(requestId, a, 60);
+        const deadline = (await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } }))
+          .offerDeadline;
+        expect(offer.expiresAt.getTime()).toBe(deadline.getTime() + 60 * 60_000);
+
+        await sleep(deadline.getTime() - Date.now() + 200); // bidding is now closed
+
+        // the offer did not flip to EXPIRED at the bidding deadline
+        expect(await offers.expireDue(new Date(), { requestId })).toBe(0);
+        expect((await db.shoppingOffer.findUniqueOrThrow({ where: { id: offer.id } })).state).toBe(
+          'PENDING',
+        );
+        // no new bid, and the request is gone from the feed
+        await expect(bidWith(requestId, b)).rejects.toBeInstanceOf(OfferRequestClosedError);
+        expect(await feedIds(b)).not.toContain(requestId);
+        // the customer accepts after the bidding deadline, inside the acceptance window
+        expect((await acceptOffer(requestId, offer.id)).outcome).toBe('accepted');
+      });
+
+      it('refuses an accept after the offer own expiresAt, and only then does the offer expire', async () => {
+        const [a] = await shoppers(1);
+        const { id: requestId } = await makeRequest(loc1, [cat1], 30 * 60_000);
+        const offer = await bidWith(requestId, a);
+        const ended = new Date(Date.now() - 1000);
+        await db.shoppingOffer.update({ where: { id: offer.id }, data: { expiresAt: ended } });
+        await db.shoppingRequest.update({
+          where: { id: requestId },
+          data: { offerDeadline: ended },
+        });
+
+        expect(await acceptOffer(requestId, offer.id)).toEqual({ outcome: 'offer_expired' });
+        expect(await db.shopperOrder.count({ where: { requestId } })).toBe(0);
+        expect(await offers.expireDue(new Date(), { requestId })).toBe(1);
+        expect((await db.shoppingOffer.findUniqueOrThrow({ where: { id: offer.id } })).state).toBe(
+          'EXPIRED',
+        );
+      });
+    });
+
+    describe('the request is lazily EXPIRED only when nothing can be accepted', () => {
+      const DAY = 24 * 60 * 60_000;
+      const expire = (requestId: string) =>
+        requests.expireElapsed({ customerId, requestId }, new Date(), 1440);
+      const statusOf = async (id: string) =>
+        (await db.shoppingRequest.findUniqueOrThrow({ where: { id } })).status;
+
+      it('not while the acceptance window after the bidding deadline is still running', async () => {
+        const { id } = await makeRequest(loc1, [cat1], -10 * 60_000); // bidding closed 10 minutes ago
+        expect(await expire(id)).toBe(0);
+        expect(await statusOf(id)).toBe('OPEN');
+      });
+
+      it('once deadline + window has passed and no offer is acceptable', async () => {
+        const { id } = await makeRequest(loc1, [cat1], -2 * DAY);
+        expect(await expire(id)).toBe(1);
+        expect(await statusOf(id)).toBe('EXPIRED');
+        // cancelling it is the existing conflict; accepting anything on it is refused
+        expect(await requests.cancel(id, customerId, new Date())).toEqual({
+          outcome: 'not_open',
+          status: 'EXPIRED',
+        });
+      });
+
+      it('not while a PENDING offer is still inside its own acceptance window (e.g. after the config changed)', async () => {
+        const [a] = await shoppers(1);
+        const { id } = await makeRequest(loc1, [cat1], -2 * DAY);
+        const offer = await db.shoppingOffer.create({
+          data: {
+            requestId: id,
+            shopperProfileId: a,
+            shopperFee: 1000,
+            etaMinutes: 20,
+            expiresAt: new Date(Date.now() + 60 * 60_000),
+            financials: { customerTotal: 13000 },
+          },
+        });
+        expect(await expire(id)).toBe(0);
+        expect(await statusOf(id)).toBe('OPEN');
+        expect((await acceptOffer(id, offer.id)).outcome).toBe('accepted'); // still acceptable
+      });
+
+      it('never touches requests that are not OPEN', async () => {
+        const [a] = await shoppers(1);
+        const { requestId } = await assignedTo(a);
+        await db.shoppingRequest.update({
+          where: { id: requestId },
+          data: { offerDeadline: new Date(Date.now() - 2 * DAY) },
+        });
+        expect(await expire(requestId)).toBe(0);
+        expect(await statusOf(requestId)).toBe('ASSIGNED');
+      });
+
+      it('only ever touches the caller own requests', async () => {
+        const { id } = await makeRequest(loc1, [cat1], -2 * DAY);
+        expect(
+          await requests.expireElapsed({ customerId: shopperA, requestId: id }, new Date(), 1440),
+        ).toBe(0);
+        expect(await statusOf(id)).toBe('OPEN');
+      });
+
+      it('accept vs the lazy expiry: exactly one outcome, never an order on an EXPIRED request', async () => {
+        const [a] = await shoppers(1);
+        for (let i = 0; i < 8; i++) {
+          const { id } = await makeRequest(loc1, [cat1], -2 * DAY);
+          const offer = await db.shoppingOffer.create({
+            data: {
+              requestId: id,
+              shopperProfileId: a,
+              shopperFee: 1000,
+              etaMinutes: 20,
+              expiresAt: new Date(Date.now() - 1000), // its acceptance window is over
+              financials: { customerTotal: 13000 },
+            },
+          });
+          const [accepted] = await Promise.all([acceptOffer(id, offer.id), expire(id)]);
+          expect(['request_not_open', 'offer_expired']).toContain(accepted.outcome);
+          expect(await db.shopperOrder.count({ where: { requestId: id } })).toBe(0);
+          expect(await statusOf(id)).toBe('EXPIRED');
+        }
+      });
+
+      it('an accept in flight on an acceptable offer is not disturbed by the expiry sweep', async () => {
+        const [a] = await shoppers(1);
+        const { id } = await makeRequest(loc1, [cat1], -2 * DAY);
+        const offer = await db.shoppingOffer.create({
+          data: {
+            requestId: id,
+            shopperProfileId: a,
+            shopperFee: 1000,
+            etaMinutes: 20,
+            expiresAt: new Date(Date.now() + 60 * 60_000),
+            financials: { customerTotal: 13000 },
+          },
+        });
+        const stall = hold(
+          (tx) => tx.$queryRaw`SELECT id FROM shopping_offers WHERE id = ${offer.id} FOR UPDATE`,
+        );
+        try {
+          await stall.ready;
+          const attempt = acceptOffer(id, offer.id);
+          await untilBlockedOn('shopping_offers'); // the accept holds the request lock now
+          expect(await expire(id)).toBe(0); // the offer is acceptable, so nothing to expire
+          stall.release();
+          expect((await attempt).outcome).toBe('accepted');
+          expect(await statusOf(id)).toBe('ASSIGNED');
+        } finally {
+          stall.release();
+          await stall.done.catch(() => undefined);
+        }
       });
     });
   });
