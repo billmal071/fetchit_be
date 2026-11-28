@@ -136,3 +136,22 @@ ALTER TABLE "shopping_config"
 
 ALTER TABLE "shopping_config"
     ADD CONSTRAINT "shopping_config_offer_acceptance_window_positive" CHECK ("offer_acceptance_window_minutes" > 0);
+
+-- BACKFILL START
+-- Offers placed before this change stored expires_at = the bidding deadline. From now on
+-- an offer outlives bidding by offer_acceptance_window_minutes, so give the offers that are
+-- still live the same treatment: PENDING offers on OPEN requests whose bidding has not closed
+-- yet. Everything else is left alone (already expired, not pending, or bidding already closed:
+-- those offers keep the deadline they were promised). The expires_at = offer_deadline test
+-- selects only pre-change rows, so running this twice changes nothing the second time.
+-- (Timestamps are stored as UTC without a zone, hence the AT TIME ZONE.)
+UPDATE "shopping_offers" AS o
+SET "expires_at" = r."offer_deadline" + (c."offer_acceptance_window_minutes" * INTERVAL '1 minute')
+FROM "shopping_requests" AS r, "shopping_config" AS c
+WHERE r."id" = o."request_id"
+  AND c."id" = 1
+  AND o."state" = 'PENDING'
+  AND r."status" = 'OPEN'
+  AND r."offer_deadline" > (now() AT TIME ZONE 'UTC')
+  AND o."expires_at" = r."offer_deadline";
+-- BACKFILL END

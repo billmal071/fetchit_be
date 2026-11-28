@@ -8,6 +8,8 @@
  *   SHOPPING_TEST_DATABASE_URL=postgresql://user@localhost:5432/scratch npx jest shopping.repository.integration
  */
 import { randomUUID } from 'crypto';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { ShoppingConfigRepository } from './shopping-config.repository';
@@ -1701,13 +1703,15 @@ suite('shopping repositories (real Postgres)', () => {
       const owner = hold(
         (tx) => tx.$queryRaw`SELECT id FROM shopping_requests WHERE id = ${requestId} FOR UPDATE`,
       );
+      let attempt: ReturnType<typeof orderRepo.cancelOrder> | undefined;
       try {
         await owner.ready;
-        const attempt = orderRepo.cancelOrder({
+        attempt = orderRepo.cancelOrder({
           orderId,
           actor: { kind: 'CUSTOMER', userId: customerId },
           reopenWindowMinutes: 30,
         });
+        attempt.catch(() => undefined); // observed from the start: an early rejection is not unhandled
         await untilBlockedOn('shopping_requests'); // parked on the lock, already holding its arguments
         await sleep(1500); // a long wait
         const released = Date.now();
@@ -1722,8 +1726,11 @@ suite('shopping repositories (real Postgres)', () => {
         // would be about 1.5 s short of this.
         expect(offerDeadline.getTime()).toBeGreaterThanOrEqual(released + 30 * 60_000);
       } finally {
+        // Release the holder FIRST so the operation can finish, then wait for it as well:
+        // it must not outlive this test and write during the next one.
         owner.release();
         await owner.done.catch(() => undefined);
+        await attempt?.catch(() => undefined);
       }
     });
 
@@ -2039,7 +2046,12 @@ suite('shopping repositories (real Postgres)', () => {
           bidWith(requestId, winner),
           bidWith(requestId, newcomer),
         ]);
-        expect(cancelled.status).toBe('fulfilled');
+        // The cancel itself must have worked: a `not_found` would leave the request ASSIGNED,
+        // both bids would be refused as closed, and the checks below would pass for nothing.
+        expect(cancelled).toMatchObject({ status: 'fulfilled', value: { outcome: 'cancelled' } });
+        expect(
+          (await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } })).status,
+        ).toBe('OPEN');
         // Before the cancel commits the request is ASSIGNED (closed); after, the winner is barred.
         expect(byWinner.status).toBe('rejected');
         const reason = (byWinner as PromiseRejectedResult).reason;
@@ -2063,11 +2075,12 @@ suite('shopping repositories (real Postgres)', () => {
       }
     });
 
-    it('a submit that wins the request lock first stands; the cancel waits for it and the bid survives', async () => {
+    it('the cancel waits for a shared (submit-style) request lock; once it has run, an eligible shopper can bid and the cancelled one is barred', async () => {
       const [winner, newcomer] = await shoppers(2);
       const { requestId, orderId } = await assignedTo(winner);
-      // Park an OPEN-request-style submit by newcomer is impossible while ASSIGNED, so drive the
-      // lock order directly: hold FOR SHARE (what a submit holds), then start the cancel.
+      // A bid cannot be placed while the request is ASSIGNED, so this does not model a bid
+      // that wins: it holds FOR SHARE (the lock a submit takes) and shows the cancel cannot
+      // commit underneath it. The surviving-bid ordering is covered by the racing test above.
       const submitLock = hold(
         (tx) => tx.$queryRaw`SELECT id FROM shopping_requests WHERE id = ${requestId} FOR SHARE`,
       );
@@ -2092,17 +2105,27 @@ suite('shopping repositories (real Postgres)', () => {
     });
 
     describe('offers outlive the bidding deadline', () => {
-      it('bid before the deadline; after it the customer can still accept; offers are not expired at the deadline; no new bids', async () => {
+      it('bid before the deadline; after bidding closes the customer can still accept; offers are not expired at the deadline; no new bids', async () => {
         const [a, b] = await shoppers(2);
-        const { id: requestId } = await makeRequest(loc1, [cat1], 1500);
+        // The normal deadline: setup speed cannot close bidding before the bid is placed.
+        const { id: requestId } = await makeRequest(loc1, [cat1]);
         const offer = await bidWith(requestId, a, 60);
         const deadline = (await db.shoppingRequest.findUniqueOrThrow({ where: { id: requestId } }))
           .offerDeadline;
         expect(offer.expiresAt.getTime()).toBe(deadline.getTime() + 60 * 60_000);
 
-        await sleep(deadline.getTime() - Date.now() + 200); // bidding is now closed
+        // Close bidding by moving ONLY the persisted bidding deadline into the past.
+        await db.shoppingRequest.update({
+          where: { id: requestId },
+          data: { offerDeadline: new Date(Date.now() - 1000) },
+        });
 
-        // the offer did not flip to EXPIRED at the bidding deadline
+        // the offer did not flip to EXPIRED when bidding closed: its own expiresAt is ahead
+        expect(
+          (
+            await db.shoppingOffer.findUniqueOrThrow({ where: { id: offer.id } })
+          ).expiresAt.getTime(),
+        ).toBeGreaterThan(Date.now());
         expect(await offers.expireDue(new Date(), { requestId })).toBe(0);
         expect((await db.shoppingOffer.findUniqueOrThrow({ where: { id: offer.id } })).state).toBe(
           'PENDING',
@@ -2110,7 +2133,7 @@ suite('shopping repositories (real Postgres)', () => {
         // no new bid, and the request is gone from the feed
         await expect(bidWith(requestId, b)).rejects.toBeInstanceOf(OfferRequestClosedError);
         expect(await feedIds(b)).not.toContain(requestId);
-        // the customer accepts after the bidding deadline, inside the acceptance window
+        // the customer accepts after bidding closed, inside the acceptance window
         expect((await acceptOffer(requestId, offer.id)).outcome).toBe('accepted');
       });
 
@@ -2195,7 +2218,7 @@ suite('shopping repositories (real Postgres)', () => {
         expect(await statusOf(id)).toBe('OPEN');
       });
 
-      it('accept vs the lazy expiry: exactly one outcome, never an order on an EXPIRED request', async () => {
+      it('an accept on an offer whose window is already over is refused, whichever of accept and expiry runs first; no order on an EXPIRED request', async () => {
         const [a] = await shoppers(1);
         for (let i = 0; i < 8; i++) {
           const { id } = await makeRequest(loc1, [cat1], -2 * DAY);
@@ -2216,35 +2239,144 @@ suite('shopping repositories (real Postgres)', () => {
         }
       });
 
-      it('an accept in flight on an acceptable offer is not disturbed by the expiry sweep', async () => {
+      it('a VALID accept in flight when the offer window ends and the sweep runs: the sweep waits, loses, and leaves the request ASSIGNED with exactly one order', async () => {
         const [a] = await shoppers(1);
-        const { id } = await makeRequest(loc1, [cat1], -2 * DAY);
+        const { id } = await makeRequest(loc1, [cat1], -2 * DAY); // bidding closed long ago
+        const expiresAt = new Date(Date.now() + 3000);
         const offer = await db.shoppingOffer.create({
           data: {
             requestId: id,
             shopperProfileId: a,
             shopperFee: 1000,
             etaMinutes: 20,
-            expiresAt: new Date(Date.now() + 60 * 60_000),
+            expiresAt,
             financials: { customerTotal: 13000 },
           },
         });
         const stall = hold(
           (tx) => tx.$queryRaw`SELECT id FROM shopping_offers WHERE id = ${offer.id} FOR UPDATE`,
         );
+        let attempt: ReturnType<typeof acceptOffer> | undefined;
+        let sweep: Promise<number> | undefined;
         try {
           await stall.ready;
-          const attempt = acceptOffer(id, offer.id);
-          await untilBlockedOn('shopping_offers'); // the accept holds the request lock now
-          expect(await expire(id)).toBe(0); // the offer is acceptable, so nothing to expire
+          // The accept starts while the offer is still valid, judges it valid, then stalls on the offer row.
+          attempt = acceptOffer(id, offer.id);
+          attempt.catch(() => undefined);
+          await untilBlockedOn('shopping_offers');
+          expect(Date.now()).toBeLessThan(expiresAt.getTime());
+          // The offer window now ends while the accept is still in flight...
+          await sleep(expiresAt.getTime() - Date.now() + 200);
+          // ...so the sweep sees an OPEN request with nothing acceptable, and tries to expire it.
+          sweep = expire(id);
+          sweep.catch(() => undefined);
+          await untilBlockedOn('shopping_requests'); // parked behind the accept's request lock
+          expect(await statusOf(id)).toBe('OPEN'); // the accept has not committed yet
+
           stall.release();
           expect((await attempt).outcome).toBe('accepted');
-          expect(await statusOf(id)).toBe('ASSIGNED');
+          expect(await sweep).toBe(0); // it re-checked against the committed ASSIGNED row
+          expect(await statusOf(id)).toBe('ASSIGNED'); // never overwritten with EXPIRED
+          expect(await db.shopperOrder.count({ where: { requestId: id } })).toBe(1);
         } finally {
           stall.release();
           await stall.done.catch(() => undefined);
+          await attempt?.catch(() => undefined);
+          await sweep?.catch(() => undefined);
         }
       });
+    });
+  });
+
+  describe('migration backfill: offers placed before the acceptance window existed', () => {
+    const migration = readFileSync(
+      join(__dirname, '../../../prisma/migrations/20261125100000_add_shopper_orders/migration.sql'),
+      'utf8',
+    );
+    const backfill = migration.slice(
+      migration.indexOf('-- BACKFILL START'),
+      migration.indexOf('-- BACKFILL END'),
+    );
+    const run = (): Promise<number> => db.$executeRawUnsafe(backfill);
+    let backfillShopper: string;
+
+    /** A pre-change-style offer: expires_at = the request's bidding deadline. */
+    const legacyOffer = async (
+      request: { id: string; offerDeadline: Date },
+      state: 'PENDING' | 'WITHDRAWN' | 'EXPIRED' = 'PENDING',
+    ) =>
+      db.shoppingOffer.create({
+        data: {
+          requestId: request.id,
+          shopperProfileId: backfillShopper,
+          state,
+          shopperFee: 1000,
+          etaMinutes: 20,
+          expiresAt: request.offerDeadline,
+          financials: { customerTotal: 13000 },
+        },
+      });
+    const expiresOf = async (id: string): Promise<number> =>
+      (await db.shoppingOffer.findUniqueOrThrow({ where: { id } })).expiresAt.getTime();
+
+    beforeAll(async () => {
+      backfillShopper = await makeShopper('backfill', loc1, cat1);
+    });
+
+    it('is present in the migration file', () => {
+      expect(backfill).toContain('UPDATE "shopping_offers"');
+    });
+
+    it('moves live pre-change offers to deadline + window and leaves every other row alone; a second run changes nothing', async () => {
+      const window = (await new ShoppingConfigRepository(prisma).get())!
+        .offerAcceptanceWindowMinutes;
+      const open = await makeRequest(loc1, [cat1], 30 * 60_000); // bidding still open
+      const live = await legacyOffer(open);
+
+      const closed = await makeRequest(loc1, [cat1], -30 * 60_000); // bidding closed
+      const onClosed = await legacyOffer(closed);
+
+      const openForOthers = await makeRequest(loc1, [cat1], 30 * 60_000);
+      const withdrawn = await legacyOffer(openForOthers, 'WITHDRAWN');
+
+      const alreadyNew = await makeRequest(loc1, [cat1], 30 * 60_000);
+      const newStyle = await db.shoppingOffer.create({
+        data: {
+          requestId: alreadyNew.id,
+          shopperProfileId: backfillShopper,
+          shopperFee: 1000,
+          etaMinutes: 20,
+          expiresAt: new Date(alreadyNew.offerDeadline.getTime() + window * 60_000),
+          financials: { customerTotal: 13000 },
+        },
+      });
+
+      const assignedRequest = await makeRequest(loc1, [cat1], 30 * 60_000);
+      await db.shoppingRequest.update({
+        where: { id: assignedRequest.id },
+        data: { status: 'ASSIGNED' },
+      });
+      const onAssigned = await legacyOffer(assignedRequest);
+
+      const before = {
+        onClosed: await expiresOf(onClosed.id),
+        withdrawn: await expiresOf(withdrawn.id),
+        newStyle: await expiresOf(newStyle.id),
+        onAssigned: await expiresOf(onAssigned.id),
+      };
+
+      await run();
+
+      expect(await expiresOf(live.id)).toBe(open.offerDeadline.getTime() + window * 60_000);
+      expect(await expiresOf(onClosed.id)).toBe(before.onClosed);
+      expect(await expiresOf(withdrawn.id)).toBe(before.withdrawn);
+      expect(await expiresOf(newStyle.id)).toBe(before.newStyle);
+      expect(await expiresOf(onAssigned.id)).toBe(before.onAssigned);
+
+      // idempotent: the moved row no longer equals its deadline, so nothing matches again
+      const moved = await expiresOf(live.id);
+      expect(await run()).toBe(0);
+      expect(await expiresOf(live.id)).toBe(moved);
     });
   });
 });
