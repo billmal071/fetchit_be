@@ -543,9 +543,13 @@ describe('ShopperOrderRepository.transition: the accept window is re-checked aft
     tx.shopperOrder.updateMany.mockResolvedValue({ count: 0 });
     tx.shopperOrder.findFirst.mockResolvedValue({ state: 'ASSIGNED', cancelledBy: null });
 
-    expect(await repo.transition({ ...step, acceptWindowMinutes: 30 })).toEqual({
-      outcome: 'accept_expired',
-    });
+    const result = await repo.transition({ ...step, acceptWindowMinutes: 30 });
+    expect(result.outcome).toBe('accept_expired');
+    // It hands back the very cutoff it judged by, so the follow-up cancel cannot disagree.
+    const where = tx.shopperOrder.updateMany.mock.calls[0][0].where as {
+      createdAt: { gte: Date };
+    };
+    expect(result).toEqual({ outcome: 'accept_expired', assignedBefore: where.createdAt.gte });
     expect(tx.orderEvent.create).not.toHaveBeenCalled();
   });
 
@@ -746,6 +750,18 @@ describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
     expect(await cancel(accepted.repo)).toEqual({ outcome: 'conflict', state: 'SHOPPER_ACCEPTED' });
     const done = makeCancelTx({ updated: 0, current: { id: 'order-1', state: 'CANCELLED' } });
     expect(await cancel(done.repo)).toMatchObject({ outcome: 'already_cancelled' });
+    const bySystem = makeCancelTx({
+      updated: 0,
+      current: { id: 'order-1', state: 'CANCELLED', cancelledBy: 'CUSTOMER' },
+    });
+    expect(
+      await bySystem.repo.cancelOrder({
+        orderId: 'order-1',
+        actor: { kind: 'SYSTEM' },
+        assignedBefore: NOW_,
+        reopenDeadline: REOPEN,
+      }),
+    ).toMatchObject({ outcome: 'already_cancelled', order: { cancelledBy: 'CUSTOMER' } });
     const fresh = makeCancelTx({ updated: 0, current: { id: 'order-1', state: 'ASSIGNED' } });
     expect(
       await fresh.repo.cancelOrder({
@@ -755,7 +771,7 @@ describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
         reopenDeadline: REOPEN,
       }),
     ).toEqual({ outcome: 'not_stale' });
-    for (const t of [accepted.tx, done.tx, fresh.tx]) {
+    for (const t of [accepted.tx, done.tx, bySystem.tx, fresh.tx]) {
       expect(t.shoppingOffer.updateMany).not.toHaveBeenCalled();
       expect(t.shoppingRequest.updateMany).not.toHaveBeenCalled();
       expect(t.orderEvent.create).not.toHaveBeenCalled();

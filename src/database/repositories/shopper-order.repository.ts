@@ -346,7 +346,7 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
       }
       // Still in the state it was expected in, so only the window can have stopped it.
       if (acceptCutoff && current.state === input.from) {
-        return { outcome: 'accept_expired' };
+        return { outcome: 'accept_expired', assignedBefore: acceptCutoff };
       }
       return { outcome: 'conflict', state: current.state, cancelledBy: current.cancelledBy };
     });
@@ -411,10 +411,9 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
           include: customerOrderInclude,
         });
         if (!current) return { outcome: 'not_found' };
+        if (current.state === 'CANCELLED') return { outcome: 'already_cancelled', order: current };
         if (actor.kind === 'SYSTEM') return { outcome: 'not_stale' };
-        return current.state === 'CANCELLED'
-          ? { outcome: 'already_cancelled', order: current }
-          : { outcome: 'conflict', state: current.state };
+        return { outcome: 'conflict', state: current.state };
       }
 
       const order = await tx.shopperOrder.findUniqueOrThrow({

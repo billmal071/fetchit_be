@@ -121,8 +121,11 @@ export class ShopperOrdersService {
     },
   ): Promise<ShopperOrderResponseDto> {
     const profileId = await this.approvedProfileId(userId);
+    // ONE read of the windows for the whole call: the sweep, the accept's own window
+    // check and the follow-up cancel must all agree, whatever happens to the config.
+    const windows = await this.expiry.windows();
     // An order whose accept window has run out is cancelled now, so a late accept loses.
-    await this.expiry.sweep({ orderId: id });
+    await this.expiry.sweep({ orderId: id }, windows);
     const result: OrderTransitionResult = await this.orders.transition({
       id,
       shopperProfileId: profileId,
@@ -132,7 +135,7 @@ export class ShopperOrdersService {
       eventType: step.eventType,
       stamp: step.stamp,
       ...(step.enforceAcceptWindow && {
-        acceptWindowMinutes: await this.expiry.acceptWindowMinutes(),
+        acceptWindowMinutes: windows.acceptWindowMinutes,
       }),
     });
     if (result.outcome === 'shopper_unavailable') {
@@ -141,9 +144,20 @@ export class ShopperOrdersService {
     }
     if (result.outcome === 'accept_expired') {
       // The window ran out while the accept waited for its locks. Nothing was
-      // written; run the same SYSTEM cancel the sweep would have, then refuse.
-      await this.expiry.sweep({ orderId: id });
-      throw new ConflictException(cancelledMessage('SYSTEM'));
+      // written. Cancel THIS order with the cutoff the accept judged by, and say only
+      // what is confirmed: a cancel that rolled back leaves the order ASSIGNED.
+      const outcome = await this.expiry.cancelAfterAcceptTimeout(
+        id,
+        result.assignedBefore,
+        windows.offerWindowMinutes,
+      );
+      throw new ConflictException(
+        outcome === 'CANCELLED_BY_SYSTEM'
+          ? cancelledMessage('SYSTEM')
+          : outcome === 'CANCELLED_BY_CUSTOMER'
+            ? cancelledMessage('CUSTOMER')
+            : 'This order was not accepted in time and can no longer be accepted. It will be cancelled shortly.',
+      );
     }
     if (result.outcome === 'not_found') {
       throw new ResourceNotFoundException('Order', id);

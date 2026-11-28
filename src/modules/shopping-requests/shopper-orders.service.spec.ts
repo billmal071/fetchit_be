@@ -5,7 +5,12 @@ describe('ShopperOrdersService', () => {
   let profiles: { ensureByUserId: jest.Mock };
   let orders: Record<string, jest.Mock>;
   let audit: { log: jest.Mock };
-  let expiry: { sweep: jest.Mock; announce: jest.Mock; acceptWindowMinutes: jest.Mock };
+  let expiry: {
+    sweep: jest.Mock;
+    announce: jest.Mock;
+    windows: jest.Mock;
+    cancelAfterAcceptTimeout: jest.Mock;
+  };
   let service: ShopperOrdersService;
 
   beforeEach(() => {
@@ -25,7 +30,8 @@ describe('ShopperOrdersService', () => {
     expiry = {
       sweep: jest.fn(async () => undefined),
       announce: jest.fn(),
-      acceptWindowMinutes: jest.fn(async () => 30),
+      windows: jest.fn(async () => ({ acceptWindowMinutes: 30, offerWindowMinutes: 45 })),
+      cancelAfterAcceptTimeout: jest.fn(async () => 'CANCELLED_BY_SYSTEM'),
     };
     service = new ShopperOrdersService(
       profiles as never,
@@ -197,19 +203,55 @@ describe('ShopperOrdersService', () => {
       expect(orders.transition.mock.calls.at(-1)![0]).not.toHaveProperty('acceptWindowMinutes');
     });
 
-    it('when the window ran out while the accept waited: runs the same SYSTEM cancel, then 409s with the timeout message', async () => {
-      orders.transition.mockResolvedValue({ outcome: 'accept_expired' });
-      expiry.sweep.mockClear();
-
-      await expect(service.accept('u', 'order-1')).rejects.toMatchObject({
-        status: 409,
-        message: 'This order was cancelled because it was not accepted in time',
+    describe('when the window ran out while the accept waited', () => {
+      const cutoff = new Date('2026-11-25T09:40:00Z');
+      beforeEach(() => {
+        orders.transition.mockResolvedValue({ outcome: 'accept_expired', assignedBefore: cutoff });
       });
 
-      // once before the transition, and once more after it reported the expiry
-      expect(expiry.sweep).toHaveBeenCalledTimes(2);
-      expect(expiry.sweep).toHaveBeenLastCalledWith({ orderId: 'order-1' });
-      expect(audit.log).not.toHaveBeenCalled();
+      it('confirms a SYSTEM cancellation before claiming one, using the transition cutoff and the same windows', async () => {
+        expiry.cancelAfterAcceptTimeout.mockResolvedValue('CANCELLED_BY_SYSTEM');
+        await expect(service.accept('u', 'order-1')).rejects.toMatchObject({
+          status: 409,
+          message: 'This order was cancelled because it was not accepted in time',
+        });
+        expect(expiry.cancelAfterAcceptTimeout).toHaveBeenCalledWith('order-1', cutoff, 45);
+        expect(audit.log).not.toHaveBeenCalled();
+      });
+
+      it('does NOT claim a cancellation when the cancel failed or matched nothing', async () => {
+        expiry.cancelAfterAcceptTimeout.mockResolvedValue('NOT_CANCELLED');
+        const error = await service.accept('u', 'order-1').catch((e) => e);
+        expect(error.status).toBe(409);
+        expect(error.message).toBe(
+          'This order was not accepted in time and can no longer be accepted. It will be cancelled shortly.',
+        );
+        expect(error.message).not.toMatch(/was cancelled/);
+      });
+
+      it('reports the customer cancel message when the customer cancelled first', async () => {
+        expiry.cancelAfterAcceptTimeout.mockResolvedValue('CANCELLED_BY_CUSTOMER');
+        await expect(service.accept('u', 'order-1')).rejects.toMatchObject({
+          status: 409,
+          message: 'This order was cancelled by the customer',
+        });
+      });
+
+      it('uses ONE window value for the whole accept, even if the config changes between calls', async () => {
+        expiry.windows
+          .mockResolvedValueOnce({ acceptWindowMinutes: 30, offerWindowMinutes: 45 })
+          .mockResolvedValue({ acceptWindowMinutes: 999, offerWindowMinutes: 999 });
+        expiry.cancelAfterAcceptTimeout.mockResolvedValue('CANCELLED_BY_SYSTEM');
+        await service.accept('u', 'order-1').catch(() => undefined);
+
+        expect(expiry.windows).toHaveBeenCalledTimes(1);
+        const windows = { acceptWindowMinutes: 30, offerWindowMinutes: 45 };
+        expect(expiry.sweep).toHaveBeenCalledWith({ orderId: 'order-1' }, windows);
+        expect(orders.transition).toHaveBeenCalledWith(
+          expect.objectContaining({ acceptWindowMinutes: 30 }),
+        );
+        expect(expiry.cancelAfterAcceptTimeout).toHaveBeenCalledWith('order-1', cutoff, 45);
+      });
     });
   });
 
@@ -226,7 +268,7 @@ describe('ShopperOrdersService', () => {
       ]) {
         expiry.sweep.mockClear();
         await call().catch(() => undefined);
-        expect(expiry.sweep).toHaveBeenCalledWith({ orderId: 'order-1' });
+        expect(expiry.sweep.mock.calls[0][0]).toEqual({ orderId: 'order-1' });
       }
       orders.transition.mockClear();
       await service.accept('u', 'order-1');

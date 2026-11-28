@@ -1053,11 +1053,13 @@ suite('shopping repositories (real Postgres)', () => {
           );
           try {
             await blocker.ready;
+            // ONE deadline, fixed before the update, from which createdAt is derived: a
+            // slow update eats into the time left instead of silently moving the deadline.
+            const deadline = Date.now() + 2500;
             await db.shopperOrder.update({
               where: { id },
-              data: { createdAt: new Date(Date.now() - WINDOW * 60_000 + 2500) },
+              data: { createdAt: new Date(deadline - WINDOW * 60_000) },
             });
-            const deadline = Date.now() + 2500;
             const attempt = acceptWithWindow(id, target);
             const attemptSettled = settledFlag(attempt);
             await untilBlockedOn('shopper_profiles');
@@ -1067,7 +1069,13 @@ suite('shopping repositories (real Postgres)', () => {
             blocker.release();
             await blocker.done;
 
-            expect(await attempt).toEqual({ outcome: 'accept_expired' });
+            const refused = await attempt;
+            expect(refused).toMatchObject({ outcome: 'accept_expired' });
+            // The cutoff it judged by: the order was created before it, i.e. it really was stale.
+            const created = (await db.shopperOrder.findUniqueOrThrow({ where: { id } })).createdAt;
+            expect(created.getTime()).toBeLessThan(
+              (refused as { assignedBefore: Date }).assignedBefore.getTime(),
+            );
             await untouched(id);
           } finally {
             blocker.release();
@@ -1145,6 +1153,67 @@ suite('shopping repositories (real Postgres)', () => {
             await blocker.done.catch(() => undefined);
           }
         });
+      });
+
+      it('through the service, when the window setting changes during the lock wait: still cancelled, and told so', async () => {
+        const config = new ShoppingConfigService(new ShoppingConfigRepository(prisma));
+        const emit = jest.fn();
+        const expiry = new OrderExpiryService(orderRepo, config, { emit } as never);
+        const shopperOrders = new ShopperOrdersService(
+          new ShopperProfileRepository(prisma),
+          orderRepo,
+          { log: jest.fn() } as never,
+          expiry,
+        );
+        const rules = await config.getRules();
+        const [target] = await shoppersNeeded(1);
+        const userId = (await db.shopperProfile.findUniqueOrThrow({ where: { id: target } }))
+          .userId;
+        const id = await newOrder(target);
+        const blocker = hold(
+          (tx) => tx.$queryRaw`SELECT id FROM shopper_profiles WHERE id = ${target} FOR UPDATE`,
+        );
+        try {
+          await blocker.ready;
+          const deadline = Date.now() + 2500;
+          await db.shopperOrder.update({
+            where: { id },
+            data: { createdAt: new Date(deadline - rules.shopperAcceptWindowMinutes * 60_000) },
+          });
+          const attempt = shopperOrders.accept(userId, id).catch((e: unknown) => e);
+          await untilBlockedOn('shopper_profiles');
+          expect(Date.now()).toBeLessThan(deadline);
+          // An admin raises the window while the accept is parked: a fresh read would now
+          // call this order fresh, but the accept already judged it by the window it read.
+          await db.shoppingConfig.update({
+            where: { id: 1 },
+            data: { shopperAcceptWindowMinutes: 100_000 },
+          });
+          await sleep(deadline - Date.now() + 200);
+          blocker.release();
+          await blocker.done;
+
+          expect(await attempt).toMatchObject({
+            status: 409,
+            message: 'This order was cancelled because it was not accepted in time',
+          });
+          const order = await db.shopperOrder.findUniqueOrThrow({ where: { id } });
+          expect(order).toMatchObject({ state: 'CANCELLED', cancelledBy: 'SYSTEM' }); // the claim is true
+          expect(
+            (await db.shoppingRequest.findUniqueOrThrow({ where: { id: order.requestId } })).status,
+          ).toBe('OPEN');
+          expect(emit).toHaveBeenCalledWith(
+            'shopping.order.cancelled',
+            expect.objectContaining({ orderId: id, cancelledBy: 'SYSTEM' }),
+          );
+        } finally {
+          blocker.release();
+          await blocker.done.catch(() => undefined);
+          await db.shoppingConfig.update({
+            where: { id: 1 },
+            data: { shopperAcceptWindowMinutes: rules.shopperAcceptWindowMinutes },
+          });
+        }
       });
 
       describe('a shopper suspended after the service checked APPROVED', () => {

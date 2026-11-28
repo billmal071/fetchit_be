@@ -116,7 +116,8 @@ export type OrderTransitionResult =
   | { outcome: 'shopper_unavailable' }
   // Accepting only: the accept window ran out before the accept could commit (judged
   // after every lock was taken). Nothing was written; the caller runs the SYSTEM cancel.
-  | { outcome: 'accept_expired' }
+  // `assignedBefore` is the very cutoff it judged by, for the follow-up cancel to reuse.
+  | { outcome: 'accept_expired'; assignedBefore: Date }
   | { outcome: 'not_found' }
   // cancelledBy is set when state is CANCELLED, so the message can say why.
   | { outcome: 'conflict'; state: OrderState; cancelledBy: string | null };
@@ -157,7 +158,8 @@ export interface ICancelledOrderInfo {
 
 export type CancelOrderResult =
   | ({ outcome: 'cancelled' } & ICancelledOrderInfo)
-  // The customer cancelled (or the system had) already: a retry gets the order back.
+  // Already CANCELLED (see order.cancelledBy for by whom): a retry gets the order back.
+  // The SYSTEM path returns it too, so a targeted timeout can tell who got there first.
   | { outcome: 'already_cancelled'; order: CustomerOrder }
   | { outcome: 'not_found' }
   // SYSTEM only: the order is not past its accept window (or no longer ASSIGNED).
