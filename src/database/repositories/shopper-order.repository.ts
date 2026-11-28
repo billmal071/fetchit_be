@@ -437,10 +437,17 @@ export class ShopperOrderRepository implements IShopperOrderRepository {
         data: { state: actor.kind === 'CUSTOMER' ? 'REJECTED' : 'EXPIRED' },
       });
       // Reopen for bidding with a fresh window. The other bidders stay REJECTED.
+      // Offers placed from now on use the live acceptance window, so the request's copy
+      // is refreshed with it (same transaction as the new deadline).
+      const live = await tx.shoppingConfig.findUnique({
+        where: { id: 1 },
+        select: { offerAcceptanceWindowMinutes: true },
+      });
       await tx.shoppingRequest.updateMany({
         where: { id: head.requestId, status: 'ASSIGNED' },
         data: {
           status: 'OPEN',
+          ...(live && { offerAcceptanceWindowMinutes: live.offerAcceptanceWindowMinutes }),
           // Worked out now, after the request lock, not by the caller before the wait.
           offerDeadline: new Date(Date.now() + input.reopenWindowMinutes * 60_000),
         },

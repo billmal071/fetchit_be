@@ -685,6 +685,7 @@ describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
       },
       shoppingOffer: { updateMany: jest.fn() },
       shoppingRequest: { updateMany: jest.fn() },
+      shoppingConfig: { findUnique: jest.fn(async () => ({ offerAcceptanceWindowMinutes: 45 })) },
       shopperProfile: { findUniqueOrThrow: jest.fn(async () => ({ userId: 'shopper-user' })) },
       orderEvent: { create: jest.fn() },
     };
@@ -766,7 +767,7 @@ describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
     });
     expect(tx.shoppingRequest.updateMany).toHaveBeenCalledWith({
       where: { id: 'req-1', status: 'ASSIGNED' },
-      data: { status: 'OPEN', offerDeadline: expect.any(Date) },
+      data: { status: 'OPEN', offerDeadline: expect.any(Date), offerAcceptanceWindowMinutes: 45 },
     });
     expect(tx.orderEvent.create).toHaveBeenCalledWith({
       data: {
@@ -872,7 +873,11 @@ describe('ShopperOrderRepository.cancelOrder / expireStale', () => {
 
       expect(tx.shoppingRequest.updateMany).toHaveBeenCalledWith({
         where: { id: 'req-1', status: 'ASSIGNED' },
-        data: { status: 'OPEN', offerDeadline: new Date('2026-11-25T11:05:00Z') }, // 10:05 + 60 min
+        data: {
+          status: 'OPEN',
+          offerDeadline: new Date('2026-11-25T11:05:00Z'), // 10:05 + 60 min
+          offerAcceptanceWindowMinutes: 45,
+        },
       });
     } finally {
       jest.useRealTimers();

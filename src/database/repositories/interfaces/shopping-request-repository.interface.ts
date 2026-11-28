@@ -55,6 +55,8 @@ export interface ICreateShoppingRequestInput {
   estimatedGoodsBudget: number;
   estimate: Prisma.InputJsonValue;
   offerDeadline: Date;
+  /** Snapshot of the configured acceptance window; the lazy expiry reads it back per row. */
+  offerAcceptanceWindowMinutes: number;
   items: IShoppingRequestItemInput[];
 }
 
@@ -119,16 +121,14 @@ export interface IShoppingRequestRepository {
 
   /**
    * Lazily mark the customer's OPEN requests EXPIRED once nothing on them can be
-   * accepted any more: bidding closed more than `acceptanceWindowMinutes` ago AND
+   * accepted any more: bidding closed more than the request's OWN snapshotted
+   * acceptance window ago (offer_acceptance_window_minutes, per row, never the live
+   * setting) AND
    * no PENDING offer is still inside its own acceptance window. One conditional
    * UPDATE (WHERE status = 'OPEN'), so it serialises with an accept or a cancel on
    * the row lock and exactly one wins. Optionally limited to one request.
    */
-  expireElapsed(
-    scope: { customerId: string; requestId?: string },
-    now: Date,
-    acceptanceWindowMinutes: number,
-  ): Promise<number>;
+  expireElapsed(scope: { customerId: string; requestId?: string }, now: Date): Promise<number>;
 
   /** Insert the request and its items atomically; generates a unique reference. */
   create(input: ICreateShoppingRequestInput): Promise<ShoppingRequestWithItems>;

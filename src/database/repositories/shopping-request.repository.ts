@@ -58,6 +58,7 @@ export class ShoppingRequestRepository implements IShoppingRequestRepository {
             estimatedGoodsBudget: input.estimatedGoodsBudget,
             estimate: input.estimate,
             offerDeadline: input.offerDeadline,
+            offerAcceptanceWindowMinutes: input.offerAcceptanceWindowMinutes,
             items: {
               create: input.items.map((item, position) => ({
                 position,
@@ -97,16 +98,14 @@ export class ShoppingRequestRepository implements IShoppingRequestRepository {
   async expireElapsed(
     scope: { customerId: string; requestId?: string },
     now: Date,
-    acceptanceWindowMinutes: number,
   ): Promise<number> {
-    const cutoff = new Date(now.getTime() - acceptanceWindowMinutes * 60_000);
     return this.prisma.$executeRaw`
       UPDATE shopping_requests r
       SET status = 'EXPIRED', updated_at = ${now}
       WHERE r.status = 'OPEN'
         AND r.customer_id = ${scope.customerId}
         AND (${scope.requestId ?? null}::text IS NULL OR r.id = ${scope.requestId ?? null})
-        AND r.offer_deadline < ${cutoff}
+        AND r.offer_deadline + make_interval(mins => r.offer_acceptance_window_minutes) < ${now}
         AND NOT EXISTS (
           SELECT 1 FROM shopping_offers o
           WHERE o.request_id = r.id AND o.state = 'PENDING' AND o.expires_at > ${now}

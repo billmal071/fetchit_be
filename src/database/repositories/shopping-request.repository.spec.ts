@@ -175,10 +175,10 @@ describe('ShoppingRequestRepository', () => {
   });
 
   describe('expireElapsed', () => {
-    const run = async (scope: { customerId: string; requestId?: string }, window: number) => {
+    const run = async (scope: { customerId: string; requestId?: string }) => {
       const prisma = { $executeRaw: jest.fn(async () => 2) };
       const repo = new ShoppingRequestRepository(prisma as unknown as PrismaService);
-      const count = await repo.expireElapsed(scope, NOW, window);
+      const count = await repo.expireElapsed(scope, NOW);
       const [strings, ...values] = prisma.$executeRaw.mock.calls[0] as unknown as [
         TemplateStringsArray,
         ...unknown[],
@@ -187,23 +187,25 @@ describe('ShoppingRequestRepository', () => {
     };
 
     it('is ONE conditional UPDATE: still OPEN, bidding closed before the window, no acceptable offer left', async () => {
-      const { count, sql, values } = await run({ customerId: 'cust-1' }, 1440);
+      const { count, sql, values } = await run({ customerId: 'cust-1' });
       expect(count).toBe(2);
       expect(sql).toContain("SET status = 'EXPIRED'");
       expect(sql).toContain("WHERE r.status = 'OPEN'");
       expect(sql).toContain('r.customer_id = ?');
-      expect(sql).toContain('r.offer_deadline < ?');
+      // the window is each request's OWN snapshot, never a value passed in
+      expect(sql).toContain(
+        'r.offer_deadline + make_interval(mins => r.offer_acceptance_window_minutes) < ?',
+      );
       expect(sql).toContain(
         "NOT EXISTS ( SELECT 1 FROM shopping_offers o WHERE o.request_id = r.id AND o.state = 'PENDING' AND o.expires_at > ? )",
       );
-      expect(values).toContainEqual(new Date(NOW.getTime() - 1440 * 60_000));
+      expect(values).toContainEqual(NOW);
       expect(values).toContain('cust-1');
     });
 
-    it('can be narrowed to one request, and follows the window it is given', async () => {
-      const { values } = await run({ customerId: 'cust-1', requestId: 'req-1' }, 5);
+    it('can be narrowed to one request', async () => {
+      const { values } = await run({ customerId: 'cust-1', requestId: 'req-1' });
       expect(values).toContain('req-1');
-      expect(values).toContainEqual(new Date(NOW.getTime() - 5 * 60_000));
     });
   });
 
@@ -252,6 +254,7 @@ describe('ShoppingRequestRepository', () => {
       estimatedGoodsBudget: 1,
       estimate: {},
       offerDeadline: NOW,
+      offerAcceptanceWindowMinutes: 1440,
       items: [],
     };
     const collision = (): Prisma.PrismaClientKnownRequestError =>
