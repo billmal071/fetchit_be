@@ -67,6 +67,7 @@ export class ShoppingRequestsService {
       estimatedGoodsBudget,
       estimate: { ...estimate },
       offerDeadline: new Date(now.getTime() + rules.offerWindowMinutes * 60_000),
+      offerAcceptanceWindowMinutes: rules.offerAcceptanceWindowMinutes,
       items: dto.items.map((item) => ({
         name: item.name,
         brand: item.brand,
@@ -120,17 +121,12 @@ export class ShoppingRequestsService {
 
   /**
    * Lazily mark requests EXPIRED once bidding closed more than the acceptance
-   * window ago and no offer on them can still be accepted (like offers, there is
+   * window ago (the window stored on each request when it was created or reopened) and no offer on them can still be accepted (like offers, there is
    * no cron). A conditional update in the repository, so it races safely with an
    * accept or a cancel.
    */
   private async expireElapsed(customerId: string, requestId?: string): Promise<void> {
-    const { offerAcceptanceWindowMinutes } = await this.config.getRules();
-    await this.requests.expireElapsed(
-      { customerId, requestId },
-      new Date(),
-      offerAcceptanceWindowMinutes,
-    );
+    await this.requests.expireElapsed({ customerId, requestId }, new Date());
   }
 
   async cancel(customerId: string, id: string): Promise<ShoppingRequestResponseDto> {

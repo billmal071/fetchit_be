@@ -22,6 +22,7 @@ import {
 } from '@/database/repositories';
 import { StorageService } from '@/storage';
 import { AuditService } from '@common/services/audit.service';
+import { FeatureFlagService } from '@modules/feature-flags/feature-flag.service';
 import { HandymanModule } from './handyman.module';
 
 const PROFILE_ID = 'profile-1';
@@ -83,6 +84,7 @@ const applicationRepo = { findByHandymanProfileId: jest.fn() };
     { provide: PrismaService, useValue: {} },
     { provide: StorageService, useValue: {} },
     { provide: AuditService, useValue: { log: jest.fn() } },
+    { provide: FeatureFlagService, useValue: { isEnabledFor: async () => true } },
   ],
   exports: [
     HANDYMAN_PROFILE_REPOSITORY,
@@ -92,6 +94,7 @@ const applicationRepo = { findByHandymanProfileId: jest.fn() };
     PrismaService,
     StorageService,
     AuditService,
+    FeatureFlagService,
   ],
 })
 class StubsModule {}

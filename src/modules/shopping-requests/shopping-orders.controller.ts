@@ -15,9 +15,11 @@ import { ApiErrorResponses, ApiPaginatedResponse, ApiSuccessResponse } from '@/c
 import { ParseUUIDPipe } from '@/common/pipes';
 import { IRequestUser } from '@common/interfaces';
 import type { IMeta } from '@common/interfaces';
-import { SUCCESS_MESSAGES } from '@common/constants';
+import { FEATURE_FLAGS, SUCCESS_MESSAGES } from '@common/constants';
+import { RequireFeature } from '@modules/feature-flags/require-feature.decorator';
 
 @ApiTags('Shopping Orders')
+@RequireFeature(FEATURE_FLAGS.SHOPPER_ORDERS)
 @ApiBearerAuth()
 @Controller('shopping-orders')
 @Roles(UserRole.CUSTOMER)

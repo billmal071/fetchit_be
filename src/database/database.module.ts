@@ -19,6 +19,7 @@ import {
   ShoppingRequestRepository,
   ShoppingOfferRepository,
   ShopperOrderRepository,
+  FeatureFlagRepository,
   USER_REPOSITORY,
   WAITLIST_REPOSITORY,
   PASSWORD_RESET_REPOSITORY,
@@ -37,6 +38,7 @@ import {
   SHOPPING_REQUEST_REPOSITORY,
   SHOPPING_OFFER_REPOSITORY,
   SHOPPER_ORDER_REPOSITORY,
+  FEATURE_FLAG_REPOSITORY,
 } from './repositories';
 
 @Global()
@@ -115,6 +117,10 @@ import {
       provide: SHOPPER_ORDER_REPOSITORY,
       useClass: ShopperOrderRepository,
     },
+    {
+      provide: FEATURE_FLAG_REPOSITORY,
+      useClass: FeatureFlagRepository,
+    },
   ],
   exports: [
     PrismaService,
@@ -136,6 +142,7 @@ import {
     SHOPPING_REQUEST_REPOSITORY,
     SHOPPING_OFFER_REPOSITORY,
     SHOPPER_ORDER_REPOSITORY,
+    FEATURE_FLAG_REPOSITORY,
   ],
 })
 export class DatabaseModule {}

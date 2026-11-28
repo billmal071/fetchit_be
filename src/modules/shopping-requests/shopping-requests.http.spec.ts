@@ -26,6 +26,7 @@ import {
   SHOPPING_REFERENCE_REPOSITORY,
   SHOPPING_REQUEST_REPOSITORY,
 } from '@/database/repositories';
+import { FeatureFlagService } from '@modules/feature-flags/feature-flag.service';
 import { ShoppingRequestsModule } from './shopping-requests.module';
 import { RULES, makeOfferRow, makeOfferWithShopper, makeRequestRow } from './testing/fixtures';
 
@@ -72,6 +73,7 @@ const audit = { log: jest.fn() };
     { provide: SHOPPING_REFERENCE_REPOSITORY, useValue: reference },
     { provide: SHOPPING_CONFIG_REPOSITORY, useValue: configRepo },
     { provide: AuditService, useValue: audit },
+    { provide: FeatureFlagService, useValue: { isEnabledFor: async () => true } },
   ],
   exports: [
     SHOPPER_PROFILE_REPOSITORY,
@@ -81,6 +83,7 @@ const audit = { log: jest.fn() };
     SHOPPING_REFERENCE_REPOSITORY,
     SHOPPING_CONFIG_REPOSITORY,
     AuditService,
+    FeatureFlagService,
   ],
 })
 class StubsModule {}
