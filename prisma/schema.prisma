@@ -71,6 +71,7 @@ model User {
   notifications           Notification[]
   shoppingRequests        ShoppingRequest[]
   shopperOrdersAsCustomer ShopperOrder[]
+  shoppingConfigEdits     ShoppingConfig[]  @relation("ShoppingConfigUpdatedBy")
 
   @@map("users")
 }
@@ -668,6 +669,10 @@ model ShoppingConfig {
   // offerDeadline): expiresAt = offerDeadline + this.
   offerAcceptanceWindowMinutes Int @default(1440) @map("offer_acceptance_window_minutes")
   updatedAt            DateTime @updatedAt @map("updated_at")
+  // The admin who last edited it; null for the seeded values.
+  updatedById          String?  @map("updated_by_id")
+
+  updatedBy User? @relation("ShoppingConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@map("shopping_config")
 }

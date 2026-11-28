@@ -23,11 +23,14 @@ import { ShoppingConfigService } from '../../modules/shopping-requests/shopping-
 import { ShoppingRequestsService } from '../../modules/shopping-requests/shopping-requests.service';
 import { ShopperOrdersService } from '../../modules/shopping-requests/shopper-orders.service';
 import { ShoppingOrdersService } from '../../modules/shopping-requests/shopping-orders.service';
+import { AdminShoppingConfigService } from '../../modules/admin/admin-shopping-config.service';
+import { validateShoppingConfig } from '../../modules/admin/admin-shopping-config.validation';
 import { ShopperBiddingService } from '../../modules/shopping-requests/shopper-bidding.service';
 import {
   DuplicateActiveOfferError,
   OfferRequestClosedError,
   ShopperBarredFromRequestError,
+  ShoppingConfigConstraintError,
 } from './interfaces';
 
 const url = process.env.SHOPPING_TEST_DATABASE_URL;
@@ -2377,6 +2380,202 @@ suite('shopping repositories (real Postgres)', () => {
       const moved = await expiresOf(live.id);
       expect(await run()).toBe(0);
       expect(await expiresOf(live.id)).toBe(moved);
+    });
+  });
+
+  describe('admin shopping configuration', () => {
+    const configRepo = new ShoppingConfigRepository(prisma);
+    let adminId: string;
+    let original: Awaited<ReturnType<typeof db.shoppingConfig.findUniqueOrThrow>>;
+
+    beforeAll(async () => {
+      adminId = await makeUser('config-admin');
+      original = await db.shoppingConfig.findUniqueOrThrow({ where: { id: 1 } });
+    });
+    // The singleton is shared by every test in this suite: put it back exactly.
+    afterEach(async () => {
+      const { id: _id, ...values } = original;
+      void _id;
+      await db.shoppingConfig.update({ where: { id: 1 }, data: values });
+    });
+
+    const stored = () => db.shoppingConfig.findUniqueOrThrow({ where: { id: 1 } });
+    const edit = (patch: Parameters<typeof configRepo.update>[0]) =>
+      configRepo.update(patch, adminId, validateShoppingConfig);
+
+    it('applies a partial edit, records who and when, and leaves the other fields alone', async () => {
+      const result = await edit({ minShopperFee: 600, vatPercent: 8.25 });
+      expect(result).toMatchObject({
+        outcome: 'updated',
+        before: { minShopperFee: 500, vatPercent: 7.5 },
+        after: { minShopperFee: 600, vatPercent: 8.25 },
+        record: { minShopperFee: 600, vatPercent: 8.25, updatedBy: { id: adminId } },
+      });
+      const row = await stored();
+      expect(row).toMatchObject({
+        minShopperFee: 600,
+        maxShopperFee: original.maxShopperFee,
+        updatedById: adminId,
+      });
+      expect(Number(row.vatPercent)).toBe(8.25);
+      expect(Number(row.serviceChargePercent)).toBe(Number(original.serviceChargePercent));
+    });
+
+    it('validates a partial edit against the STORED other side, writing nothing when it fails', async () => {
+      const tooHigh = await edit({ minShopperFee: original.maxShopperFee + 1 });
+      const tooLow = await edit({ maxShopperFee: original.minShopperFee - 1 });
+      expect(tooHigh).toMatchObject({ outcome: 'invalid', errors: [{ field: 'minShopperFee' }] });
+      expect(tooLow).toMatchObject({ outcome: 'invalid' });
+      expect(await stored()).toMatchObject({
+        minShopperFee: original.minShopperFee,
+        maxShopperFee: original.maxShopperFee,
+        updatedById: original.updatedById,
+      });
+    });
+
+    it('writes nothing when the values are already the stored ones', async () => {
+      expect(await edit({ deliveryFee: original.deliveryFee })).toMatchObject({
+        outcome: 'unchanged',
+      });
+      expect((await stored()).updatedAt.getTime()).toBe(original.updatedAt.getTime());
+    });
+
+    it('lets exactly one of two concurrent edits win when together they would break min <= max, 8 times over', async () => {
+      for (let i = 0; i < 8; i++) {
+        // stored: min 500, max 5000. Alone, min=4000 is fine and so is max=3000; together they are not.
+        const [raisedMin, loweredMax] = await Promise.all([
+          edit({ minShopperFee: 4000 }),
+          edit({ maxShopperFee: 3000 }),
+        ]);
+        expect([raisedMin.outcome, loweredMax.outcome].sort()).toEqual(['invalid', 'updated']);
+        const row = await stored();
+        expect(row.minShopperFee).toBeLessThanOrEqual(row.maxShopperFee);
+        // put it back for the next round
+        const { id: _id, ...values } = original;
+        void _id;
+        await db.shoppingConfig.update({ where: { id: 1 }, data: values });
+      }
+    });
+
+    it('maps a database CHECK violation to an error the service turns into 422, writing nothing', async () => {
+      // `validate` deliberately lets everything through, so the database CHECK is the one that refuses
+      await expect(
+        configRepo.update({ minShopperFee: original.maxShopperFee + 1 }, adminId, () => []),
+      ).rejects.toBeInstanceOf(ShoppingConfigConstraintError);
+      await expect(
+        configRepo.update({ offerWindowMinutes: 0 }, adminId, () => []),
+      ).rejects.toBeInstanceOf(ShoppingConfigConstraintError);
+      await expect(
+        configRepo.update({ shopperAcceptWindowMinutes: 0 }, adminId, () => []),
+      ).rejects.toBeInstanceOf(ShoppingConfigConstraintError);
+      await expect(
+        configRepo.update({ offerAcceptanceWindowMinutes: -5 }, adminId, () => []),
+      ).rejects.toBeInstanceOf(ShoppingConfigConstraintError);
+      await expect(configRepo.update({ vatPercent: -1 }, adminId, () => [])).rejects.toBeInstanceOf(
+        ShoppingConfigConstraintError,
+      );
+      expect(await stored()).toMatchObject({
+        minShopperFee: original.minShopperFee,
+        offerWindowMinutes: original.offerWindowMinutes,
+      });
+
+      const service = new AdminShoppingConfigService(configRepo, { log: jest.fn() } as never);
+      await expect(service.update(adminId, { minShopperFee: 1_000_000_000 })).rejects.toMatchObject(
+        { status: 422 },
+      );
+    });
+
+    it('is visible to the very next getRules() and the next estimate, offer-bound check and window', async () => {
+      const rules = new ShoppingConfigService(configRepo);
+      const audit = { log: jest.fn() };
+      const requestsService = new ShoppingRequestsService(
+        requests,
+        offers,
+        new ShoppingReferenceRepository(prisma),
+        rules,
+        audit as never,
+      );
+      const body = {
+        locationId: loc1,
+        deliveryAddress: { text: '1 Test Street' },
+        items: [{ ...item(cat1), substitutionPreference: 'REFUND' }],
+      } as never;
+
+      const earlier = await requestsService.create(customerId, body);
+      const service = new AdminShoppingConfigService(configRepo, audit as never);
+      await service.update(adminId, {
+        deliveryFee: 2750,
+        offerWindowMinutes: 90,
+        maxShopperFee: 800,
+      });
+
+      expect(await rules.getRules()).toMatchObject({
+        deliveryFee: 2750,
+        offerWindowMinutes: 90,
+        maxShopperFee: 800,
+      });
+      const later = await requestsService.create(customerId, body);
+      expect(later.estimate.deliveryFee).toBe(2750);
+      expect(
+        new Date(later.offerDeadline).getTime() - new Date(later.createdAt).getTime(),
+      ).toBeGreaterThanOrEqual(89 * 60_000);
+
+      // the request created before the edit keeps its snapshot
+      expect((await requestsService.findOne(customerId, earlier.id)).estimate.deliveryFee).toBe(
+        original.deliveryFee,
+      );
+
+      // and the fee bound applies to the next bid
+      const shopperUser = (await db.shopperProfile.findUniqueOrThrow({ where: { id: shopperA } }))
+        .userId;
+      const bidding = new ShopperBiddingService(
+        new ShopperProfileRepository(prisma),
+        requests,
+        offers,
+        rules,
+        { emit: jest.fn() } as never,
+        audit as never,
+      );
+      await expect(
+        bidding.preview(shopperUser, later.id, { shopperFee: 1000, etaMinutes: 20 }),
+      ).rejects.toMatchObject({ status: 422 });
+      await expect(
+        bidding.preview(shopperUser, later.id, { shopperFee: 700, etaMinutes: 20 }),
+      ).resolves.toBeDefined();
+    });
+
+    it('audits only the changed fields', async () => {
+      const audit = { log: jest.fn() };
+      const service = new AdminShoppingConfigService(configRepo, audit as never);
+      await service.update(adminId, {
+        deliveryFee: original.deliveryFee,
+        vatPercent: 9,
+        offerWindowMinutes: 45,
+      });
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: adminId,
+          action: 'SHOPPING_CONFIG_UPDATED',
+          details: {
+            before: {
+              vatPercent: Number(original.vatPercent),
+              offerWindowMinutes: original.offerWindowMinutes,
+            },
+            after: { vatPercent: 9, offerWindowMinutes: 45 },
+          },
+        }),
+      );
+    });
+
+    it('survives deleting the admin: the row keeps its values and updatedBy goes null', async () => {
+      const temp = await makeUser('config-admin-temp');
+      await configRepo.update(
+        { deliveryFee: original.deliveryFee + 1 },
+        temp,
+        validateShoppingConfig,
+      );
+      await db.user.delete({ where: { id: temp } });
+      expect((await configRepo.getRecord())?.updatedBy).toBeNull();
     });
   });
 });
