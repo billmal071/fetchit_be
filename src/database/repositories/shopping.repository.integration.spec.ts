@@ -2403,9 +2403,9 @@ suite('shopping repositories (real Postgres)', () => {
           SELECT offer_acceptance_window_minutes AS w FROM shopping_requests WHERE id = ${id}`
       )[0].w;
 
-    it('is present in the migration file, and drops the column default afterwards', () => {
+    it('is present in the migration file, and keeps the column default for the previous app version', () => {
       expect(backfill).toContain('UPDATE "shopping_requests"');
-      expect(migration).toContain('DROP DEFAULT');
+      expect(migration).not.toContain('DROP DEFAULT');
     });
 
     it('sets every request to the configured window, touches nothing else, and is idempotent', async () => {

@@ -587,7 +587,9 @@ model ShoppingRequest {
   offerDeadline        DateTime              @map("offer_deadline")
   // Copy of shopping_config's acceptance window, taken at creation / reopen: edits to the
   // setting never expire a request that already exists.
-  offerAcceptanceWindowMinutes Int           @map("offer_acceptance_window_minutes")
+  // The column default only keeps the previous app version working during a deploy; the
+  // application always supplies the value. Drop it in a later migration.
+  offerAcceptanceWindowMinutes Int           @default(1440) @map("offer_acceptance_window_minutes")
   cancelledAt          DateTime?             @map("cancelled_at")
   createdAt            DateTime              @default(now()) @map("created_at")
   updatedAt            DateTime              @updatedAt @map("updated_at")
