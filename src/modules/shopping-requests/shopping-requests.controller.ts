@@ -22,7 +22,8 @@ import {
 import { ParseUUIDPipe } from '@/common/pipes';
 import { IRequestUser } from '@common/interfaces';
 import type { IMeta } from '@common/interfaces';
-import { SUCCESS_MESSAGES } from '@common/constants';
+import { FEATURE_FLAGS, SUCCESS_MESSAGES } from '@common/constants';
+import { RequireFeature } from '@modules/feature-flags/require-feature.decorator';
 
 @ApiTags('Shopping Requests')
 @ApiBearerAuth()
@@ -35,6 +36,7 @@ export class ShoppingRequestsController {
   ) {}
 
   @Post()
+  @RequireFeature(FEATURE_FLAGS.SHOPPER_MARKETPLACE)
   @ApiOperation({
     summary: 'Create a shopping request',
     description:
@@ -55,6 +57,7 @@ export class ShoppingRequestsController {
   }
 
   @Get()
+  @RequireFeature(FEATURE_FLAGS.SHOPPER_MARKETPLACE)
   @ApiOperation({ summary: 'List your shopping requests', description: 'Newest first.' })
   @ApiPaginatedResponse(ShoppingRequestResponseDto)
   @ApiErrorResponses()
@@ -67,6 +70,7 @@ export class ShoppingRequestsController {
   }
 
   @Get(':id')
+  @RequireFeature(FEATURE_FLAGS.SHOPPER_MARKETPLACE)
   @ApiOperation({
     summary: 'Get one of your shopping requests',
     description:
@@ -86,6 +90,7 @@ export class ShoppingRequestsController {
   }
 
   @Delete(':id')
+  @RequireFeature(FEATURE_FLAGS.SHOPPER_MARKETPLACE)
   @ApiOperation({
     summary: 'Cancel a shopping request',
     description:
@@ -105,6 +110,8 @@ export class ShoppingRequestsController {
   }
 
   @Post(':id/offers/:offerId/accept')
+  // Accepting is the first step of an ORDER, so it follows the orders flag, not the marketplace one.
+  @RequireFeature(FEATURE_FLAGS.SHOPPER_ORDERS)
   @ApiOperation({
     summary: 'Accept an offer',
     description:

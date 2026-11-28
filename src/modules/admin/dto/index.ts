@@ -4,3 +4,4 @@ export { ReviewDocumentDto } from './review-document.dto';
 export * from './reject-shopper.dto';
 export * from './shopper-application-query.dto';
 export * from './shopping-config.dto';
+export * from './feature-flag.dto';

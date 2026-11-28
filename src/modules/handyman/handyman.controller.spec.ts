@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { FeatureFlagService } from '@modules/feature-flags/feature-flag.service';
 import { HandymanController } from './handyman.controller';
 import { HandymanService } from './handyman.service';
 import { SUCCESS_MESSAGES } from '@common/constants';
@@ -40,7 +41,10 @@ describe('HandymanController', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [HandymanController],
-      providers: [{ provide: HandymanService, useValue: service }],
+      providers: [
+        { provide: HandymanService, useValue: service },
+        { provide: FeatureFlagService, useValue: { isEnabledFor: async () => true } },
+      ],
     }).compile();
 
     controller = module.get(HandymanController);

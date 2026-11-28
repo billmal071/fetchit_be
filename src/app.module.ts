@@ -24,6 +24,7 @@ import { ServiceRequestsModule } from '@/modules/service-requests/service-reques
 import { AdminModule } from '@/modules/admin/admin.module';
 import { ShopperModule } from '@/modules/shopper/shopper.module';
 import { ShoppingRequestsModule } from '@/modules/shopping-requests/shopping-requests.module';
+import { FeatureFlagsModule } from '@/modules/feature-flags/feature-flags.module';
 import { JobsModule } from '@/jobs/jobs.module';
 import { GatewaysModule } from '@/gateways/gateways.module';
 
@@ -91,6 +92,7 @@ import { RolesGuard } from '@/common/guards';
     // Feature Modules - Personal Shopper
     ShopperModule,
     ShoppingRequestsModule,
+    FeatureFlagsModule,
 
     // Background Jobs (resilient to Redis failures)
     JobsModule,

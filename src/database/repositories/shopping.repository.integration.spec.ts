@@ -10,9 +10,10 @@
 import { randomUUID } from 'crypto';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { AuditService } from '../../common/services/audit.service';
+import { FeatureFlagRepository } from './feature-flag.repository';
 import { ShoppingConfigRepository } from './shopping-config.repository';
 import { ShoppingOfferRepository } from './shopping-offer.repository';
 import { ShoppingRequestRepository } from './shopping-request.repository';
@@ -24,6 +25,12 @@ import { ShoppingConfigService } from '../../modules/shopping-requests/shopping-
 import { ShoppingRequestsService } from '../../modules/shopping-requests/shopping-requests.service';
 import { ShopperOrdersService } from '../../modules/shopping-requests/shopper-orders.service';
 import { ShoppingOrdersService } from '../../modules/shopping-requests/shopping-orders.service';
+import { AdminFeatureFlagsService } from '../../modules/admin/admin-feature-flags.service';
+import {
+  FEATURE_FLAG_CACHE_TTL_MS,
+  FeatureFlagService,
+} from '../../modules/feature-flags/feature-flag.service';
+import { FEATURE_FLAG_KEYS } from '../../common/constants/feature-flags';
 import { AdminShoppingConfigService } from '../../modules/admin/admin-shopping-config.service';
 import { validateShoppingConfig } from '../../modules/admin/admin-shopping-config.validation';
 import { ShopperBiddingService } from '../../modules/shopping-requests/shopper-bidding.service';
@@ -2805,6 +2812,284 @@ suite('shopping repositories (real Postgres)', () => {
       );
       await db.user.delete({ where: { id: temp } });
       expect((await configRepo.getRecord())?.updatedBy).toBeNull();
+    });
+  });
+
+  describe('feature flags', () => {
+    const flagRepo = new FeatureFlagRepository(prisma);
+    const audit = { log: jest.fn(async () => undefined) };
+    let adminId: string;
+    let original: Awaited<ReturnType<typeof db.featureFlag.findMany>>;
+    let flags: FeatureFlagService;
+    let adminService: AdminFeatureFlagsService;
+
+    beforeAll(async () => {
+      adminId = await makeUser('flag-admin');
+      original = await db.featureFlag.findMany({ orderBy: { key: 'asc' } });
+    });
+    beforeEach(() => {
+      audit.log.mockClear();
+      flags = new FeatureFlagService(flagRepo);
+      adminService = new AdminFeatureFlagsService(flagRepo, flags, audit as never);
+    });
+    // The rows are shared by the whole suite: put them back exactly.
+    afterEach(async () => {
+      for (const { key, ...values } of original) {
+        await db.featureFlag.update({ where: { key }, data: values });
+      }
+    });
+
+    const stored = (key: string) => db.featureFlag.findUniqueOrThrow({ where: { key } });
+
+    describe('the audit row is part of the same transaction as the change', () => {
+      const realAudit = new AuditService(prisma);
+      const auditRows = () =>
+        db.auditLog.findMany({
+          where: { userId: adminId, action: 'FEATURE_FLAG_UPDATED' },
+          orderBy: { createdAt: 'asc' },
+        });
+      const realService = () => new AdminFeatureFlagsService(flagRepo, flags, realAudit);
+      beforeEach(async () => {
+        await db.auditLog.deleteMany({ where: { userId: adminId } });
+      });
+      afterAll(async () => {
+        await db.auditLog.deleteMany({ where: { userId: adminId } });
+      });
+
+      it('an effective change commits the flag and exactly one audit row with only the changed fields', async () => {
+        await realService().update(adminId, 'shopper_orders', {
+          enabled: false,
+          allowedRoles: [], // same as stored: not in the audit
+        });
+        expect((await stored('shopper_orders')).enabled).toBe(false);
+        const rows = await auditRows();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          entity: 'FeatureFlag',
+          entityId: 'shopper_orders',
+          details: { before: { enabled: true }, after: { enabled: false } },
+        });
+      });
+
+      it('a failing audit insert rolls the flag back, the failure propagates, the cache still serves the old value; a retry applies AND audits', async () => {
+        // A REAL database failure inside the transaction: action is VARCHAR(100).
+        const failing = {
+          log: (
+            entry: Parameters<AuditService['log']>[0],
+            tx?: Parameters<AuditService['log']>[1],
+          ) => realAudit.log({ ...entry, action: 'X'.repeat(101) }, tx),
+        };
+        expect(await flags.isEnabledFor('shopper_orders', UserRole.CUSTOMER)).toBe(true); // primes the cache
+        const before = await stored('shopper_orders');
+        await expect(
+          new AdminFeatureFlagsService(flagRepo, flags, failing as never).update(
+            adminId,
+            'shopper_orders',
+            { enabled: false, allowedRoles: [UserRole.CUSTOMER] },
+          ),
+        ).rejects.toThrow();
+        const after = await stored('shopper_orders');
+        expect(after).toMatchObject({
+          enabled: true,
+          allowedRoles: [],
+          updatedById: before.updatedById,
+        });
+        expect(after.updatedAt.getTime()).toBe(before.updatedAt.getTime());
+        expect(await auditRows()).toHaveLength(0);
+        // not invalidated, and nothing poisoned: readers still see the committed value
+        expect(await flags.isEnabledFor('shopper_orders', UserRole.HANDYMAN)).toBe(true);
+        const fresh = new FeatureFlagService(flagRepo);
+        expect(await fresh.isEnabledFor('shopper_orders', UserRole.HANDYMAN)).toBe(true);
+
+        // the same edit retried is NOT 'unchanged': it applies, with its audit row
+        await realService().update(adminId, 'shopper_orders', { enabled: false });
+        expect((await stored('shopper_orders')).enabled).toBe(false);
+        expect(await auditRows()).toHaveLength(1);
+        expect(await flags.isEnabledFor('shopper_orders', UserRole.CUSTOMER)).toBe(false);
+      });
+
+      it('a hook that throws after the write also rolls it back', async () => {
+        await expect(
+          flagRepo.update('shopper_orders', { enabled: false }, adminId, async () => {
+            throw new Error('boom');
+          }),
+        ).rejects.toThrow('boom');
+        expect((await stored('shopper_orders')).enabled).toBe(true);
+      });
+
+      it('a no-op writes neither the flag nor an audit row, and does not run the hook', async () => {
+        const hook = jest.fn();
+        const before = await stored('shopper_orders');
+        const result = await flagRepo.update(
+          'shopper_orders',
+          { enabled: true, allowedRoles: [] },
+          adminId,
+          hook,
+        );
+        expect(result.outcome).toBe('unchanged');
+        expect(hook).not.toHaveBeenCalled();
+        expect((await stored('shopper_orders')).updatedAt.getTime()).toBe(
+          before.updatedAt.getTime(),
+        );
+        expect(await auditRows()).toHaveLength(0);
+      });
+
+      it('an unknown key runs no hook and writes nothing', async () => {
+        const hook = jest.fn();
+        expect((await flagRepo.update('made_up', { enabled: false }, adminId, hook)).outcome).toBe(
+          'not_found',
+        );
+        expect(hook).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('edge cases of the stored values', () => {
+      it('the same role set in a different order (and with a repeat) is a no-op', async () => {
+        await flagRepo.update(
+          'shopper_orders',
+          { allowedRoles: [UserRole.PERSONAL_SHOPPER, UserRole.CUSTOMER] },
+          adminId,
+        );
+        const before = await stored('shopper_orders');
+        expect(before.allowedRoles).toEqual([UserRole.CUSTOMER, UserRole.PERSONAL_SHOPPER]);
+        const hook = jest.fn();
+        const result = await flagRepo.update(
+          'shopper_orders',
+          {
+            allowedRoles: [UserRole.CUSTOMER, UserRole.PERSONAL_SHOPPER, UserRole.CUSTOMER],
+          },
+          adminId,
+          hook,
+        );
+        expect(result.outcome).toBe('unchanged');
+        expect(hook).not.toHaveBeenCalled();
+        expect((await stored('shopper_orders')).updatedAt.getTime()).toBe(
+          before.updatedAt.getTime(),
+        );
+      });
+
+      it('updating enabled only leaves allowedRoles untouched', async () => {
+        await flagRepo.update('shopper_orders', { allowedRoles: [UserRole.CUSTOMER] }, adminId);
+        const result = await flagRepo.update('shopper_orders', { enabled: false }, adminId);
+        expect(result).toMatchObject({
+          outcome: 'updated',
+          before: { enabled: true },
+          after: { enabled: false },
+        });
+        expect(await stored('shopper_orders')).toMatchObject({
+          enabled: false,
+          allowedRoles: [UserRole.CUSTOMER],
+        });
+      });
+    });
+
+    it('the migration seeds exactly the flags the code knows, all on and open to everyone', async () => {
+      expect(original.map((f) => f.key).sort()).toEqual([...FEATURE_FLAG_KEYS].sort());
+      for (const flag of original) {
+        expect(flag).toMatchObject({ enabled: true, allowedRoles: [] });
+        expect(flag.description.length).toBeGreaterThan(0);
+      }
+      for (const key of FEATURE_FLAG_KEYS) {
+        expect(await flags.isEnabledFor(key, UserRole.CUSTOMER)).toBe(true);
+      }
+    });
+
+    it('a toggle through the admin service is visible on the next check', async () => {
+      expect(await flags.isEnabledFor('shopper_orders', UserRole.CUSTOMER)).toBe(true); // primes the cache
+      const result = await adminService.update(adminId, 'shopper_orders', { enabled: false });
+      expect(result).toMatchObject({
+        key: 'shopper_orders',
+        enabled: false,
+        updatedBy: { id: adminId },
+      });
+      expect(await flags.isEnabledFor('shopper_orders', UserRole.CUSTOMER)).toBe(false);
+      expect(await flags.isEnabledFor('shopper_orders', UserRole.ADMIN)).toBe(true);
+    });
+
+    it('another process (no invalidate) sees the change once its cache expires', async () => {
+      const other = new FeatureFlagService(flagRepo);
+      expect(await other.isEnabledFor('shopper_marketplace', UserRole.CUSTOMER)).toBe(true);
+      await adminService.update(adminId, 'shopper_marketplace', { enabled: false });
+      expect(await other.isEnabledFor('shopper_marketplace', UserRole.CUSTOMER)).toBe(true);
+      const now = Date.now();
+      const spy = jest.spyOn(Date, 'now').mockReturnValue(now + FEATURE_FLAG_CACHE_TTL_MS + 1);
+      try {
+        expect(await other.isEnabledFor('shopper_marketplace', UserRole.CUSTOMER)).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('limits a flag to roles; an empty list means everyone again', async () => {
+      await adminService.update(adminId, 'shopper_orders', {
+        allowedRoles: [UserRole.PERSONAL_SHOPPER, UserRole.CUSTOMER],
+      });
+      expect((await stored('shopper_orders')).allowedRoles).toEqual([
+        UserRole.CUSTOMER,
+        UserRole.PERSONAL_SHOPPER,
+      ]);
+      expect(await flags.isEnabledFor('shopper_orders', UserRole.CUSTOMER)).toBe(true);
+      expect(await flags.isEnabledFor('shopper_orders', UserRole.HANDYMAN)).toBe(false);
+      await adminService.update(adminId, 'shopper_orders', { allowedRoles: [] });
+      expect(await flags.isEnabledFor('shopper_orders', UserRole.HANDYMAN)).toBe(true);
+    });
+
+    it('an unchanged edit writes nothing (updatedAt stays) and is not audited', async () => {
+      const before = await stored('shopper_orders');
+      await adminService.update(adminId, 'shopper_orders', { enabled: true, allowedRoles: [] });
+      expect((await stored('shopper_orders')).updatedAt.getTime()).toBe(before.updatedAt.getTime());
+      expect(audit.log).not.toHaveBeenCalled();
+    });
+
+    it('an unknown key is 404 and creates no row', async () => {
+      await expect(
+        adminService.update(adminId, 'made_up', { enabled: false }),
+      ).rejects.toMatchObject({ status: 404 });
+      expect(await db.featureFlag.count()).toBe(original.length);
+    });
+
+    it('concurrent edits serialise: 8 racing toggles end consistent, one audit per effective change', async () => {
+      const results = await Promise.all(
+        Array.from({ length: 8 }, (_unused, i) =>
+          flagRepo.update('shopper_orders', { enabled: i % 2 === 0 }, adminId),
+        ),
+      );
+      const updates = results.filter((r) => r.outcome === 'updated');
+      // Each effective change flips the value, so the chain of before/after is unbroken.
+      expect(updates.length).toBeGreaterThanOrEqual(1);
+      // Results come back in call order, not lock order: rebuild the commit order by following
+      // the chain (each update must start from where the previous one ended).
+      let value = true;
+      const remaining = [...updates];
+      while (remaining.length > 0) {
+        const index = remaining.findIndex(
+          (r) => r.outcome === 'updated' && r.before.enabled === value,
+        );
+        expect(index).toBeGreaterThanOrEqual(0); // a broken chain means two edits read the same row state
+        const [next] = remaining.splice(index, 1);
+        if (next.outcome === 'updated') value = next.after.enabled as boolean;
+      }
+      expect((await stored('shopper_orders')).enabled).toBe(value);
+      expect(results.filter((r) => r.outcome === 'unchanged').length + updates.length).toBe(8);
+    });
+
+    it('concurrent edits of different fields both land', async () => {
+      await Promise.all([
+        flagRepo.update('shopper_orders', { enabled: false }, adminId),
+        flagRepo.update('shopper_orders', { allowedRoles: [UserRole.CUSTOMER] }, adminId),
+      ]);
+      expect(await stored('shopper_orders')).toMatchObject({
+        enabled: false,
+        allowedRoles: [UserRole.CUSTOMER],
+      });
+    });
+
+    it('survives deleting the admin: the row keeps its values and updatedBy goes null', async () => {
+      const temp = await makeUser('flag-admin-temp');
+      await flagRepo.update('shopper_orders', { enabled: false }, temp);
+      await db.user.delete({ where: { id: temp } });
+      const record = (await flagRepo.list()).find((f) => f.key === 'shopper_orders');
+      expect(record).toMatchObject({ enabled: false, updatedBy: null });
     });
   });
 });

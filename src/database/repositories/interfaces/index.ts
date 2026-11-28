@@ -17,3 +17,4 @@ export * from './shopping-config-repository.interface';
 export * from './shopping-request-repository.interface';
 export * from './shopping-offer-repository.interface';
 export * from './shopper-order-repository.interface';
+export * from './feature-flag-repository.interface';

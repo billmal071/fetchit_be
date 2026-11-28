@@ -22,7 +22,8 @@ import {
 import { ParseUUIDPipe } from '@/common/pipes';
 import { IRequestUser } from '@common/interfaces';
 import type { IMeta } from '@common/interfaces';
-import { SUCCESS_MESSAGES } from '@common/constants';
+import { FEATURE_FLAGS, SUCCESS_MESSAGES } from '@common/constants';
+import { RequireFeature } from '@modules/feature-flags/require-feature.decorator';
 
 /**
  * The shopper side of requests and bidding. Every route needs an APPROVED
@@ -30,6 +31,7 @@ import { SUCCESS_MESSAGES } from '@common/constants';
  * role does not bleed onto the public reference routes in ShopperModule.
  */
 @ApiTags('Shopper Requests')
+@RequireFeature(FEATURE_FLAGS.SHOPPER_MARKETPLACE)
 @ApiBearerAuth()
 @Controller('shopper')
 @Roles(UserRole.PERSONAL_SHOPPER)

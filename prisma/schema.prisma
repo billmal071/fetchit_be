@@ -72,6 +72,7 @@ model User {
   shoppingRequests        ShoppingRequest[]
   shopperOrdersAsCustomer ShopperOrder[]
   shoppingConfigEdits     ShoppingConfig[]  @relation("ShoppingConfigUpdatedBy")
+  featureFlagEdits        FeatureFlag[]     @relation("FeatureFlagUpdatedBy")
 
   @@map("users")
 }
@@ -680,6 +681,24 @@ model ShoppingConfig {
   updatedBy User? @relation("ShoppingConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@map("shopping_config")
+}
+
+// ---- Feature flags ----
+
+// Defined in code (FEATURE_FLAGS) and seeded by a migration; edited by an admin, never
+// created or deleted through the API. A flag is on or off, and when on it may be limited
+// to some roles: an empty allowedRoles means everyone.
+model FeatureFlag {
+  key          String     @id @db.VarChar(64)
+  enabled      Boolean    @default(true)
+  allowedRoles UserRole[] @default([]) @map("allowed_roles")
+  description  String     @db.Text
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+  updatedById  String?    @map("updated_by_id")
+
+  updatedBy User? @relation("FeatureFlagUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("feature_flags")
 }
 
 // ---- Orders: what an accepted offer becomes ----

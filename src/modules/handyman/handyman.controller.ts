@@ -46,7 +46,8 @@ import { ServiceRequestResponseDto, ApplicationResponseDto } from '@modules/serv
 import { IRequestUser, IUploadedFile } from '@common/interfaces';
 import type { IPaginatedResult } from '@common/interfaces';
 import { PaginationDto } from '@common/dto/pagination.dto';
-import { SUCCESS_MESSAGES } from '@common/constants';
+import { FEATURE_FLAGS, SUCCESS_MESSAGES } from '@common/constants';
+import { RequireFeature } from '@modules/feature-flags/require-feature.decorator';
 
 @ApiTags('Handyman')
 @Controller('handyman')
@@ -250,6 +251,7 @@ export class HandymanController {
   }
 
   @Delete('applications/:id')
+  @RequireFeature(FEATURE_FLAGS.HANDYMAN_APPLICATION_FLOWS)
   @ApiOperation({
     summary: 'Withdraw a pending application',
     description: 'Withdraw your own application to a service request while it is still pending.',
@@ -282,6 +284,7 @@ export class HandymanController {
   }
 
   @Patch('service-requests/:id/cancel')
+  @RequireFeature(FEATURE_FLAGS.HANDYMAN_APPLICATION_FLOWS)
   @ApiOperation({
     summary: 'Cancel an assigned service request',
     description:
