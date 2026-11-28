@@ -1,3 +1,5 @@
+import type { Prisma } from '@prisma/client';
+
 /**
  * The admin-editable rules every shopping price is calculated from. Money is
  * whole NGN; percentages are plain percents (7.5 = 7.5%).
@@ -53,6 +55,12 @@ export class ShoppingConfigConstraintError extends Error {
   }
 }
 
+/** Runs in the update's own transaction; see IShoppingConfigRepository.update. */
+export type ShoppingConfigUpdatedHook = (
+  tx: Prisma.TransactionClient,
+  change: { before: IShoppingConfigPatch; after: IShoppingConfigPatch },
+) => Promise<void>;
+
 export interface IShoppingConfigRepository {
   /** The current rules, or null if the config row has not been created. */
   get(): Promise<IShoppingFeeRules | null>;
@@ -68,12 +76,18 @@ export interface IShoppingConfigRepository {
    * break a rule that spans fields (min <= max), because the second one is
    * validated against what the first one stored.
    *
+   * `onUpdated`, when given, runs INSIDE the same transaction right after an
+   * effective write (never for a no-op or an invalid edit) with the transaction
+   * client: whatever it writes (the audit row) commits with the change, and if it
+   * throws, the change is rolled back and the error propagates.
+   *
    * Throws ShoppingConfigConstraintError if a database CHECK refuses the write.
    */
   update(
     patch: IShoppingConfigPatch,
     updatedById: string,
     validate: (merged: IShoppingFeeRules) => IConfigViolation[],
+    onUpdated?: ShoppingConfigUpdatedHook,
   ): Promise<ShoppingConfigUpdateResult>;
 }
 

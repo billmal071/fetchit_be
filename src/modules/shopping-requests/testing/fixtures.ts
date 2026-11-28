@@ -46,6 +46,7 @@ export const makeRequestRow = (
     shopperFeePending: true,
   },
   offerDeadline: new Date(Date.now() + 20 * 60_000),
+  offerAcceptanceWindowMinutes: 1440,
   cancelledAt: null,
   createdAt: T0,
   updatedAt: T0,

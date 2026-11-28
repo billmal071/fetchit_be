@@ -37,11 +37,16 @@ export class AdminShoppingConfigController {
       'stored other side, and two concurrent edits cannot together break a rule (422 with the reason). ' +
       'Takes effect on the next calculation; it applies to NEW requests, offers and orders, and ' +
       'existing ones keep their snapshot: an offer keeps its financials and its expiresAt, a request ' +
-      'keeps its estimate and its bidding deadline, an order keeps its financials. The one exception ' +
-      'is shopperAcceptWindowMinutes: it is read when an order is looked at or accepted, so changing ' +
-      'it also affects orders that are still ASSIGNED (shortening it can cancel them at their next read). ' +
-      'offerAcceptanceWindowMinutes, offerWindowMinutes and the fee settings affect only what is ' +
-      'created from now on. Each edit is recorded in the audit log with the before and after of the ' +
+      'keeps its estimate, its bidding deadline and its own copy of the acceptance window (so ' +
+      'shortening offerAcceptanceWindowMinutes never expires a request that already exists), an ' +
+      'order keeps its financials. A request that is REOPENED (its order was cancelled or timed out) ' +
+      'takes the live offerAcceptanceWindowMinutes together with its fresh bidding deadline, because ' +
+      'offers placed from then on use the live value. The one exception to "existing ones keep their ' +
+      'snapshot" is shopperAcceptWindowMinutes: it is read when an order is looked at or accepted, so ' +
+      'changing it also affects orders that are still ASSIGNED (shortening it can cancel them at their ' +
+      'next read). offerWindowMinutes and the fee settings affect only what is created from now on. ' +
+      'The audit entry is written in the same transaction as the edit: if it cannot be written the ' +
+      'edit is not applied and the request fails (500), so retrying is safe. Each edit is recorded in the audit log with the before and after of the ' +
       'changed fields only.',
   })
   @ApiSuccessResponse(ShoppingConfigResponseDto)

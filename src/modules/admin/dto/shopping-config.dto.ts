@@ -35,7 +35,8 @@ export class ShoppingConfigResponseDto {
   @ApiProperty({ description: 'Minutes a shopper has to accept an ASSIGNED order.', example: 30 })
   shopperAcceptWindowMinutes: number;
   @ApiProperty({
-    description: 'Minutes an offer stays acceptable after bidding closes.',
+    description:
+      'Minutes an offer stays acceptable after bidding closes. New requests copy this value when created or reopened; existing requests keep theirs.',
     example: 1440,
   })
   offerAcceptanceWindowMinutes: number;

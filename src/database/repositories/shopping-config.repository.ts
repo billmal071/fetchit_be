@@ -8,6 +8,7 @@ import {
   IShoppingConfigRepository,
   IShoppingFeeRules,
   ShoppingConfigConstraintError,
+  ShoppingConfigUpdatedHook,
   ShoppingConfigUpdateResult,
 } from './interfaces';
 
@@ -96,6 +97,7 @@ export class ShoppingConfigRepository implements IShoppingConfigRepository {
     patch: IShoppingConfigPatch,
     updatedById: string,
     validate: (merged: IShoppingFeeRules) => IConfigViolation[],
+    onUpdated?: ShoppingConfigUpdatedHook,
   ): Promise<ShoppingConfigUpdateResult> {
     try {
       return await this.prisma.$transaction(async (tx): Promise<ShoppingConfigUpdateResult> => {
@@ -131,6 +133,7 @@ export class ShoppingConfigRepository implements IShoppingConfigRepository {
           data: { ...after, updatedById },
           include: WITH_EDITOR,
         });
+        await onUpdated?.(tx, { before, after });
         return { outcome: 'updated', before, after, record: toRecord(updated) };
       });
     } catch (error) {

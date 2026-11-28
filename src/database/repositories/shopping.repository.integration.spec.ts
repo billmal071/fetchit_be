@@ -12,6 +12,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
+import { AuditService } from '../../common/services/audit.service';
 import { ShoppingConfigRepository } from './shopping-config.repository';
 import { ShoppingOfferRepository } from './shopping-offer.repository';
 import { ShoppingRequestRepository } from './shopping-request.repository';
@@ -144,6 +145,7 @@ suite('shopping repositories (real Postgres)', () => {
       estimatedGoodsBudget: 9000,
       estimate: { estimatedGoodsCost: 9000 },
       offerDeadline: new Date(Date.now() + deadlineOffsetMs),
+      offerAcceptanceWindowMinutes: 1440,
       items: categoryIds.map((id) => item(id)),
     });
 
@@ -2163,7 +2165,7 @@ suite('shopping repositories (real Postgres)', () => {
     describe('the request is lazily EXPIRED only when nothing can be accepted', () => {
       const DAY = 24 * 60 * 60_000;
       const expire = (requestId: string) =>
-        requests.expireElapsed({ customerId, requestId }, new Date(), 1440);
+        requests.expireElapsed({ customerId, requestId }, new Date());
       const statusOf = async (id: string) =>
         (await db.shoppingRequest.findUniqueOrThrow({ where: { id } })).status;
 
@@ -2216,7 +2218,7 @@ suite('shopping repositories (real Postgres)', () => {
       it('only ever touches the caller own requests', async () => {
         const { id } = await makeRequest(loc1, [cat1], -2 * DAY);
         expect(
-          await requests.expireElapsed({ customerId: shopperA, requestId: id }, new Date(), 1440),
+          await requests.expireElapsed({ customerId: shopperA, requestId: id }, new Date()),
         ).toBe(0);
         expect(await statusOf(id)).toBe('OPEN');
       });
@@ -2383,6 +2385,73 @@ suite('shopping repositories (real Postgres)', () => {
     });
   });
 
+  describe('migration backfill: requests created before they carried their own acceptance window', () => {
+    const migration = readFileSync(
+      join(
+        __dirname,
+        '../../../prisma/migrations/20261127120000_snapshot_request_acceptance_window/migration.sql',
+      ),
+      'utf8',
+    );
+    const backfill = migration.slice(
+      migration.indexOf('-- BACKFILL START'),
+      migration.indexOf('-- BACKFILL END'),
+    );
+    const windowOf = async (id: string): Promise<number> =>
+      (
+        await db.$queryRaw<Array<{ w: number }>>`
+          SELECT offer_acceptance_window_minutes AS w FROM shopping_requests WHERE id = ${id}`
+      )[0].w;
+
+    it('is present in the migration file, and drops the column default afterwards', () => {
+      expect(backfill).toContain('UPDATE "shopping_requests"');
+      expect(migration).toContain('DROP DEFAULT');
+    });
+
+    it('sets every request to the configured window, touches nothing else, and is idempotent', async () => {
+      const config = await db.shoppingConfig.findUniqueOrThrow({ where: { id: 1 } });
+      try {
+        await db.shoppingConfig.update({
+          where: { id: 1 },
+          data: { offerAcceptanceWindowMinutes: 90 },
+        });
+        const a = await makeRequest(loc1, [cat1]);
+        const b = await makeRequest(loc1, [cat1], -60 * 60_000);
+        await db.$executeRaw`UPDATE shopping_requests SET offer_acceptance_window_minutes = 1440 WHERE id IN (${a.id}, ${b.id})`;
+        const deadlineBefore = (
+          await db.shoppingRequest.findUniqueOrThrow({ where: { id: b.id } })
+        ).offerDeadline.getTime();
+
+        await db.$executeRawUnsafe(backfill);
+        expect(await windowOf(a.id)).toBe(90);
+        expect(await windowOf(b.id)).toBe(90);
+        expect(
+          (
+            await db.shoppingRequest.findUniqueOrThrow({ where: { id: b.id } })
+          ).offerDeadline.getTime(),
+        ).toBe(deadlineBefore);
+        // a second run finds nothing to change
+        expect(await db.$executeRawUnsafe(backfill)).toBe(
+          await db.shoppingRequest.count({
+            where: { offerAcceptanceWindowMinutes: { not: 90 } },
+          }),
+        );
+      } finally {
+        await db.shoppingConfig.update({
+          where: { id: 1 },
+          data: { offerAcceptanceWindowMinutes: config.offerAcceptanceWindowMinutes },
+        });
+      }
+    });
+
+    it('the CHECK refuses a window under one minute', async () => {
+      const request = await makeRequest(loc1, [cat1]);
+      await expect(
+        db.$executeRaw`UPDATE shopping_requests SET offer_acceptance_window_minutes = 0 WHERE id = ${request.id}`,
+      ).rejects.toThrow();
+    });
+  });
+
   describe('admin shopping configuration', () => {
     const configRepo = new ShoppingConfigRepository(prisma);
     let adminId: string;
@@ -2544,18 +2613,106 @@ suite('shopping repositories (real Postgres)', () => {
       ).resolves.toBeDefined();
     });
 
-    it('audits only the changed fields', async () => {
+    describe('the request expiry uses the window snapshotted on the request (finding: live window)', () => {
+      const rules = new ShoppingConfigService(configRepo);
       const audit = { log: jest.fn() };
-      const service = new AdminShoppingConfigService(configRepo, audit as never);
-      await service.update(adminId, {
-        deliveryFee: original.deliveryFee,
-        vatPercent: 9,
-        offerWindowMinutes: 45,
+      const requestsService = new ShoppingRequestsService(
+        requests,
+        offers,
+        new ShoppingReferenceRepository(prisma),
+        rules,
+        audit as never,
+      );
+      const body = () =>
+        ({
+          locationId: loc1,
+          deliveryAddress: { text: '1 Test Street' },
+          items: [{ ...item(cat1), substitutionPreference: 'REFUND' }],
+        }) as never;
+      const statusOf = async (id: string) => (await requestsService.findOne(customerId, id)).status;
+      const windowOf = async (id: string): Promise<number> =>
+        (
+          await db.$queryRaw<Array<{ w: number }>>`
+            SELECT offer_acceptance_window_minutes AS w FROM shopping_requests WHERE id = ${id}`
+        )[0].w;
+      /** Move the bidding deadline to `minutesAgo` minutes in the past. */
+      const closeBiddingAgo = (id: string, minutesAgo: number) =>
+        db.$executeRaw`UPDATE shopping_requests SET offer_deadline = now() - make_interval(mins => ${minutesAgo}::int) WHERE id = ${id}`;
+
+      it('shortening the window does not expire a request created under the old one; a later request gets the new one', async () => {
+        const service = new AdminShoppingConfigService(configRepo, audit as never);
+        expect(original.offerAcceptanceWindowMinutes).toBe(1440);
+        const early = await requestsService.create(customerId, body());
+
+        await service.update(adminId, { offerAcceptanceWindowMinutes: 30 });
+        const late = await requestsService.create(customerId, body());
+
+        await closeBiddingAgo(early.id, 60);
+        await closeBiddingAgo(late.id, 60);
+        expect(await statusOf(early.id)).toBe('OPEN'); // snapshot 1440: still within it
+        expect(await statusOf(late.id)).toBe('EXPIRED'); // snapshot 30: 60 minutes past
+
+        // and the old one does expire once ITS window has passed
+        await closeBiddingAgo(early.id, 1441);
+        expect(await statusOf(early.id)).toBe('EXPIRED');
       });
-      expect(audit.log).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: adminId,
-          action: 'SHOPPING_CONFIG_UPDATED',
+
+      it('a request reopened by a cancelled order picks up the live window', async () => {
+        const service = new AdminShoppingConfigService(configRepo, audit as never);
+        const orders = new ShopperOrderRepository(prisma);
+        const request = await requestsService.create(customerId, body());
+        expect(await windowOf(request.id)).toBe(1440);
+        expect(await windowOf(request.id)).toBe(
+          (await db.shoppingRequest.findUniqueOrThrow({ where: { id: request.id } }))
+            .offerAcceptanceWindowMinutes,
+        );
+
+        const offer = await submit(request.id, shopperA);
+        await service.update(adminId, { offerAcceptanceWindowMinutes: 45 });
+        const emit = jest.fn();
+        const customerOrders = new ShoppingOrdersService(
+          orders,
+          { emit } as never,
+          audit as never,
+          new OrderExpiryService(orders, rules, { emit } as never),
+          rules,
+        );
+        const accepted = await customerOrders.acceptOffer(customerId, request.id, offer.id);
+        await customerOrders.cancelOrder(customerId, accepted.data.id, {});
+
+        const reopened = await db.shoppingRequest.findUniqueOrThrow({ where: { id: request.id } });
+        expect(reopened.status).toBe('OPEN');
+        expect(await windowOf(request.id)).toBe(45);
+      });
+    });
+
+    describe('the audit row is part of the same transaction as the change', () => {
+      const realAudit = new AuditService(prisma);
+      const auditRows = () =>
+        db.auditLog.findMany({
+          where: { userId: adminId, action: 'SHOPPING_CONFIG_UPDATED' },
+          orderBy: { createdAt: 'asc' },
+        });
+      beforeEach(async () => {
+        await db.auditLog.deleteMany({ where: { userId: adminId } });
+      });
+      afterAll(async () => {
+        await db.auditLog.deleteMany({ where: { userId: adminId } });
+      });
+
+      it('an effective change commits the config and exactly one audit row with only the changed fields', async () => {
+        const service = new AdminShoppingConfigService(configRepo, realAudit);
+        await service.update(adminId, {
+          deliveryFee: original.deliveryFee, // same as stored: not in the audit
+          vatPercent: 9,
+          offerWindowMinutes: 45,
+        });
+        expect(Number((await stored()).vatPercent)).toBe(9);
+        const rows = await auditRows();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          entity: 'ShoppingConfig',
+          entityId: '1',
           details: {
             before: {
               vatPercent: Number(original.vatPercent),
@@ -2563,8 +2720,80 @@ suite('shopping repositories (real Postgres)', () => {
             },
             after: { vatPercent: 9, offerWindowMinutes: 45 },
           },
-        }),
-      );
+        });
+      });
+
+      it('a failing audit insert rolls the config change back and the failure propagates; a retry then applies AND audits it', async () => {
+        // A REAL database failure inside the transaction: action is VARCHAR(100).
+        const failing = {
+          log: (
+            entry: Parameters<AuditService['log']>[0],
+            tx?: Parameters<AuditService['log']>[1],
+          ) => realAudit.log({ ...entry, action: 'X'.repeat(101) }, tx),
+        };
+        await expect(
+          new AdminShoppingConfigService(configRepo, failing as never).update(adminId, {
+            deliveryFee: original.deliveryFee + 5,
+            vatPercent: 9,
+          }),
+        ).rejects.toThrow();
+        expect(await stored()).toMatchObject({
+          deliveryFee: original.deliveryFee,
+          updatedById: original.updatedById,
+        });
+        expect((await stored()).updatedAt.getTime()).toBe(original.updatedAt.getTime());
+        expect(Number((await stored()).vatPercent)).toBe(Number(original.vatPercent));
+        expect(await auditRows()).toHaveLength(0);
+
+        // the same edit retried is NOT 'unchanged': it applies, with its audit row
+        const retried = await new AdminShoppingConfigService(configRepo, realAudit).update(
+          adminId,
+          { deliveryFee: original.deliveryFee + 5, vatPercent: 9 },
+        );
+        expect(retried.deliveryFee).toBe(original.deliveryFee + 5);
+        expect(await auditRows()).toHaveLength(1);
+      });
+
+      it('a hook that throws after the write also rolls it back', async () => {
+        await expect(
+          configRepo.update(
+            { deliveryFee: original.deliveryFee + 7 },
+            adminId,
+            validateShoppingConfig,
+            async () => {
+              throw new Error('boom');
+            },
+          ),
+        ).rejects.toThrow('boom');
+        expect((await stored()).deliveryFee).toBe(original.deliveryFee);
+      });
+
+      it('a no-op writes neither the config nor an audit row, and does not run the hook', async () => {
+        const hook = jest.fn();
+        const result = await configRepo.update(
+          { deliveryFee: original.deliveryFee },
+          adminId,
+          validateShoppingConfig,
+          hook,
+        );
+        expect(result.outcome).toBe('unchanged');
+        expect(hook).not.toHaveBeenCalled();
+        expect((await stored()).updatedAt.getTime()).toBe(original.updatedAt.getTime());
+        expect(await auditRows()).toHaveLength(0);
+      });
+
+      it('an invalid edit writes neither and does not run the hook', async () => {
+        const hook = jest.fn();
+        const result = await configRepo.update(
+          { minShopperFee: original.maxShopperFee + 1 },
+          adminId,
+          validateShoppingConfig,
+          hook,
+        );
+        expect(result.outcome).toBe('invalid');
+        expect(hook).not.toHaveBeenCalled();
+        expect(await auditRows()).toHaveLength(0);
+      });
     });
 
     it('survives deleting the admin: the row keeps its values and updatedBy goes null', async () => {

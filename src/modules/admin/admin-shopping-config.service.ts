@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import {
   IShoppingConfigPatch,
   IShoppingConfigRecord,
@@ -35,12 +35,12 @@ const missing = (): InternalServerException =>
 /**
  * Admin read and edit of the singleton shopping configuration. The prices,
  * fee bounds and windows are read from this row every time they are needed,
- * so an edit is live on the very next calculation (there is no cache).
+ * so an edit is live on the very next calculation (there is no cache). What an
+ * edit changes is only what is created afterwards: requests snapshot their own
+ * acceptance window, offers their expiry and financials.
  */
 @Injectable()
 export class AdminShoppingConfigService {
-  private readonly logger = new Logger(AdminShoppingConfigService.name);
-
   constructor(
     @Inject(SHOPPING_CONFIG_REPOSITORY) private readonly config: IShoppingConfigRepository,
     private readonly auditService: AuditService,
@@ -62,7 +62,21 @@ export class AdminShoppingConfigService {
 
     let result;
     try {
-      result = await this.config.update(patch, adminId, validateShoppingConfig);
+      // The audit row is written in the update's own transaction: a change is never
+      // committed unaudited, and if the audit insert fails the change rolls back and the
+      // error propagates (500), so a retry applies AND audits it.
+      result = await this.config.update(patch, adminId, validateShoppingConfig, (tx, change) =>
+        this.auditService.log(
+          {
+            userId: adminId,
+            action: 'SHOPPING_CONFIG_UPDATED',
+            entity: 'ShoppingConfig',
+            entityId: '1',
+            details: { before: change.before, after: change.after },
+          },
+          tx,
+        ),
+      );
     } catch (error) {
       // The merged-result check above is the first line of defence; a database CHECK
       // is the last, and a refusal from it is still the admin's input, not a server fault.
@@ -83,27 +97,7 @@ export class AdminShoppingConfigService {
       case 'unchanged':
         return toResponse(result.record);
       default:
-        await this.audit(adminId, result.before, result.after);
         return toResponse(result.record);
-    }
-  }
-
-  /** Best-effort: the edit is committed, so a missing audit row must not fail the request. */
-  private async audit(
-    adminId: string,
-    before: IShoppingConfigPatch,
-    after: IShoppingConfigPatch,
-  ): Promise<void> {
-    try {
-      await this.auditService.log({
-        userId: adminId,
-        action: 'SHOPPING_CONFIG_UPDATED',
-        entity: 'ShoppingConfig',
-        entityId: '1',
-        details: { before, after },
-      });
-    } catch (error) {
-      this.logger.error(`Failed to record SHOPPING_CONFIG_UPDATED: ${error}`);
     }
   }
 }

@@ -81,6 +81,8 @@ describe('ShoppingRequestsService', () => {
       const windowMs = input.offerDeadline.getTime() - before;
       expect(windowMs).toBeGreaterThanOrEqual(30 * 60_000);
       expect(windowMs).toBeLessThan(30 * 60_000 + 5000);
+      // the request carries its own copy of the live acceptance window
+      expect(input.offerAcceptanceWindowMinutes).toBe(RULES.offerAcceptanceWindowMinutes);
       expect(input.items[0]).toMatchObject({
         substitutionPreference: 'SIMILAR_UP_TO',
         maxSubstitutePrice: 5000,
@@ -266,7 +268,6 @@ describe('ShoppingRequestsService', () => {
       expect(requests.expireElapsed).toHaveBeenCalledWith(
         { customerId: 'cust-1', requestId: 'req-1' },
         expect.any(Date),
-        RULES.offerAcceptanceWindowMinutes,
       );
       expect(requests.expireElapsed.mock.invocationCallOrder[0]).toBeLessThan(
         requests.findOwnedById.mock.invocationCallOrder[0],
@@ -282,18 +283,17 @@ describe('ShoppingRequestsService', () => {
       expect(requests.expireElapsed).toHaveBeenCalledWith(
         { customerId: 'cust-1', requestId: undefined },
         expect.any(Date),
-        RULES.offerAcceptanceWindowMinutes,
       );
       expect(requests.expireElapsed.mock.invocationCallOrder[0]).toBeLessThan(
         requests.listForCustomer.mock.invocationCallOrder[0],
       );
     });
 
-    it('uses the configured acceptance window, not a constant', async () => {
+    it('passes no window: the repository uses the one snapshotted on each request, whatever the live setting', async () => {
       config.getRules.mockResolvedValue({ ...RULES, offerAcceptanceWindowMinutes: 15 });
       requests.listForCustomer.mockResolvedValue({ rows: [], total: 0 });
       await service.findAll('cust-1', {} as never);
-      expect(requests.expireElapsed.mock.calls[0][2]).toBe(15);
+      expect(requests.expireElapsed.mock.calls[0]).toHaveLength(2);
     });
 
     it('shows an EXPIRED request with its biddingClosesAt and each offer expiresAt', async () => {

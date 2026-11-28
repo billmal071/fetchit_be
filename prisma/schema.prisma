@@ -585,6 +585,9 @@ model ShoppingRequest {
   // Server-calculated estimate shown to the customer at creation.
   estimate             Json
   offerDeadline        DateTime              @map("offer_deadline")
+  // Copy of shopping_config's acceptance window, taken at creation / reopen: edits to the
+  // setting never expire a request that already exists.
+  offerAcceptanceWindowMinutes Int           @map("offer_acceptance_window_minutes")
   cancelledAt          DateTime?             @map("cancelled_at")
   createdAt            DateTime              @default(now()) @map("created_at")
   updatedAt            DateTime              @updatedAt @map("updated_at")

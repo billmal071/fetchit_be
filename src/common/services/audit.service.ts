@@ -16,8 +16,15 @@ export interface IAuditLogEntry {
 export class AuditService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async log(entry: IAuditLogEntry): Promise<void> {
-    await this.prisma.auditLog.create({
+  /**
+   * Write one audit row. Pass `client` (a transaction client) to write it inside that
+   * transaction, so the row commits or rolls back together with the change it records.
+   */
+  async log(
+    entry: IAuditLogEntry,
+    client: Pick<Prisma.TransactionClient, 'auditLog'> = this.prisma,
+  ): Promise<void> {
+    await client.auditLog.create({
       data: {
         userId: entry.userId,
         action: entry.action,

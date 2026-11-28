@@ -6,6 +6,14 @@ export const MAX_PERCENT = 100;
 /** 30 days, in minutes. */
 export const MAX_WINDOW_MINUTES = 60 * 24 * 30;
 
+/**
+ * At most two decimal places, judged on the number's shortest decimal string rather than
+ * by float arithmetic (7.501 * 100 is not exactly 750.1, 2.675 * 100 is not 267.5): the
+ * column is Decimal(5,2), which would silently round anything finer and break the
+ * repository's diff and no-op contracts. Exponent forms (1e-7) never match.
+ */
+const hasAtMostTwoDecimals = (value: number): boolean => /^\d+(\.\d{1,2})?$/.test(String(value));
+
 const FEE_FIELDS = ['minShopperFee', 'maxShopperFee', 'deliveryFee'] as const;
 const PERCENT_FIELDS = ['serviceChargePercent', 'vatPercent', 'priceBufferPercent'] as const;
 const WINDOW_FIELDS = [
@@ -37,8 +45,16 @@ export function validateShoppingConfig(merged: IShoppingFeeRules): IConfigViolat
   }
   for (const field of PERCENT_FIELDS) {
     const value = merged[field];
-    if (!Number.isFinite(value) || value < 0 || value > MAX_PERCENT) {
-      errors.push({ field, message: `${field} must be between 0 and ${MAX_PERCENT}` });
+    if (
+      !Number.isFinite(value) ||
+      value < 0 ||
+      value > MAX_PERCENT ||
+      !hasAtMostTwoDecimals(value)
+    ) {
+      errors.push({
+        field,
+        message: `${field} must be between 0 and ${MAX_PERCENT}, with at most two decimal places`,
+      });
     }
   }
   for (const field of WINDOW_FIELDS) {

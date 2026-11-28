@@ -27,6 +27,27 @@ const record = (over: Partial<IShoppingConfigRecord> = {}): IShoppingConfigRecor
 });
 
 describe('validateShoppingConfig', () => {
+  describe('percent fields keep at most two decimals (storage is Decimal(5,2))', () => {
+    const fields = ['serviceChargePercent', 'vatPercent', 'priceBufferPercent'] as const;
+    const errorsFor = (field: (typeof fields)[number], value: number) =>
+      validateShoppingConfig({ ...RULES, [field]: value }).map((e) => e.field);
+
+    it.each(fields)('%s accepts 0, 7.5, 7.25, 0.01, 99.99 and 100', (field) => {
+      for (const value of [0, 7.5, 7.25, 0.01, 0.1, 1.1, 2.67, 99.99, 100]) {
+        expect(errorsFor(field, value)).toEqual([]);
+      }
+    });
+
+    it.each(fields)(
+      '%s rejects 7.501, 0.001, 100.001, NaN, Infinity, negatives and exponent forms',
+      (field) => {
+        for (const value of [7.501, 0.001, 33.333, 100.001, NaN, Infinity, -Infinity, -1, 1e-7]) {
+          expect(errorsFor(field, value)).toEqual([field]);
+        }
+      },
+    );
+  });
+
   it('accepts the seeded values', () => {
     expect(validateShoppingConfig(RULES)).toEqual([]);
   });
@@ -130,27 +151,36 @@ describe('AdminShoppingConfigService', () => {
       expect(result).toMatchObject({ minShopperFee: 700, vatPercent: 8, maxShopperFee: 5000 });
     });
 
-    it('audits ONLY the changed fields, before and after', async () => {
-      repo.update.mockResolvedValue(updated);
-      await service.update('admin-1', { minShopperFee: 700, vatPercent: 8 });
-      expect(audit.log).toHaveBeenCalledWith({
-        userId: 'admin-1',
-        action: 'SHOPPING_CONFIG_UPDATED',
-        entity: 'ShoppingConfig',
-        entityId: '1',
-        details: {
-          before: { minShopperFee: 500, vatPercent: 7.5 },
-          after: { minShopperFee: 700, vatPercent: 8 },
-        },
+    /** A repository that, like the real one, runs the hook inside its transaction after a write. */
+    const TX = { tag: 'tx' };
+    const writes = (result: typeof updated) =>
+      repo.update.mockImplementation(async (_patch, _id, _validate, hook) => {
+        await hook?.(TX, { before: result.before, after: result.after });
+        return result;
       });
+
+    it('audits ONLY the changed fields, before and after, through the update transaction', async () => {
+      writes(updated);
+      await service.update('admin-1', { minShopperFee: 700, vatPercent: 8 });
+      expect(audit.log).toHaveBeenCalledWith(
+        {
+          userId: 'admin-1',
+          action: 'SHOPPING_CONFIG_UPDATED',
+          entity: 'ShoppingConfig',
+          entityId: '1',
+          details: {
+            before: { minShopperFee: 500, vatPercent: 7.5 },
+            after: { minShopperFee: 700, vatPercent: 8 },
+          },
+        },
+        TX, // the transaction client, not the service's own connection
+      );
     });
 
-    it('still succeeds when the audit write fails (the edit is already committed)', async () => {
-      repo.update.mockResolvedValue(updated);
+    it('does NOT swallow an audit failure: it propagates so the repository rolls the edit back', async () => {
+      writes(updated);
       audit.log.mockRejectedValue(new Error('db down'));
-      await expect(service.update('admin-1', { minShopperFee: 700 })).resolves.toMatchObject({
-        minShopperFee: 700,
-      });
+      await expect(service.update('admin-1', { minShopperFee: 700 })).rejects.toThrow('db down');
     });
 
     it('writes no audit entry when nothing actually changed', async () => {
