@@ -10,6 +10,10 @@ export interface IShoppingFeeRules {
   vatPercent: number;
   priceBufferPercent: number;
   offerWindowMinutes: number;
+  /** Minutes a shopper has to accept an ASSIGNED order before it is cancelled. */
+  shopperAcceptWindowMinutes: number;
+  /** Minutes a PENDING offer stays acceptable after bidding closes (the request's offerDeadline). */
+  offerAcceptanceWindowMinutes: number;
 }
 
 export interface IShoppingConfigRepository {

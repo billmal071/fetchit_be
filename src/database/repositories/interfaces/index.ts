@@ -16,3 +16,4 @@ export * from './notification-repository.interface';
 export * from './shopping-config-repository.interface';
 export * from './shopping-request-repository.interface';
 export * from './shopping-offer-repository.interface';
+export * from './shopper-order-repository.interface';

@@ -1,0 +1,263 @@
+import {
+  OrderEvent,
+  OrderState,
+  Prisma,
+  ShoppingOfferState,
+  ShoppingRequestStatus,
+} from '@prisma/client';
+
+/** Event types written to order_events. Strings, so later slices add types without a migration. */
+export const ORDER_EVENT_TYPES = {
+  OFFER_ACCEPTED: 'OFFER_ACCEPTED',
+  SHOPPER_ACCEPTED: 'SHOPPER_ACCEPTED',
+  SHOPPING_STARTED: 'SHOPPING_STARTED',
+  ORDER_CANCELLED: 'ORDER_CANCELLED',
+} as const;
+
+const orderItemsInclude = { orderBy: { position: 'asc' } } as const;
+
+/**
+ * What the CUSTOMER sees of an order: their own request's address and note,
+ * and the shopper's public profile only (never email, phone or user id).
+ */
+export const customerOrderInclude = {
+  items: orderItemsInclude,
+  shoppingLocation: true,
+  request: {
+    select: {
+      reference: true,
+      deliveryAddress: true,
+      deliveryLatitude: true,
+      deliveryLongitude: true,
+      note: true,
+    },
+  },
+  shopperProfile: {
+    select: {
+      id: true,
+      displayName: true,
+      rating: true,
+      completedOrders: true,
+      completionRate: true,
+      user: { select: { avatar: true } },
+    },
+  },
+} satisfies Prisma.ShopperOrderInclude;
+
+export type CustomerOrder = Prisma.ShopperOrderGetPayload<{
+  include: typeof customerOrderInclude;
+}>;
+
+/**
+ * What the SHOPPER sees: no address, coordinates or note (they are revealed
+ * only after payment, a later slice) and no customer identity. The request
+ * contributes its reference and nothing else.
+ */
+export const shopperOrderInclude = {
+  items: orderItemsInclude,
+  shoppingLocation: true,
+  request: { select: { reference: true } },
+} satisfies Prisma.ShopperOrderInclude;
+
+export type ShopperOrderForShopper = Prisma.ShopperOrderGetPayload<{
+  include: typeof shopperOrderInclude;
+}>;
+
+export type OrderListFilter = 'active' | 'completed' | 'cancelled';
+
+/** Terminal states: everything else is "active". */
+export const orderStatesFor = (
+  filter: OrderListFilter,
+): Prisma.EnumOrderStateFilter | OrderState => {
+  switch (filter) {
+    case 'completed':
+      return 'COMPLETED';
+    case 'cancelled':
+      return 'CANCELLED';
+    default:
+      return { notIn: ['COMPLETED', 'CANCELLED'] };
+  }
+};
+
+export interface IAcceptOfferInput {
+  requestId: string;
+  offerId: string;
+  customerId: string;
+}
+
+/** A shopper whose offer lost, so they can be told. */
+export interface IRejectedOfferShopper {
+  offerId: string;
+  userId: string;
+}
+
+export type AcceptOfferResult =
+  | {
+      outcome: 'accepted';
+      order: CustomerOrder;
+      winnerUserId: string;
+      requestReference: string;
+      rejected: IRejectedOfferShopper[];
+    }
+  | {
+      // The same offer was already accepted by this customer: a retry, not a new order.
+      outcome: 'already_accepted';
+      order: CustomerOrder;
+    }
+  | { outcome: 'shopper_unavailable' }
+  | { outcome: 'not_found' }
+  | { outcome: 'request_not_open'; status: ShoppingRequestStatus }
+  | { outcome: 'offer_not_pending'; state: ShoppingOfferState }
+  | { outcome: 'offer_expired' };
+
+export type OrderTransitionResult =
+  | { outcome: 'transitioned'; order: ShopperOrderForShopper }
+  // The shopper was suspended after the caller's APPROVED check; nothing was written.
+  | { outcome: 'shopper_unavailable' }
+  // Accepting only: the accept window ran out before the accept could commit (judged
+  // after every lock was taken). Nothing was written; the caller runs the SYSTEM cancel.
+  // `assignedBefore` is the very cutoff it judged by, for the follow-up cancel to reuse.
+  | { outcome: 'accept_expired'; assignedBefore: Date }
+  | { outcome: 'not_found' }
+  // cancelledBy is set when state is CANCELLED, so the message can say why.
+  | { outcome: 'conflict'; state: OrderState; cancelledBy: string | null };
+
+/** Who is cancelling: the customer (owner-checked), or the system on timeout. */
+export type CancelActor = { kind: 'CUSTOMER'; userId: string } | { kind: 'SYSTEM' };
+
+interface ICancelOrderBase {
+  orderId: string;
+  /** Free text from the customer. Never sent to the shopper. */
+  reason?: string;
+  /**
+   * The request is reopened for this many minutes (the configured offer window).
+   * A length, not a Date: the deadline is worked out inside the transaction, after
+   * the request-row lock, so a long wait for that lock cannot hand out a deadline
+   * that is already (partly) used up.
+   */
+  reopenWindowMinutes: number;
+}
+
+/**
+ * The customer's cancel never depends on a cutoff. The system's does, always: it
+ * is what stops a sweep from cancelling an order that is still inside its window,
+ * so it is required here and checked again at runtime.
+ */
+export type ICancelOrderInput = ICancelOrderBase &
+  (
+    | { actor: { kind: 'CUSTOMER'; userId: string }; assignedBefore?: never }
+    | {
+        actor: { kind: 'SYSTEM' };
+        /** The order is stale when it was created before this instant. */
+        assignedBefore: Date;
+      }
+  );
+
+/** What a notification about a cancellation needs. */
+export interface ICancelledOrderInfo {
+  order: CustomerOrder;
+  shopperUserId: string;
+  requestReference: string;
+  cancelledBy: 'CUSTOMER' | 'SYSTEM';
+}
+
+export type CancelOrderResult =
+  | ({ outcome: 'cancelled' } & ICancelledOrderInfo)
+  // Already CANCELLED (see order.cancelledBy for by whom): a retry gets the order back.
+  // The SYSTEM path returns it too, so a targeted timeout can tell who got there first.
+  | { outcome: 'already_cancelled'; order: CustomerOrder }
+  | { outcome: 'not_found' }
+  // SYSTEM only: the order is not past its accept window (or no longer ASSIGNED).
+  | { outcome: 'not_stale' }
+  | { outcome: 'conflict'; state: OrderState };
+
+export interface IExpireScope {
+  orderId?: string;
+  customerId?: string;
+  shopperProfileId?: string;
+}
+
+export interface IShopperOrderRepository {
+  /**
+   * Accept an offer, atomically: lock the request row, require it OPEN, the
+   * offer PENDING and inside its deadline (clock read after the lock), then
+   * mark the offer ACCEPTED, every other PENDING offer REJECTED, the request
+   * ASSIGNED, and create the order, its items and the OFFER_ACCEPTED event.
+   * The order is created UNPAID: no payment exists yet (Part C). The offer's
+   * stored breakdown is copied, never recomputed.
+   *
+   * Concurrent accepts and cancels serialise on the row lock; exactly one wins.
+   * The lock query filters on the owner, so a non-owner locks nothing and reads
+   * not_found. The bidding shopper must still be APPROVED (their profile row is
+   * locked FOR SHARE, so a suspension cannot slip in before commit), else
+   * shopper_unavailable and nothing changes. Accepting the already-accepted
+   * offer again returns already_accepted with the existing order.
+   */
+  acceptOffer(input: IAcceptOfferInput): Promise<AcceptOfferResult>;
+
+  listForCustomer(
+    customerId: string,
+    skip: number,
+    take: number,
+    filter?: OrderListFilter,
+  ): Promise<{ rows: CustomerOrder[]; total: number }>;
+
+  findOwnedByCustomer(id: string, customerId: string): Promise<CustomerOrder | null>;
+
+  listForShopper(
+    shopperProfileId: string,
+    skip: number,
+    take: number,
+    filter?: OrderListFilter,
+  ): Promise<{ rows: ShopperOrderForShopper[]; total: number }>;
+
+  findOwnedByShopper(id: string, shopperProfileId: string): Promise<ShopperOrderForShopper | null>;
+
+  /** Events of an order the caller already proved they may read. */
+  listEvents(orderId: string, order: 'asc' | 'desc'): Promise<OrderEvent[]>;
+
+  /**
+   * Cancel an ASSIGNED order, the one transaction behind both the customer's
+   * cancel and the automatic timeout: lock the request row (the customer path
+   * with the ownership filter, so a non-owner locks nothing), conditionally
+   * update the order WHERE state = ASSIGNED, then set the offer to REJECTED
+   * (customer) or EXPIRED (system), reopen the request for `reopenWindowMinutes`
+   * and write the ORDER_CANCELLED event. Of a cancel and a shopper accept (or
+   * two cancels) exactly one wins the conditional update.
+   */
+  cancelOrder(input: ICancelOrderInput): Promise<CancelOrderResult>;
+
+  /**
+   * The lazy timeout: cancel (as SYSTEM) every ASSIGNED order in `scope` that
+   * was assigned before `assignedBefore`. Returns the ones this call cancelled.
+   */
+  expireStale(
+    scope: IExpireScope,
+    assignedBefore: Date,
+    reopenWindowMinutes: number,
+  ): Promise<ICancelledOrderInfo[]>;
+
+  /**
+   * Move an order the shopper is assigned to from `from` to `to` and record the
+   * event, in one transaction. The `from` check is part of the UPDATE, so of
+   * two concurrent calls exactly one transitions; the other gets `conflict`.
+   */
+  transition(input: {
+    id: string;
+    shopperProfileId: string;
+    actorId: string;
+    from: OrderState;
+    to: OrderState;
+    eventType: string;
+    stamp: 'shopperAcceptedAt' | 'shoppingStartedAt';
+    /**
+     * Set for the ASSIGNED -> SHOPPER_ACCEPTED step only. The order must still be
+     * inside this accept window at the moment of the UPDATE, judged with a clock
+     * read after the profile lock; otherwise nothing is written and the result
+     * is accept_expired. Never set for starting to shop.
+     */
+    acceptWindowMinutes?: number;
+  }): Promise<OrderTransitionResult>;
+}
+
+export const SHOPPER_ORDER_REPOSITORY = Symbol('SHOPPER_ORDER_REPOSITORY');

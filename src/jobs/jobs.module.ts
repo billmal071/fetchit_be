@@ -15,6 +15,7 @@ import {
   ShopperPushListener,
   ShopperNotificationListener,
   ShoppingOfferListener,
+  ShoppingOrderListener,
 } from './listeners';
 import { PushModule } from '@/modules/push/push.module';
 import { NotificationsModule } from '@/modules/notifications/notifications.module';
@@ -81,6 +82,7 @@ const logger = new Logger('JobsModule');
     ShopperPushListener,
     ShopperNotificationListener,
     ShoppingOfferListener,
+    ShoppingOrderListener,
     {
       provide: 'EMAIL_PROVIDER',
       useExisting: ResendEmailProvider,

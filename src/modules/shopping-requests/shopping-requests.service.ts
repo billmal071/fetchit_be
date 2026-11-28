@@ -41,7 +41,7 @@ export class ShoppingRequestsService {
   /**
    * Create a request. The server fixes everything that is money: the goods
    * budget is the sum of the items, the estimate comes from the configured
-   * rates, and the offer deadline is now plus the configured window. None of
+   * rates, and the bidding deadline is now plus the configured window. None of
    * these can be sent by the client.
    */
   async create(
@@ -93,6 +93,7 @@ export class ShoppingRequestsService {
     customerId: string,
     query: ShoppingRequestQueryDto,
   ): Promise<IPaginatedResult<ShoppingRequestResponseDto>> {
+    await this.expireElapsed(customerId);
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const { rows, total } = await this.requests.listForCustomer(
@@ -106,13 +107,30 @@ export class ShoppingRequestsService {
 
   /** The request with its items and every live offer, each with a full breakdown and the shopper's stats. */
   async findOne(customerId: string, id: string): Promise<ShoppingRequestDetailResponseDto> {
+    // Offers whose ACCEPTANCE window has ended read as EXPIRED. (Closing the bidding
+    // deadline does not expire them: they stay acceptable until their own expiresAt.)
+    await this.offers.expireDue(new Date(), { requestId: id });
+    await this.expireElapsed(customerId, id);
     const request = await this.requests.findOwnedById(id, customerId);
     if (!request) {
       throw new ResourceNotFoundException('Shopping request', id);
     }
-    // Offers past the deadline are shown as EXPIRED, not as still biddable.
-    await this.offers.expireDue(new Date(), { requestId: id });
     return toRequestDetail(request, await this.offers.listForRequest(id));
+  }
+
+  /**
+   * Lazily mark requests EXPIRED once bidding closed more than the acceptance
+   * window ago and no offer on them can still be accepted (like offers, there is
+   * no cron). A conditional update in the repository, so it races safely with an
+   * accept or a cancel.
+   */
+  private async expireElapsed(customerId: string, requestId?: string): Promise<void> {
+    const { offerAcceptanceWindowMinutes } = await this.config.getRules();
+    await this.requests.expireElapsed(
+      { customerId, requestId },
+      new Date(),
+      offerAcceptanceWindowMinutes,
+    );
   }
 
   async cancel(customerId: string, id: string): Promise<ShoppingRequestResponseDto> {

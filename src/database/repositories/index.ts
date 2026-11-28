@@ -19,3 +19,4 @@ export { NotificationRepository } from './notification.repository';
 export { ShoppingConfigRepository } from './shopping-config.repository';
 export { ShoppingRequestRepository } from './shopping-request.repository';
 export { ShoppingOfferRepository } from './shopping-offer.repository';
+export { ShopperOrderRepository } from './shopper-order.repository';

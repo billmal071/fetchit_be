@@ -1,9 +1,12 @@
-import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpStatus, Param, Post, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 import { ShoppingRequestsService } from './shopping-requests.service';
+import { ShoppingOrdersService } from './shopping-orders.service';
 import {
   CreateShoppingRequestDto,
+  CustomerOrderResponseDto,
   ShoppingRequestDetailResponseDto,
   ShoppingRequestQueryDto,
   ShoppingRequestResponseDto,
@@ -26,7 +29,10 @@ import { SUCCESS_MESSAGES } from '@common/constants';
 @Controller('shopping-requests')
 @Roles(UserRole.CUSTOMER)
 export class ShoppingRequestsController {
-  constructor(private readonly service: ShoppingRequestsService) {}
+  constructor(
+    private readonly service: ShoppingRequestsService,
+    private readonly orders: ShoppingOrdersService,
+  ) {}
 
   @Post()
   @ApiOperation({
@@ -35,7 +41,8 @@ export class ShoppingRequestsController {
       'Every item needs name, brand, size, quantity, unit, estimatedUnitPrice and a ' +
       'substitutionPreference (REFUND, or SIMILAR_UP_TO with maxSubstitutePrice). The response ' +
       'carries a server-calculated estimate (goods + delivery + service charge + VAT); the ' +
-      'shopper fee is set by bids. offerDeadline is now plus the configured offer window.',
+      'shopper fee is set by bids. offerDeadline (also biddingClosesAt) is now plus the configured bidding window; ' +
+      'it closes bidding only, offers already placed stay acceptable until their own expiresAt.',
   })
   @ApiCreatedSuccessResponse(ShoppingRequestResponseDto)
   @ApiErrorResponses()
@@ -65,7 +72,8 @@ export class ShoppingRequestsController {
     description:
       'Includes the items and every offer except withdrawn ones (cheapest shopper fee first). ' +
       'Each offer carries a full server-calculated breakdown and the shopper public stats ' +
-      '(rating, completed orders, completion rate). Offers past the deadline read as EXPIRED.',
+      '(rating, completed orders, completion rate). Offers whose acceptance window (expiresAt) has ended read as EXPIRED; closing ' +
+      'the bidding deadline does not expire them. A request nothing on can be accepted any more reads as EXPIRED.',
   })
   @ApiParam({ name: 'id', description: 'Shopping request UUID' })
   @ApiSuccessResponse(ShoppingRequestDetailResponseDto)
@@ -94,5 +102,32 @@ export class ShoppingRequestsController {
   ): Promise<{ data: ShoppingRequestResponseDto; message: string }> {
     const data = await this.service.cancel(user.id, id);
     return { data, message: SUCCESS_MESSAGES.SHOPPING_REQUEST_CANCELLED };
+  }
+
+  @Post(':id/offers/:offerId/accept')
+  @ApiOperation({
+    summary: 'Accept an offer',
+    description:
+      'Atomically: the offer becomes ACCEPTED, every other pending offer REJECTED, the request ' +
+      'ASSIGNED, and an order is created in state ASSIGNED. The order is UNPAID: nothing is charged ' +
+      '(payment is not built yet). The order money is the offer breakdown, copied; send no body. ' +
+      '409 if the request is not OPEN, the offer is not PENDING or has expired, the shopper is no ' +
+      'longer APPROVED, or a concurrent accept or cancel won. Repeating the accept of the offer that ' +
+      'was already accepted returns 200 with the same order. 404 for a request that is not yours.',
+  })
+  @ApiParam({ name: 'id', description: 'Shopping request UUID' })
+  @ApiParam({ name: 'offerId', description: 'Offer UUID' })
+  @ApiCreatedSuccessResponse(CustomerOrderResponseDto)
+  @ApiErrorResponses()
+  async acceptOffer(
+    @CurrentUser() user: IRequestUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('offerId', ParseUUIDPipe) offerId: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ data: CustomerOrderResponseDto; message: string }> {
+    const { data, created } = await this.orders.acceptOffer(user.id, id, offerId);
+    // 201 for a new order; 200 when a retry gets the existing one back.
+    res.status(created ? HttpStatus.CREATED : HttpStatus.OK);
+    return { data, message: SUCCESS_MESSAGES.SHOPPING_OFFER_ACCEPTED };
   }
 }

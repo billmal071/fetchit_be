@@ -81,6 +81,10 @@ export const SUCCESS_MESSAGES = {
   SHOPPING_REQUEST_CANCELLED: 'Shopping request cancelled',
   SHOPPING_OFFER_SUBMITTED: 'Offer submitted successfully',
   SHOPPING_OFFER_WITHDRAWN: 'Offer withdrawn',
+  SHOPPING_OFFER_ACCEPTED: 'Offer accepted; the order has been created',
+  SHOPPING_ORDER_CANCELLED: 'Order cancelled',
+  SHOPPER_ORDER_ACCEPTED: 'Order accepted',
+  SHOPPER_ORDER_STARTED: 'Shopping started',
   CATEGORY_CREATED: 'Category created successfully',
   CATEGORY_UPDATED: 'Category updated successfully',
   CATEGORY_DELETED: 'Category deactivated successfully',
@@ -135,6 +139,8 @@ export const EVENTS = {
 
   // Shopping request / offer events
   SHOPPING_OFFER_SUBMITTED: 'shopping.offer.submitted',
+  SHOPPING_OFFER_ACCEPTED: 'shopping.offer.accepted',
+  SHOPPING_ORDER_CANCELLED: 'shopping.order.cancelled',
 
   // Service request events
   SERVICE_REQUEST_CREATED: 'service-request.created',

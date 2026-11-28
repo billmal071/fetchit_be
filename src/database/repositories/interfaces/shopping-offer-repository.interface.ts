@@ -36,6 +36,17 @@ export class OfferRequestClosedError extends Error {
   }
 }
 
+/**
+ * The shopper's earlier order on this request was cancelled (by the customer, by
+ * the accept timeout, or by them): they may not bid on it again.
+ */
+export class ShopperBarredFromRequestError extends Error {
+  constructor() {
+    super('The shopper may no longer bid on this request: their earlier order on it was cancelled');
+    this.name = 'ShopperBarredFromRequestError';
+  }
+}
+
 export class DuplicateActiveOfferError extends Error {
   constructor() {
     super('This shopper already has an active offer on the request');
@@ -50,16 +61,27 @@ export interface ISubmitOfferInput {
   etaMinutes: number;
   note?: string;
   financials: Prisma.InputJsonValue;
+  /**
+   * The offer stays acceptable this many minutes after BIDDING closes:
+   * expiresAt = the request's offerDeadline + this, worked out inside the
+   * submit transaction. (The deadline itself only closes bidding.)
+   */
+  acceptanceWindowMinutes: number;
 }
 
 export interface IShoppingOfferRepository {
   /**
    * Create a PENDING offer. The request row is locked FOR SHARE and re-read
    * first, so a cancel or an expiry cannot slip in between the check and the
-   * insert; `expiresAt` is the request's offer deadline.
+   * insert. Bidding must still be open (status OPEN and the request's offerDeadline
+   * ahead); `expiresAt` is that deadline plus `acceptanceWindowMinutes`, so the
+   * offer outlives the bidding window.
    *
-   * Throws OfferRequestClosedError if the request is not OPEN or its deadline
-   * has passed, and DuplicateActiveOfferError (from the partial unique index
+   * Throws OfferRequestClosedError if the request is not OPEN or its bidding
+   * deadline has passed, ShopperBarredFromRequestError if the shopper has a
+   * CANCELLED order on this request (checked under the same lock, so a cancel
+   * that commits first bars the bid, and a bid that wins the lock first stands),
+   * and DuplicateActiveOfferError (from the partial unique index
    * on PENDING offers) if the shopper already has one. Both write nothing.
    */
   submit(input: ISubmitOfferInput): Promise<OfferWithRequest>;
@@ -67,7 +89,11 @@ export interface IShoppingOfferRepository {
   /** Withdraw a PENDING offer owned by the shopper. False if it is not theirs or not PENDING. */
   withdraw(id: string, shopperProfileId: string): Promise<boolean>;
 
-  /** Move PENDING offers past their `expiresAt` to EXPIRED, within the given scope. */
+  /**
+   * Move PENDING offers past their `expiresAt` to EXPIRED, within the given scope.
+   * `expiresAt` is the end of the ACCEPTANCE window, not the bidding deadline: an
+   * offer is not expired merely because bidding has closed.
+   */
   expireDue(now: Date, scope: { requestId?: string; shopperProfileId?: string }): Promise<number>;
 
   findOwnedById(id: string, shopperProfileId: string): Promise<OfferWithRequest | null>;

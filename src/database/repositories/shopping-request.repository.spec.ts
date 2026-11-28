@@ -4,6 +4,7 @@ import { ShoppingOfferRepository } from './shopping-offer.repository';
 import { ShoppingRequestRepository, generateReference } from './shopping-request.repository';
 import {
   DuplicateActiveOfferError,
+  ShopperBarredFromRequestError,
   OfferRequestClosedError,
   shopperCoverageWhere,
   shopperMatchWhere,
@@ -17,6 +18,14 @@ describe('shopperMatchWhere (the matching rule)', () => {
   it('only offers OPEN requests whose offer window is still running', () => {
     expect(where.status).toBe('OPEN');
     expect(where.offerDeadline).toEqual({ gt: NOW });
+  });
+
+  it('hides a request from a shopper whose order on it was cancelled', () => {
+    expect(where.orders).toEqual({
+      none: { shopperProfileId: 'prof-1', state: 'CANCELLED' },
+    });
+    // ...but only the feed rule: plain coverage (used to answer 409 rather than 404) is unaffected
+    expect(shopperCoverageWhere('prof-1')).not.toHaveProperty('orders');
   });
 
   it('requires a market the shopper covers', () => {
@@ -135,7 +144,66 @@ describe('ShoppingRequestRepository', () => {
       include: { _count: unknown };
     };
     expect(args.include._count).toEqual({
-      select: { offers: { where: { state: 'PENDING', expiresAt: { gt: NOW } } } },
+      select: {
+        offers: {
+          where: {
+            state: 'PENDING',
+            expiresAt: { gt: NOW },
+            shopperProfile: { accountState: 'APPROVED' },
+          },
+        },
+      },
+    });
+  });
+
+  describe('isShopperBarred', () => {
+    it('is true only when the shopper has a CANCELLED order on that request', async () => {
+      const prisma = {
+        ...makePrisma(),
+        shopperOrder: {
+          findFirst: jest.fn().mockResolvedValueOnce({ id: 'o' }).mockResolvedValueOnce(null),
+        },
+      };
+      const repo = new ShoppingRequestRepository(prisma as unknown as PrismaService);
+      expect(await repo.isShopperBarred('req-1', 'prof-1')).toBe(true);
+      expect(await repo.isShopperBarred('req-1', 'prof-2')).toBe(false);
+      expect(prisma.shopperOrder.findFirst).toHaveBeenCalledWith({
+        where: { requestId: 'req-1', shopperProfileId: 'prof-1', state: 'CANCELLED' },
+        select: { id: true },
+      });
+    });
+  });
+
+  describe('expireElapsed', () => {
+    const run = async (scope: { customerId: string; requestId?: string }, window: number) => {
+      const prisma = { $executeRaw: jest.fn(async () => 2) };
+      const repo = new ShoppingRequestRepository(prisma as unknown as PrismaService);
+      const count = await repo.expireElapsed(scope, NOW, window);
+      const [strings, ...values] = prisma.$executeRaw.mock.calls[0] as unknown as [
+        TemplateStringsArray,
+        ...unknown[],
+      ];
+      return { count, sql: strings.join('?').replace(/\s+/g, ' '), values };
+    };
+
+    it('is ONE conditional UPDATE: still OPEN, bidding closed before the window, no acceptable offer left', async () => {
+      const { count, sql, values } = await run({ customerId: 'cust-1' }, 1440);
+      expect(count).toBe(2);
+      expect(sql).toContain("SET status = 'EXPIRED'");
+      expect(sql).toContain("WHERE r.status = 'OPEN'");
+      expect(sql).toContain('r.customer_id = ?');
+      expect(sql).toContain('r.offer_deadline < ?');
+      expect(sql).toContain(
+        "NOT EXISTS ( SELECT 1 FROM shopping_offers o WHERE o.request_id = r.id AND o.state = 'PENDING' AND o.expires_at > ? )",
+      );
+      expect(values).toContainEqual(new Date(NOW.getTime() - 1440 * 60_000));
+      expect(values).toContain('cust-1');
+    });
+
+    it('can be narrowed to one request, and follows the window it is given', async () => {
+      const { values } = await run({ customerId: 'cust-1', requestId: 'req-1' }, 5);
+      expect(values).toContain('req-1');
+      expect(values).toContainEqual(new Date(NOW.getTime() - 5 * 60_000));
     });
   });
 
@@ -228,22 +296,64 @@ describe('ShoppingOfferRepository.submit', () => {
     shopperFee: 1000,
     etaMinutes: 30,
     financials: {},
+    acceptanceWindowMinutes: 1440,
   };
-  const makeRepo = (locked: unknown[], create = jest.fn(async () => ({ id: 'offer-1' }))) => {
-    const tx = { $queryRaw: jest.fn(async () => locked), shoppingOffer: { create } };
+  const makeRepo = (
+    locked: unknown[],
+    create = jest.fn(async () => ({ id: 'offer-1' })),
+    barred: unknown = null,
+  ) => {
+    const tx = {
+      $queryRaw: jest.fn(async () => locked),
+      shoppingOffer: { create },
+      shopperOrder: { findFirst: jest.fn(async () => barred) },
+    };
     const prisma = { $transaction: jest.fn(async (fn: (t: unknown) => unknown) => fn(tx)) };
     return { repo: new ShoppingOfferRepository(prisma as unknown as PrismaService), tx, create };
   };
   const later = new Date(Date.now() + 60_000);
 
-  it('locks the request row FOR SHARE before inserting, and expires with the request deadline', async () => {
-    const { repo, tx, create } = makeRepo([{ status: 'OPEN', offer_deadline: later }]);
+  it('locks the request row FOR SHARE before inserting', async () => {
+    const { repo, tx } = makeRepo([{ status: 'OPEN', offer_deadline: later }]);
     await repo.submit(input);
 
     const sql = (tx.$queryRaw.mock.calls[0] as unknown as [TemplateStringsArray])[0].join('?');
     expect(sql).toContain('FOR SHARE');
+  });
+
+  it('makes the offer outlive the bidding deadline: expiresAt = deadline + the acceptance window', async () => {
+    const { repo, create } = makeRepo([{ status: 'OPEN', offer_deadline: later }]);
+    await repo.submit(input);
     expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ expiresAt: later }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ expiresAt: new Date(later.getTime() + 1440 * 60_000) }),
+      }),
+    );
+    await repo.submit({ ...input, acceptanceWindowMinutes: 5 });
+    expect(create).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ expiresAt: new Date(later.getTime() + 5 * 60_000) }),
+      }),
+    );
+  });
+
+  it('refuses a shopper whose earlier order on the request was CANCELLED, writing nothing', async () => {
+    const { repo, tx, create } = makeRepo([{ status: 'OPEN', offer_deadline: later }], undefined, {
+      id: 'order-9',
+    });
+    await expect(repo.submit(input)).rejects.toBeInstanceOf(ShopperBarredFromRequestError);
+    expect(tx.shopperOrder.findFirst).toHaveBeenCalledWith({
+      where: { requestId: 'req-1', shopperProfileId: 'prof-1', state: 'CANCELLED' },
+      select: { id: true },
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('reads the barred state only after the request lock, in the same transaction', async () => {
+    const { repo, tx } = makeRepo([{ status: 'OPEN', offer_deadline: later }]);
+    await repo.submit(input);
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.shopperOrder.findFirst.mock.invocationCallOrder[0],
     );
   });
 
@@ -258,6 +368,7 @@ describe('ShoppingOfferRepository.submit', () => {
           return [{ status: 'OPEN', offer_deadline: deadline }];
         }),
         shoppingOffer: { create },
+        shopperOrder: { findFirst: jest.fn(async () => null) },
       };
       const prisma = { $transaction: jest.fn(async (fn: (t: unknown) => unknown) => fn(tx)) };
       const repo = new ShoppingOfferRepository(prisma as unknown as PrismaService);

@@ -38,6 +38,7 @@ describe('ShoppingRequestsService', () => {
       findOwnedById: jest.fn(),
       listForCustomer: jest.fn(),
       cancel: jest.fn(),
+      expireElapsed: jest.fn(async () => 0),
     };
     offers = { expireDue: jest.fn(), listForRequest: jest.fn(async () => []) };
     reference = {
@@ -240,11 +241,78 @@ describe('ShoppingRequestsService', () => {
       );
     });
 
+    it('409s with a clear message when the request already has an order (ASSIGNED)', async () => {
+      requests.cancel.mockResolvedValue({ outcome: 'not_open', status: 'ASSIGNED' });
+      await expect(service.cancel('cust-1', 'req-1')).rejects.toMatchObject({
+        status: 409,
+        message: 'Only an open request can be cancelled; this one is assigned',
+      });
+      expect(audit.log).not.toHaveBeenCalled();
+    });
+
     it('409s when the request is no longer open and 404s when it is not the caller own', async () => {
       requests.cancel.mockResolvedValueOnce({ outcome: 'not_open', status: 'CANCELLED' });
       await expect(service.cancel('cust-1', 'req-1')).rejects.toMatchObject({ status: 409 });
       requests.cancel.mockResolvedValueOnce({ outcome: 'not_found' });
       await expect(service.cancel('cust-1', 'req-1')).rejects.toMatchObject({ status: 404 });
+    });
+  });
+
+  describe('requests lazily EXPIRE once nothing on them can be accepted', () => {
+    it('findOne expires offers, then the request (scoped to it and the caller), before reading it', async () => {
+      requests.findOwnedById.mockResolvedValue(makeRequestRow());
+      await service.findOne('cust-1', 'req-1');
+
+      expect(requests.expireElapsed).toHaveBeenCalledWith(
+        { customerId: 'cust-1', requestId: 'req-1' },
+        expect.any(Date),
+        RULES.offerAcceptanceWindowMinutes,
+      );
+      expect(requests.expireElapsed.mock.invocationCallOrder[0]).toBeLessThan(
+        requests.findOwnedById.mock.invocationCallOrder[0],
+      );
+      expect(offers.expireDue.mock.invocationCallOrder[0]).toBeLessThan(
+        requests.expireElapsed.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('findAll expires the caller own requests before listing them', async () => {
+      requests.listForCustomer.mockResolvedValue({ rows: [], total: 0 });
+      await service.findAll('cust-1', {} as never);
+      expect(requests.expireElapsed).toHaveBeenCalledWith(
+        { customerId: 'cust-1', requestId: undefined },
+        expect.any(Date),
+        RULES.offerAcceptanceWindowMinutes,
+      );
+      expect(requests.expireElapsed.mock.invocationCallOrder[0]).toBeLessThan(
+        requests.listForCustomer.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('uses the configured acceptance window, not a constant', async () => {
+      config.getRules.mockResolvedValue({ ...RULES, offerAcceptanceWindowMinutes: 15 });
+      requests.listForCustomer.mockResolvedValue({ rows: [], total: 0 });
+      await service.findAll('cust-1', {} as never);
+      expect(requests.expireElapsed.mock.calls[0][2]).toBe(15);
+    });
+
+    it('shows an EXPIRED request with its biddingClosesAt and each offer expiresAt', async () => {
+      const row = makeRequestRow({ status: 'EXPIRED' });
+      requests.findOwnedById.mockResolvedValue(row);
+      offers.listForRequest.mockResolvedValue([makeOfferWithShopper()]);
+      const result = await service.findOne('cust-1', 'req-1');
+      expect(result.status).toBe('EXPIRED');
+      expect(result.biddingClosesAt).toBe(row.offerDeadline.toISOString());
+      expect(result.offerDeadline).toBe(result.biddingClosesAt);
+      expect(result.offers[0].expiresAt).toEqual(expect.any(String));
+    });
+
+    it('cancelling an EXPIRED request is the existing conflict', async () => {
+      requests.cancel.mockResolvedValue({ outcome: 'not_open', status: 'EXPIRED' });
+      await expect(service.cancel('cust-1', 'req-1')).rejects.toMatchObject({
+        status: 409,
+        message: 'Only an open request can be cancelled; this one is expired',
+      });
     });
   });
 });
